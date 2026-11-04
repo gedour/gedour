@@ -120,6 +120,8 @@ func tick(t *testing.T, w *Worker) {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, w.opts.Concurrency)
 	for {
+		// Sampled before the claim: a run finishing after an empty claim may have freed work to claim.
+		idle := len(sem) == 0
 		n, err := w.dispatch(ctx, ctx, sem, &wg)
 		if err != nil {
 			t.Error(err)
@@ -128,7 +130,7 @@ func tick(t *testing.T, w *Worker) {
 		if n > 0 {
 			continue
 		}
-		if len(sem) == 0 {
+		if idle {
 			break
 		}
 		time.Sleep(time.Millisecond)

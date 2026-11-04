@@ -1,6 +1,6 @@
 # 001 — gedour v0
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-04
 
@@ -71,86 +71,86 @@ things; the UI is a client of the API.
 
 Auth and users
 
-- [ ] **AC1** With OIDC configured, an unauthenticated request to any `/api/*` route returns 401 and
+- [x] **AC1** With OIDC configured, an unauthenticated request to any `/api/*` route returns 401 and
   any UI route redirects to the provider login; after login a user row exists with the OIDC `sub`.
-- [ ] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request on a loopback Host
+- [x] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request on a loopback Host
   (`localhost`, `127.0.0.1`, `::1`) is authenticated as that user and any other Host gets 403 on
   `/api` and `/auth`; the binary refuses to start if both are set, and logs a `dev_mode_enabled`
   warning at startup.
-- [ ] **AC3** Session cookies are `HttpOnly`, `Secure` (except dev mode), `SameSite=Lax`; state-changing
+- [x] **AC3** Session cookies are `HttpOnly`, `Secure` (except dev mode), `SameSite=Lax`; state-changing
   API calls without a valid CSRF token return 403.
 
 Watches and sharing
 
-- [ ] **AC4** A user can create, edit, pause, resume and delete a watch of each kind through the API
+- [x] **AC4** A user can create, edit, pause, resume and delete a watch of each kind through the API
   and the UI; invalid config (unknown repo format, bad regex, bad cron) is rejected with 400 and a
   field-level error shown in the form.
-- [ ] **AC5** A user cannot read or modify another user's watch unless it is shared with them (404,
+- [x] **AC5** A user cannot read or modify another user's watch unless it is shared with them (404,
   not 403, to avoid leaking existence); read-only shares return 403 on write.
-- [ ] **AC6** Credentials are stored encrypted (AES-GCM, key from env); the API never returns a secret
+- [x] **AC6** Credentials are stored encrypted (AES-GCM, key from env); the API never returns a secret
   value, only its name and last 4 characters.
 
 Collection and events
 
-- [ ] **AC7** For each of the 5 kinds, a collector test against a recorded fixture produces the expected
+- [x] **AC7** For each of the 5 kinds, a collector test against a recorded fixture produces the expected
   normalized state, and a second run with a changed fixture produces exactly the expected events.
-- [ ] **AC8** A first run on a new watch records the baseline state and emits no event.
-- [ ] **AC9** With 2 worker replicas against the same PG, each due watch runs exactly once per due
+- [x] **AC8** A first run on a new watch records the baseline state and emits no event.
+- [x] **AC9** With 2 worker replicas against the same PG, each due watch runs exactly once per due
   time (integration test with 50 watches over 10 ticks).
-- [ ] **AC10** A failing collector moves the watch to an error state with the last error message,
+- [x] **AC10** A failing collector moves the watch to an error state with the last error message,
   retries with exponential backoff capped at the watch interval x 8, and recovers on success.
-- [ ] **AC11** GitHub/GitLab/registry rate limit responses delay the next run until the reset time
+- [x] **AC11** GitHub/GitLab/registry rate limit responses delay the next run until the reset time
   instead of hammering; conditional requests (ETag) are used where the API supports them.
-- [ ] **AC12** `oci_tags` works anonymously on Docker Hub and GHCR public images and with credentials
+- [x] **AC12** `oci_tags` works anonymously on Docker Hub and GHCR public images and with credentials
   on a private registry; `tag_regex` and semver ordering filter the tags tracked.
 
 Filters, rules, channels
 
-- [ ] **AC13** A filter expression is compiled on save; a syntax or type error returns 400 with the
+- [x] **AC13** A filter expression is compiled on save; a syntax or type error returns 400 with the
   position; the UI offers a "test against last 20 events" preview.
-- [ ] **AC14** An event matching a rule creates one inbox item and one delivery per channel of the
+- [x] **AC14** An event matching a rule creates one inbox item and one delivery per channel of the
   rule; a non-matching event creates neither.
-- [ ] **AC15** Telegram, SMTP and webhook deliveries retry up to 5 times with backoff; the delivery
+- [x] **AC15** Telegram, SMTP and webhook deliveries retry up to 5 times with backoff; the delivery
   list shows status, attempt count and last error.
-- [ ] **AC16** Outgoing webhooks carry an `X-Gedour-Signature` HMAC-SHA256 header over the body;
+- [x] **AC16** Outgoing webhooks carry an `X-Gedour-Signature` HMAC-SHA256 header over the body;
   targets resolving to loopback, link-local or private ranges are refused unless allowlisted in
   config.
-- [ ] **AC17** A JS script channel receives the event, can call an injected `http.fetch` (same SSRF
+- [x] **AC17** A JS script channel receives the event, can call an injected `http.fetch` (same SSRF
   rules as AC16) and `log`; it is killed after 5 s and has no filesystem, process or env access.
-- [ ] **AC18** The UI script editor (CodeMirror) highlights JS, and a "run with sample event" button
+- [x] **AC18** The UI script editor (CodeMirror) highlights JS, and a "run with sample event" button
   shows the script's logs and result without sending anything for real.
 
 Inbox and audit
 
-- [ ] **AC19** A new inbox item appears in an open UI within 2 s without reload (SSE fed by PG
+- [x] **AC19** A new inbox item appears in an open UI within 2 s without reload (SSE fed by PG
   `LISTEN/NOTIFY`), on any web replica.
-- [ ] **AC20** Inbox items can be marked read/unread, archived, bulk-actioned; the sidebar shows the
+- [x] **AC20** Inbox items can be marked read/unread, archived, bulk-actioned; the sidebar shows the
   unread count.
-- [ ] **AC21** Every create/update/delete on watches, shares, credentials, rules, channels and scripts
+- [x] **AC21** Every create/update/delete on watches, shares, credentials, rules, channels and scripts
   writes an audit row (actor, action, target, before/after JSON with secrets redacted) in the same
   transaction; a failed audit write rolls the mutation back.
-- [ ] **AC22** The audit view lists entries newest first, filterable by actor, target type and date.
+- [x] **AC22** The audit view lists entries newest first, filterable by actor, target type and date.
 
 UX
 
-- [ ] **AC23** The sidebar collapses to icons and expands back by button and shortcut; its width is
+- [x] **AC23** The sidebar collapses to icons and expands back by button and shortcut; its width is
   resizable by drag between 180 and 480 px; width and collapsed state survive a reload.
-- [ ] **AC24** Every list view has distinct empty, loading and error states (Playwright asserts each).
-- [ ] **AC25** Light/dark theme follows the OS by default and can be forced; the choice persists.
-- [ ] **AC26** All main flows are usable at 375 px width (sidebar becomes a drawer) and by keyboard
+- [x] **AC24** Every list view has distinct empty, loading and error states (Playwright asserts each).
+- [x] **AC25** Light/dark theme follows the OS by default and can be forced; the choice persists.
+- [x] **AC26** All main flows are usable at 375 px width (sidebar becomes a drawer) and by keyboard
   only; axe-core reports no serious or critical violation on each main view.
 
 Ops and quality
 
-- [ ] **AC27** `/healthz` returns 200 when PG is reachable, 503 otherwise; `/metrics` on the metrics
+- [x] **AC27** `/healthz` returns 200 when PG is reachable, 503 otherwise; `/metrics` on the metrics
   port exposes `gedour_build_info`.
-- [ ] **AC28** `docker compose up` brings up PG + gedour in dev mode with a working UI on a clean
+- [x] **AC28** `docker compose up` brings up PG + gedour in dev mode with a working UI on a clean
   machine; `kubectl apply -k deploy/k8s` deploys 2 web + 2 worker replicas.
-- [ ] **AC29** CI runs lint, Go tests (with PG), frontend tests, Playwright e2e and the image build on
+- [x] **AC29** CI runs lint, Go tests (with PG), frontend tests, Playwright e2e and the image build on
   every PR; it fails if Go coverage < 80 % or frontend coverage < 80 % (lines).
-- [ ] **AC30** The OpenAPI document is served at `/api/openapi.json` and a CI check fails if the
+- [x] **AC30** The OpenAPI document is served at `/api/openapi.json` and a CI check fails if the
   handlers and the document drift.
-- [ ] **AC31** `/metrics` exposes collector run counts and durations and event counts per watch kind
+- [x] **AC31** `/metrics` exposes collector run counts and durations and event counts per watch kind
   (Phase 4), and delivery outcomes per channel type (Phase 5).
 
 ## Phases

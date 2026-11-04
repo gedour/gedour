@@ -1,0 +1,1585 @@
+{
+  "components": {
+    "schemas": {
+      "Actor": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name, or email when there is none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ActorsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Actor"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AddShareInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "Exact email of a user who has signed in at least once",
+            "maxLength": 320,
+            "minLength": 3,
+            "type": "string"
+          },
+          "permission": {
+            "enum": [
+              "ro",
+              "rw"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "permission"
+        ],
+        "type": "object"
+      },
+      "BuildInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "build_timestamp": {
+            "description": "Build time, ISO 8601",
+            "type": "string"
+          },
+          "builder": {
+            "description": "Go toolchain that built the binary",
+            "type": "string"
+          },
+          "commit": {
+            "description": "Git commit the binary was built from",
+            "type": "string"
+          },
+          "project_url": {
+            "description": "Source repository",
+            "type": "string"
+          },
+          "version": {
+            "description": "Release version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "commit",
+          "build_timestamp",
+          "builder",
+          "project_url"
+        ],
+        "type": "object"
+      },
+      "CreateCredentialInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "github_token",
+              "gitlab_token",
+              "registry_basic"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "secret": {
+            "description": "Write-only, never returned",
+            "maxLength": 8192,
+            "minLength": 8,
+            "type": "string"
+          },
+          "username": {
+            "description": "Required for registry_basic, refused otherwise",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "CreateWatchInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "credential_id": {
+            "description": "Owned credential of the kind's family",
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "github_release",
+              "github_pr",
+              "gitlab_release",
+              "gitlab_mr",
+              "oci_tags"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "default": "15m",
+            "description": "Go duration (1m to 168h) or 5-field cron expression",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "config"
+        ],
+        "type": "object"
+      },
+      "Credential": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "github_token",
+              "gitlab_token",
+              "registry_basic"
+            ],
+            "type": "string"
+          },
+          "last4": {
+            "description": "Last 4 characters of the secret; empty for secrets under 16 characters",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "used_by_count": {
+            "description": "Watches using this credential",
+            "format": "int64",
+            "type": "integer"
+          },
+          "username": {
+            "description": "registry_basic only",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "username",
+          "last4",
+          "created_at",
+          "updated_at",
+          "used_by_count"
+        ],
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "description": "Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'",
+            "type": "string"
+          },
+          "message": {
+            "description": "Error message text",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value at the given location"
+          }
+        },
+        "type": "object"
+      },
+      "ErrorModel": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "description": "A human-readable explanation specific to this occurrence of the problem.",
+            "examples": [
+              "Property foo is required but is missing."
+            ],
+            "type": "string"
+          },
+          "errors": {
+            "description": "Optional list of individual error details",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "instance": {
+            "description": "A URI reference that identifies the specific occurrence of the problem.",
+            "examples": [
+              "https://example.com/error-log/abc123"
+            ],
+            "format": "uri",
+            "type": "string"
+          },
+          "status": {
+            "description": "HTTP status code",
+            "examples": [
+              400
+            ],
+            "format": "int64",
+            "type": "integer"
+          },
+          "title": {
+            "description": "A short, human-readable summary of the problem type. This value should not change between occurrences of the error.",
+            "examples": [
+              "Bad Request"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "default": "about:blank",
+            "description": "A URI reference to human-readable documentation for the error.",
+            "examples": [
+              "https://example.com/errors/example"
+            ],
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Item": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_name": {
+            "description": "Actor's display name, or email when it has none",
+            "type": "string"
+          },
+          "actor_user_id": {
+            "description": "Null for system actions",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "after": {
+            "description": "State after the change, secrets redacted; null on delete"
+          },
+          "at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "before": {
+            "description": "State before the change, secrets redacted; null on create"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "actor_user_id",
+          "actor_name",
+          "action",
+          "target_type",
+          "target_id",
+          "before",
+          "after",
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "ListCredentialsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/Credential"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Item"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "description": "Absent on the last page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListSharesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by email",
+            "items": {
+              "$ref": "#/components/schemas/Share"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListWatchesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/Watch"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "MeOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "csrf_token": {
+            "description": "Send back in the X-CSRF-Token header on every non-GET request",
+            "type": "string"
+          },
+          "dev_mode": {
+            "description": "Single-user mode: there is no real sign-out",
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "csrf_token",
+          "dev_mode"
+        ],
+        "type": "object"
+      },
+      "SecretBody": {
+        "additionalProperties": false,
+        "properties": {
+          "secret": {
+            "description": "Write-only, never returned",
+            "maxLength": 8192,
+            "minLength": 8,
+            "type": "string"
+          }
+        },
+        "required": [
+          "secret"
+        ],
+        "type": "object"
+      },
+      "Share": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "permission": {
+            "enum": [
+              "ro",
+              "rw"
+            ],
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "display_name",
+          "permission",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "UpdateShareInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "permission": {
+            "enum": [
+              "ro",
+              "rw"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "permission"
+        ],
+        "type": "object"
+      },
+      "UpdateWatchInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "description": "Replaces the whole config",
+            "type": "object"
+          },
+          "credential_id": {
+            "description": "Owner only; empty string detaches",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "schedule": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Watch": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "description": "Per-kind settings, normalized (defaults filled)",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "credential_id": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "github_release",
+              "github_pr",
+              "gitlab_release",
+              "gitlab_mr",
+              "oci_tags"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "permission": {
+            "description": "The caller's access to this watch",
+            "enum": [
+              "owner",
+              "rw",
+              "ro"
+            ],
+            "type": "string"
+          },
+          "schedule": {
+            "description": "Go duration (1m to 168h) or 5-field cron expression",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "config",
+          "credential_id",
+          "schedule",
+          "paused",
+          "owner_id",
+          "owner_name",
+          "permission",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "gedour",
+    "version": "v0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "list-audit",
+        "parameters": [
+          {
+            "description": "Only entries by this user",
+            "explode": false,
+            "in": "query",
+            "name": "actor",
+            "schema": {
+              "description": "Only entries by this user",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only entries on this target type, e.g. user",
+            "explode": false,
+            "in": "query",
+            "name": "target_type",
+            "schema": {
+              "description": "Only entries on this target type, e.g. user",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Inclusive lower bound, RFC 3339",
+            "explode": false,
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "description": "Inclusive lower bound, RFC 3339",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive upper bound, RFC 3339",
+            "explode": false,
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "description": "Exclusive upper bound, RFC 3339",
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "next_cursor of the previous page",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "next_cursor of the previous page",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "format": "int64",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Audit entries visible to the caller, newest first",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/audit/actors": {
+      "get": {
+        "operationId": "list-audit-actors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Users who appear as actor in the audit entries visible to the caller",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/api/v1/credentials": {
+      "get": {
+        "operationId": "list-credentials",
+        "parameters": [
+          {
+            "description": "Only credentials of this kind",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "description": "Only credentials of this kind",
+              "enum": [
+                "github_token",
+                "gitlab_token",
+                "registry_basic"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCredentialsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's credentials; secrets are never returned",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "post": {
+        "operationId": "create-credential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCredentialInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Store a credential, encrypted at rest",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/credentials/{id}": {
+      "delete": {
+        "operationId": "delete-credential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a credential no watch uses",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "get": {
+        "operationId": "get-credential",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One of the caller's credentials",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/credentials/{id}/secret": {
+      "put": {
+        "operationId": "rotate-credential-secret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Credential"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Replace a credential's secret",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "get-me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The signed-in user and the session's CSRF token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/version": {
+      "get": {
+        "operationId": "get-version",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildInfo"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Build information of the running server",
+        "tags": [
+          "meta"
+        ]
+      }
+    },
+    "/api/v1/watches": {
+      "get": {
+        "operationId": "list-watches",
+        "parameters": [
+          {
+            "description": "Only watches of this kind",
+            "explode": false,
+            "in": "query",
+            "name": "kind",
+            "schema": {
+              "description": "Only watches of this kind",
+              "enum": [
+                "github_release",
+                "github_pr",
+                "gitlab_release",
+                "gitlab_mr",
+                "oci_tags"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Case-insensitive match on the name or the config",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Case-insensitive match on the name or the config",
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Owned by the caller, shared with them, or both",
+            "explode": false,
+            "in": "query",
+            "name": "shared",
+            "schema": {
+              "default": "all",
+              "description": "Owned by the caller, shared with them, or both",
+              "enum": [
+                "mine",
+                "with_me",
+                "all"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 500,
+              "format": "int64",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListWatchesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Watches the caller owns or that are shared with them",
+        "tags": [
+          "watches"
+        ]
+      },
+      "post": {
+        "operationId": "create-watch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWatchInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}": {
+      "delete": {
+        "operationId": "delete-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a watch (owner only)",
+        "tags": [
+          "watches"
+        ]
+      },
+      "get": {
+        "operationId": "get-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One watch",
+        "tags": [
+          "watches"
+        ]
+      },
+      "patch": {
+        "operationId": "update-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWatchInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a watch's name, config, schedule, paused state or credential",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/pause": {
+      "post": {
+        "operationId": "pause-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Pause watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/resume": {
+      "post": {
+        "operationId": "resume-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Resume watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/shares": {
+      "get": {
+        "operationId": "list-watch-shares",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSharesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Users a watch is shared with; a sharee sees only their own share",
+        "tags": [
+          "shares"
+        ]
+      },
+      "post": {
+        "operationId": "add-watch-share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddShareInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Share"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Share a watch with a user, by exact email (owner only)",
+        "tags": [
+          "shares"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/shares/{user_id}": {
+      "delete": {
+        "operationId": "delete-watch-share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop sharing a watch with a user (owner only)",
+        "tags": [
+          "shares"
+        ]
+      },
+      "put": {
+        "operationId": "update-watch-share",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShareInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Share"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a share's permission (owner only)",
+        "tags": [
+          "shares"
+        ]
+      }
+    }
+  }
+}

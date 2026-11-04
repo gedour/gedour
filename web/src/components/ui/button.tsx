@@ -12,10 +12,13 @@ const buttonVariants = cva(
         ghost: "text-muted hover:bg-line/60 hover:text-ink",
         outline: "border border-line bg-surface text-ink hover:bg-line/40",
         harbor: "text-harbor-muted hover:bg-harbor-hover hover:text-harbor-ink",
+        primary: "bg-ink text-bg shadow-sm hover:bg-ink/85",
+        danger: "bg-rose-700 text-white shadow-sm hover:bg-rose-800",
       },
       size: {
         default: "h-9 px-3",
         icon: "size-9",
+        sm: "h-8 px-2.5 text-xs",
       },
     },
     defaultVariants: { variant: "ghost", size: "default" },

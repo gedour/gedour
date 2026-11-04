@@ -1,6 +1,14 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
-export function EmptyState({ title, body }: { title: string; body: string }) {
+export function EmptyState({
+  title,
+  body,
+  action,
+}: {
+  title: string;
+  body: string;
+  action?: ReactNode;
+}) {
   const titleId = useId();
   return (
     <section
@@ -22,6 +30,7 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
         {title}
       </h2>
       <p className="max-w-prose text-muted">{body}</p>
+      {action}
     </section>
   );
 }

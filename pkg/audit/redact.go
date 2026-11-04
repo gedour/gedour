@@ -18,10 +18,15 @@ var (
 		"authorization", "authheader", "bearer", "cookie", "credential", "dsn",
 	}
 	secretSuffixes = []string{"key", "auth", "pass"}
+	// Exact names that only look secret: references to a credential row, never its content.
+	notSecret = map[string]bool{"credentialid": true, "credentialids": true}
 )
 
 func isSecretKey(k string) bool {
 	k = strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(k))
+	if notSecret[k] {
+		return false
+	}
 	for _, cand := range []string{k, strings.TrimSuffix(k, "s")} {
 		for _, m := range secretSuffixes {
 			if strings.HasSuffix(cand, m) {

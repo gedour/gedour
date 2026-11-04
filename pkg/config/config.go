@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/gedour/gedour/pkg/secret"
 )
 
 // Roles a process can run.
@@ -38,6 +41,11 @@ type Config struct {
 	DevUser            string
 	SessionTTL         time.Duration
 	SessionIdleTimeout time.Duration
+
+	// EncryptionKey is base64 of the 32-byte AES key sealing credential secrets.
+	EncryptionKey string
+	// AllowHTTPHosts are hosts a watch URL may reach over plain http (tests, lab mirrors).
+	AllowHTTPHosts []string
 }
 
 func getEnv(key, fallback string) string {
@@ -85,6 +93,8 @@ func Load() (Config, error) {
 		DevUser:            os.Getenv("GEDOUR_DEV_USER"),
 		SessionTTL:         ttl,
 		SessionIdleTimeout: idle,
+		EncryptionKey:      os.Getenv("GEDOUR_ENCRYPTION_KEY"),
+		AllowHTTPHosts:     splitList(os.Getenv("GEDOUR_ALLOW_HTTP_HOSTS")),
 	}, nil
 }
 
@@ -116,6 +126,10 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("GEDOUR_SHUTDOWN_TIMEOUT must be positive"))
+	}
+	// Both roles read credentials: web seals them, the worker opens them.
+	if _, err := secret.ParseKey(c.EncryptionKey); err != nil {
+		errs = append(errs, fmt.Errorf("GEDOUR_ENCRYPTION_KEY: %w", err))
 	}
 	// A worker serves no user, so it needs no authentication settings.
 	if c.RunsWeb() {
@@ -156,6 +170,16 @@ func (c Config) validateAuth() []error {
 		errs = append(errs, errors.New("GEDOUR_SESSION_TTL and GEDOUR_SESSION_IDLE_TIMEOUT must be positive"))
 	}
 	return errs
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, strings.ToLower(v))
+		}
+	}
+	return out
 }
 
 func absoluteURL(raw string) error {

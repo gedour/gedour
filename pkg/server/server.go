@@ -22,6 +22,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/audit"
 	"github.com/gedour/gedour/pkg/auth"
+	"github.com/gedour/gedour/pkg/watch"
 	"github.com/gedour/gedour/pkg/webui"
 )
 
@@ -53,7 +54,7 @@ type versionOutput struct {
 }
 
 // New returns the main handler: /healthz, /auth, the guarded /api surface and the SPA at /, behind security headers.
-func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.Service, pool *pgxpool.Pool) http.Handler {
+func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.Service, pool *pgxpool.Pool, watches *watch.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", Healthz(log, ping))
 
@@ -76,6 +77,7 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.
 	})
 	authn.Register(api, mux)
 	audit.Register(api, pool, log, auth.UserID)
+	watches.Register(api, auth.UserID)
 
 	// Per-method catch-alls: a method-less "/api/" would conflict with "GET /".
 	fallback := apiFallback(api, mux)

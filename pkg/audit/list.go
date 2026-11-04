@@ -38,6 +38,41 @@ type Query struct {
 	Limit      int
 }
 
+// visible is the one visibility rule (001-AC22): entries the viewer made, or on a watch they can read
+// now, or on a credential they own. Share entries (target "<watch>:<user>") go to the watch owner, and
+// to a sharee only for their own current share. Losing access to a watch hides its history.
+const visible = `(a.actor_user_id = @viewer
+	OR (a.target_type = 'watch' AND a.target_id IN (
+		SELECT id::text FROM watches WHERE owner_id = @viewer
+		UNION ALL SELECT watch_id::text FROM watch_shares WHERE user_id = @viewer))
+	OR (a.target_type = 'watch_share' AND (
+		split_part(a.target_id, ':', 1) IN (SELECT id::text FROM watches WHERE owner_id = @viewer)
+		OR EXISTS (SELECT 1 FROM watch_shares s WHERE s.user_id = @viewer
+			AND a.target_id = s.watch_id::text || ':' || s.user_id::text)))
+	OR (a.target_type = 'credential' AND a.target_id IN (SELECT id::text FROM credentials WHERE owner_id = @viewer)))`
+
+// Actor is a user who appears as actor in entries visible to the viewer.
+type Actor struct {
+	ID   string `json:"id" format:"uuid"`
+	Name string `json:"name" doc:"Display name, or email when there is none"`
+}
+
+// Actors lists the distinct actors of the entries viewer can see, sorted by name.
+// ponytail: scans every visible row; add an actors rollup if the log grows past a few million rows.
+func Actors(ctx context.Context, pool *pgxpool.Pool, viewer string) ([]Actor, error) {
+	rows, err := pool.Query(ctx, `SELECT u.id::text, COALESCE(NULLIF(u.display_name, ''), u.email, '') AS name
+		FROM users u WHERE u.id IN (SELECT a.actor_user_id FROM audit_log a WHERE `+visible+`)
+		ORDER BY lower(COALESCE(NULLIF(u.display_name, ''), u.email, '')), u.id`, pgx.NamedArgs{"viewer": viewer})
+	if err != nil {
+		return nil, fmt.Errorf("audit actors: %w", err)
+	}
+	actors, err := pgx.CollectRows(rows, pgx.RowToStructByPos[Actor])
+	if err != nil {
+		return nil, fmt.Errorf("audit actors: %w", err)
+	}
+	return actors, nil
+}
+
 // ErrBadCursor is returned for a cursor List did not produce.
 var ErrBadCursor = errors.New("invalid cursor")
 
@@ -69,8 +104,7 @@ func List(ctx context.Context, pool *pgxpool.Pool, q Query) ([]Item, string, err
 		return nil, "", errors.New("audit list: viewer required")
 	}
 	args := pgx.NamedArgs{"viewer": q.Viewer, "limit": q.Limit + 1}
-	// Visibility: in v0 a user sees only what they did. Phase 3 widens it here to resources they can read.
-	where := []string{"a.actor_user_id = @viewer"}
+	where := []string{visible}
 	if q.Actor != "" {
 		where = append(where, "a.actor_user_id = @actor")
 		args["actor"] = q.Actor

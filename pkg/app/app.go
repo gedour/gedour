@@ -15,7 +15,9 @@ import (
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/db"
+	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/server"
+	"github.com/gedour/gedour/pkg/watch"
 )
 
 // Run migrates the database, serves until ctx is cancelled, then drains within cfg.ShutdownTimeout.
@@ -43,7 +45,12 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 			// 001-AC2: loud on purpose, dev mode must never go unnoticed in a real deployment.
 			log.Warn("dev_mode_enabled", zap.String("user", cfg.DevUser))
 		}
-		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool)))
+		box, err := secret.New(cfg.EncryptionKey)
+		if err != nil {
+			return err
+		}
+		watches := watch.New(pool, log, box, cfg.AllowHTTPHosts)
+		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool, watches)))
 	}
 
 	errCh := make(chan error, len(servers))

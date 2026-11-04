@@ -19,7 +19,7 @@ LDFLAGS     := -s -w \
   -X 'main.ProjectURL=$(PROJECT_URL)'
 COVERAGE_MIN ?= 80
 
-.PHONY: build web go-build test coverage go-coverage web-coverage lint e2e docker-build dev clean
+.PHONY: build web go-build test coverage go-coverage web-coverage lint openapi e2e docker-build dev clean
 
 build: web go-build
 
@@ -55,6 +55,12 @@ lint: web/node_modules
 	pnpm --dir web lint
 	pnpm --dir web typecheck
 	pnpm --dir web format:check
+	pnpm --dir web check:api
+
+# 001-AC30: rewrites api/openapi.json from the handlers, then the web client types from it.
+openapi: web/node_modules
+	go test ./pkg/server -run '^TestOpenAPIDrift$$' -count=1 -update
+	pnpm --dir web gen:api
 
 e2e: build
 	scripts/e2e.sh

@@ -1,8 +1,8 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ChevronRight, RotateCw } from "lucide-react";
 import { Fragment, useId, useState } from "react";
 
-import { listAudit } from "@/api/client";
+import { listAudit, listAuditActors } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -21,17 +21,20 @@ const fieldClass =
   "h-9 rounded-md border border-line bg-surface px-2.5 text-sm text-ink shadow-xs focus-visible:border-beacon";
 
 export function AuditPage({ item }: { item: NavItem }) {
+  const [actor, setActor] = useState("");
   const [targetType, setTargetType] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const ids = { type: useId(), from: useId(), to: useId() };
+  const ids = { actor: useId(), type: useId(), from: useId(), to: useId() };
+  const actors = useQuery({ queryKey: ["audit-actors"], queryFn: listAuditActors });
 
   const filters: AuditFilters = {
+    actor: actor || undefined,
     target_type: targetType || undefined,
     from: from ? dayStartISO(from) : undefined,
     to: to ? dayStartISO(to, true) : undefined,
   };
-  const filtered = Boolean(targetType || from || to);
+  const filtered = Boolean(actor || targetType || from || to);
   const query = useInfiniteQuery({
     queryKey: ["audit", filters],
     queryFn: ({ pageParam }) => listAudit(filters, pageParam, PAGE_SIZE),
@@ -41,6 +44,7 @@ export function AuditPage({ item }: { item: NavItem }) {
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
 
   const clear = () => {
+    setActor("");
     setTargetType("");
     setFrom("");
     setTo("");
@@ -52,7 +56,8 @@ export function AuditPage({ item }: { item: NavItem }) {
       <div className="flex flex-col gap-2">
         <h1 className="font-display text-3xl font-semibold tracking-tight">{item.label}</h1>
         <p className="max-w-prose text-muted">
-          Every change made with your account, newest first. Secrets are never shown.
+          Every change you made, and every change on watches you can see, newest first. Secrets are
+          never shown.
         </p>
       </div>
 
@@ -61,6 +66,24 @@ export function AuditPage({ item }: { item: NavItem }) {
         className="flex flex-wrap items-end gap-3"
         onSubmit={(e) => e.preventDefault()}
       >
+        <div className="flex flex-col gap-1">
+          <label htmlFor={ids.actor} className="text-xs font-medium text-muted">
+            Actor
+          </label>
+          <select
+            id={ids.actor}
+            value={actor}
+            onChange={(e) => setActor(e.target.value)}
+            className={cn(fieldClass, "pr-8")}
+          >
+            <option value="">Everyone</option>
+            {actors.data?.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name || "Unnamed user"}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex flex-col gap-1">
           <label htmlFor={ids.type} className="text-xs font-medium text-muted">
             Target type

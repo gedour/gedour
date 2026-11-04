@@ -61,6 +61,7 @@ env -u GEDOUR_DEV_USER \
   OIDC_ISSUER="http://localhost:${KC_PORT}/realms/gedour-test" \
   OIDC_CLIENT_ID=gedour \
   OIDC_CLIENT_SECRET=gedour-test-secret \
+  GEDOUR_ENCRYPTION_KEY="$(printf 'dev-only-gedour-key-32-bytes-!!!' | base64)" \
   "${BIN}" >"${LOG}" 2>&1 &
 srv=$!
 

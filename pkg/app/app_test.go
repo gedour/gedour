@@ -47,6 +47,7 @@ func cfgFor(t *testing.T, role, dbURL string) config.Config {
 		DevUser:            "dev@local",
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Hour,
+		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 	}
 }
 

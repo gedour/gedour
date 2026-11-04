@@ -27,7 +27,13 @@ type listOutput struct {
 	}
 }
 
-// Register mounts GET /api/v1/audit; viewer returns the authenticated user's ID.
+type actorsOutput struct {
+	Body struct {
+		Items []Actor `json:"items"`
+	}
+}
+
+// Register mounts GET /api/v1/audit and GET /api/v1/audit/actors; viewer returns the authenticated user's ID.
 func Register(api huma.API, pool *pgxpool.Pool, log *zap.Logger, viewer func(context.Context) (string, bool)) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-audit",
@@ -57,6 +63,29 @@ func Register(api huma.API, pool *pgxpool.Pool, log *zap.Logger, viewer func(con
 			out.Body.Items = []Item{}
 		}
 		out.Body.NextCursor = next
+		return out, nil
+	})
+	huma.Register(api, huma.Operation{
+		OperationID: "list-audit-actors",
+		Method:      http.MethodGet,
+		Path:        "/api/v1/audit/actors",
+		Summary:     "Users who appear as actor in the audit entries visible to the caller",
+		Tags:        []string{"audit"},
+	}, func(ctx context.Context, _ *struct{}) (*actorsOutput, error) {
+		id, ok := viewer(ctx)
+		if !ok {
+			return nil, huma.Error401Unauthorized("not signed in")
+		}
+		items, err := Actors(ctx, pool, id)
+		if err != nil {
+			log.Error("audit_actors_failed", zap.Error(err))
+			return nil, huma.Error500InternalServerError("could not list audit actors")
+		}
+		out := &actorsOutput{}
+		out.Body.Items = items
+		if out.Body.Items == nil {
+			out.Body.Items = []Actor{}
+		}
 		return out, nil
 	})
 }

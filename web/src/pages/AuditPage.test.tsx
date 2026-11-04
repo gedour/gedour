@@ -96,6 +96,34 @@ describe("AuditPage", () => {
     expect(screen.getByText("No state recorded for this entry.")).toBeInTheDocument();
   });
 
+  // 001-AC22: the actor select lists the actors of visible entries and filters by their ID.
+  it("filters by actor", async () => {
+    const fn = mockApi({
+      "/api/v1/audit": { items: [entry(1)] },
+      "/api/v1/audit/actors": {
+        items: [
+          { id: "u1", name: "Alice" },
+          { id: "u2", name: "" },
+        ],
+      },
+    });
+    renderApp("/audit");
+    const select = screen.getByLabelText("Actor");
+    await screen.findByRole("option", { name: "Unnamed user" });
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Everyone", "Alice", "Unnamed user"]);
+    await userEvent.selectOptions(select, "u1");
+    await waitFor(() => {
+      const last = new URL(String(fn.mock.calls.at(-1)?.[0]), "http://app.test");
+      expect(last.pathname).toBe("/api/v1/audit");
+      expect(last.searchParams.get("actor")).toBe("u1");
+    });
+    expect(screen.getByLabelText("Target type")).toContainHTML("Watch share");
+  });
+
   // 001-AC22: filters by target type and date go to the API.
   it("filters by target type and date range", async () => {
     const fn = mockApi({ "/api/v1/audit": { items: [entry(1)] } });
@@ -116,9 +144,10 @@ describe("AuditPage", () => {
     expect(screen.getByLabelText("From")).toHaveValue("");
   });
 
-  // 001-AC22: v0 filters are target type and date range; the actor filter arrives in phase 3 with
-  // wider visibility. A new control must update this test on purpose.
-  it("offers exactly the target type and date filters", async () => {
+  // 001-AC22: the filter set is actor, target type and date range; a new control must update this
+  // test on purpose.
+  // 001-AC22: filterable by actor, target type and date.
+  it("offers exactly the actor, target type and date filters", async () => {
     mockApi({ "/api/v1/audit": { items: [] } });
     renderApp("/audit");
     const form = await screen.findByRole("form", { name: "Filter audit entries" });
@@ -127,6 +156,7 @@ describe("AuditPage", () => {
       type: el.tagName === "SELECT" ? "select" : (el as HTMLInputElement).type,
     }));
     expect(controls).toEqual([
+      { label: "Actor", type: "select" },
       { label: "Target type", type: "select" },
       { label: "From", type: "date" },
       { label: "To", type: "date" },

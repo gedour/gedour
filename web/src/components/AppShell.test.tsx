@@ -29,9 +29,17 @@ describe("AppShell", () => {
 
   it("navigates and shows the section's empty state", async () => {
     renderApp();
+    await userEvent.click(screen.getByRole("link", { name: "Rules" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeInTheDocument();
+    expect(screen.getByText("No rules yet")).toBeInTheDocument();
+  });
+
+  it("navigates to the watches list", async () => {
+    mockApi({ "/api/v1/watches": { items: [] } });
+    renderApp();
     await userEvent.click(screen.getByRole("link", { name: "Watches" }));
     expect(screen.getByRole("heading", { level: 1, name: "Watches" })).toBeInTheDocument();
-    expect(screen.getByText("No watches yet")).toBeInTheDocument();
+    expect(await screen.findByText("No watches yet")).toBeInTheDocument();
   });
 
   it("shows a not-found page for unknown routes", () => {

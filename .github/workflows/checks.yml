@@ -32,6 +32,8 @@ jobs:
       - run: pnpm --dir web lint
       - run: pnpm --dir web typecheck
       - run: pnpm --dir web format:check
+      # 001-AC30: web/src/api/schema.gen.ts matches api/openapi.json (the Go drift test covers the other side).
+      - run: pnpm --dir web check:api
 
   go-test:
     runs-on: ubuntu-latest

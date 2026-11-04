@@ -9,33 +9,39 @@ export const BOB = { username: "bob", password: "bob", name: "Bob Builder" };
 export const test = base.extend<{ cspViolations: string[] }>({
   cspViolations: [
     async ({ page, baseURL }, use) => {
-      const origin = new URL(baseURL ?? "http://localhost").origin;
-      const violations: string[] = [];
-      await page.exposeFunction("reportCspViolation", (o: string, v: string) => {
-        if (o === origin) violations.push(v);
-      });
-      await page.addInitScript(() => {
-        document.addEventListener("securitypolicyviolation", (e) => {
-          const w = window as unknown as { reportCspViolation: (o: string, v: string) => void };
-          w.reportCspViolation(location.origin, `${e.violatedDirective} ${e.blockedURI}`);
-        });
-      });
-      page.on("console", (msg) => {
-        const from = msg.location().url;
-        if (
-          msg.type() === "error" &&
-          /Content Security Policy/i.test(msg.text()) &&
-          from.startsWith(origin)
-        ) {
-          violations.push(msg.text());
-        }
-      });
+      const violations = await watchCsp(page, baseURL);
       await use(violations);
       expect(violations).toEqual([]);
     },
     { auto: true },
   ],
 });
+
+/** Collects CSP violations on our origin for page; the fixture does it for `page`, call it for others. */
+export async function watchCsp(page: Page, baseURL: string | undefined): Promise<string[]> {
+  const origin = new URL(baseURL ?? "http://localhost").origin;
+  const violations: string[] = [];
+  await page.exposeFunction("reportCspViolation", (o: string, v: string) => {
+    if (o === origin) violations.push(v);
+  });
+  await page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (e) => {
+      const w = window as unknown as { reportCspViolation: (o: string, v: string) => void };
+      w.reportCspViolation(location.origin, `${e.violatedDirective} ${e.blockedURI}`);
+    });
+  });
+  page.on("console", (msg) => {
+    const from = msg.location().url;
+    if (
+      msg.type() === "error" &&
+      /Content Security Policy/i.test(msg.text()) &&
+      from.startsWith(origin)
+    ) {
+      violations.push(msg.text());
+    }
+  });
+  return violations;
+}
 
 export { expect };
 

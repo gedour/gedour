@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 
 import { Sidebar } from "@/components/Sidebar";
+import { ToastProvider } from "@/components/Toaster";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { UserMenu } from "@/components/UserMenu";
 import { Wordmark } from "@/components/Wordmark";
@@ -68,58 +69,60 @@ export function AppShell() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-dvh flex-col bg-harbor">
-        <a
-          href="#main"
-          className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-ink focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
-        >
-          Skip to content
-        </a>
-        <header className="relative z-50 flex h-14 shrink-0 items-center gap-2 px-3">
-          <Button
-            variant="harbor"
-            size="icon"
-            aria-label={toggle.label}
-            aria-expanded={toggle.expanded}
-            aria-controls="app-sidebar"
-            title={mobile ? undefined : `${toggle.label} (Ctrl+B)`}
-            onClick={toggle.onClick}
+      <ToastProvider>
+        <div className="flex h-dvh flex-col bg-harbor">
+          <a
+            href="#main"
+            className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-ink focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
           >
-            <toggle.Icon aria-hidden />
-          </Button>
-          <Wordmark />
-          <div className="ml-auto flex items-center gap-1">
-            <ThemeToggle />
-            <UserMenu />
-          </div>
-        </header>
-        <div className="relative flex min-h-0 flex-1">
-          {mobile && drawerOpen && (
-            <div
-              data-testid="drawer-backdrop"
-              aria-hidden
-              className="fixed inset-0 z-30 bg-black/50"
-              onClick={() => setDrawerOpen(false)}
+            Skip to content
+          </a>
+          <header className="relative z-50 flex h-14 shrink-0 items-center gap-2 px-3">
+            <Button
+              variant="harbor"
+              size="icon"
+              aria-label={toggle.label}
+              aria-expanded={toggle.expanded}
+              aria-controls="app-sidebar"
+              title={mobile ? undefined : `${toggle.label} (Ctrl+B)`}
+              onClick={toggle.onClick}
+            >
+              <toggle.Icon aria-hidden />
+            </Button>
+            <Wordmark />
+            <div className="ml-auto flex items-center gap-1">
+              <ThemeToggle />
+              <UserMenu />
+            </div>
+          </header>
+          <div className="relative flex min-h-0 flex-1">
+            {mobile && drawerOpen && (
+              <div
+                data-testid="drawer-backdrop"
+                aria-hidden
+                className="fixed inset-0 z-30 bg-black/50"
+                onClick={() => setDrawerOpen(false)}
+              />
+            )}
+            <Sidebar
+              collapsed={collapsed}
+              width={width}
+              onResize={setWidth}
+              onResizeEnd={commitWidth}
+              mobile={mobile}
+              open={drawerOpen}
+              onNavigate={() => setDrawerOpen(false)}
             />
-          )}
-          <Sidebar
-            collapsed={collapsed}
-            width={width}
-            onResize={setWidth}
-            onResizeEnd={commitWidth}
-            mobile={mobile}
-            open={drawerOpen}
-            onNavigate={() => setDrawerOpen(false)}
-          />
-          <main
-            id="main"
-            tabIndex={-1}
-            className="min-w-0 flex-1 overflow-y-auto bg-bg outline-none md:rounded-tl-2xl"
-          >
-            <Outlet />
-          </main>
+            <main
+              id="main"
+              tabIndex={-1}
+              className="min-w-0 flex-1 overflow-y-auto bg-bg outline-none md:rounded-tl-2xl"
+            >
+              <Outlet />
+            </main>
+          </div>
         </div>
-      </div>
+      </ToastProvider>
     </TooltipProvider>
   );
 }

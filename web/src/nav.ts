@@ -68,6 +68,6 @@ export const NAV: NavItem[] = [
     label: "Settings",
     icon: Settings,
     emptyTitle: "Nothing to configure yet",
-    emptyBody: "Account and notification preferences will live here.",
+    emptyBody: "Credentials and account preferences.",
   },
 ];

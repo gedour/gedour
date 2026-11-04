@@ -19,6 +19,7 @@ func valid() Config {
 		DevUser:            "dev@local",
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Minute,
+		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 	}
 }
 
@@ -95,6 +96,9 @@ func TestValidate(t *testing.T) {
 		{"empty log level", func(c *Config) { c.LogLevel = "" }, ""},
 		{"bad log format", func(c *Config) { c.LogFormat = "xml" }, "log format"},
 		{"zero timeout", func(c *Config) { c.ShutdownTimeout = 0 }, "SHUTDOWN_TIMEOUT"},
+		{"no encryption key", func(c *Config) { c.EncryptionKey = "" }, "GEDOUR_ENCRYPTION_KEY"},
+		{"no encryption key on worker", func(c *Config) { c.Role = RoleWorker; c.EncryptionKey = "" }, "GEDOUR_ENCRYPTION_KEY"},
+		{"short encryption key", func(c *Config) { c.EncryptionKey = "AAAA" }, "GEDOUR_ENCRYPTION_KEY"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -153,8 +157,13 @@ func TestLoad(t *testing.T) {
 	t.Setenv("GEDOUR_DEV_USER", "d")
 	t.Setenv("GEDOUR_SESSION_TTL", "2h")
 	t.Setenv("GEDOUR_SESSION_IDLE_TIMEOUT", "30m")
+	t.Setenv("GEDOUR_ENCRYPTION_KEY", "k")
+	t.Setenv("GEDOUR_ALLOW_HTTP_HOSTS", " Localhost , ,127.0.0.1")
 	if c, err = Load(); err != nil {
 		t.Fatal(err)
+	}
+	if c.EncryptionKey != "k" || strings.Join(c.AllowHTTPHosts, "|") != "localhost|127.0.0.1" {
+		t.Fatalf("encryption env not read: %q %q", c.EncryptionKey, c.AllowHTTPHosts)
 	}
 	if c.OIDCIssuer != "https://i" || c.OIDCClientID != "id" || c.OIDCClientSecret != "sec" || c.PublicURL != "https://p" ||
 		c.DevUser != "d" || c.SessionTTL != 2*time.Hour || c.SessionIdleTimeout != 30*time.Minute {

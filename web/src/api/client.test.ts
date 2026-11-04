@@ -10,6 +10,7 @@ import {
   logout,
   navigation,
   request,
+  retryQuery,
 } from "@/api/client";
 import { ME, mockApi } from "@/test/api";
 
@@ -178,5 +179,15 @@ describe("navigation.toLogin", () => {
     await getMe();
     navigation.toLogin("/");
     expect(assign).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("retryQuery", () => {
+  it("never retries a 4xx, retries other failures up to 3 times", () => {
+    expect(retryQuery(0, new ApiError(404, "x"))).toBe(false);
+    expect(retryQuery(0, new ApiError(403, "x"))).toBe(false);
+    expect(retryQuery(0, new ApiError(500, "x"))).toBe(true);
+    expect(retryQuery(2, new TypeError("network"))).toBe(true);
+    expect(retryQuery(3, new ApiError(503, "x"))).toBe(false);
   });
 });

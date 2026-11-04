@@ -1,13 +1,39 @@
 import { readStorage, writeStorage } from "@/lib/utils";
-import type { AuditFilters, AuditPage, Me, VersionInfo } from "@/types/api";
+import type {
+  AuditActor,
+  AuditFilters,
+  AuditPage,
+  CreateCredentialBody,
+  CreateWatchBody,
+  Credential,
+  CredentialKind,
+  Me,
+  ProblemDetail,
+  Share,
+  SharePermission,
+  UpdateWatchBody,
+  VersionInfo,
+  Watch,
+  WatchFilters,
+} from "@/types/api";
 
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The problem's human detail, without the path and status prefix. */
+    readonly detail = "",
+    /** Field-level problems, e.g. location "body.config.repo". */
+    readonly errors: ProblemDetail[] = [],
   ) {
     super(message);
   }
+}
+
+/** react-query retry policy: a 4xx is the server's final answer (404 must show at once), the rest retries 3 times. */
+export function retryQuery(failures: number, err: unknown): boolean {
+  if (err instanceof ApiError && err.status >= 400 && err.status < 500) return false;
+  return failures < 3;
 }
 
 // Set by getMe; every mutation echoes it so the server can tell our pages from a forged form.
@@ -91,15 +117,25 @@ export async function request(
   }
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
+    let body: { detail?: string; errors?: ProblemDetail[] } = {};
     try {
-      const body = (await res.json()) as { detail?: string };
+      body = (await res.json()) as typeof body;
       if (body.detail) detail = `${detail}: ${body.detail}`;
     } catch {
       // not JSON: keep the status alone
     }
-    throw new ApiError(res.status, `${path}: ${detail}`);
+    throw new ApiError(res.status, `${path}: ${detail}`, body.detail ?? "", body.errors ?? []);
   }
   return res;
+}
+
+async function sendJSON<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await request(path, {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
 async function getJSON<T>(path: string): Promise<T> {
@@ -132,3 +168,48 @@ export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Pr
   if (cursor) q.set("cursor", cursor);
   return getJSON<AuditPage>(`/api/v1/audit?${q}`);
 }
+
+export async function listAuditActors(): Promise<AuditActor[]> {
+  return (await getJSON<{ items: AuditActor[] }>("/api/v1/audit/actors")).items;
+}
+
+const watchPath = (id: string) => `/api/v1/watches/${encodeURIComponent(id)}`;
+
+export async function listWatches(filters: WatchFilters = {}): Promise<Watch[]> {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  return (await getJSON<{ items: Watch[] }>(`/api/v1/watches?${q}`)).items;
+}
+
+export const getWatch = (id: string) => getJSON<Watch>(watchPath(id));
+export const createWatch = (body: CreateWatchBody) =>
+  sendJSON<Watch>("POST", "/api/v1/watches", body);
+export const updateWatch = (id: string, body: UpdateWatchBody) =>
+  sendJSON<Watch>("PATCH", watchPath(id), body);
+export const setWatchPaused = (id: string, paused: boolean) =>
+  sendJSON<Watch>("POST", `${watchPath(id)}/${paused ? "pause" : "resume"}`);
+export const deleteWatch = (id: string) => sendJSON<undefined>("DELETE", watchPath(id));
+
+export async function listShares(watchId: string): Promise<Share[]> {
+  return (await getJSON<{ items: Share[] }>(`${watchPath(watchId)}/shares`)).items;
+}
+export const addShare = (watchId: string, email: string, permission: SharePermission) =>
+  sendJSON<Share>("POST", `${watchPath(watchId)}/shares`, { email, permission });
+export const updateShare = (watchId: string, userId: string, permission: SharePermission) =>
+  sendJSON<Share>("PUT", `${watchPath(watchId)}/shares/${encodeURIComponent(userId)}`, {
+    permission,
+  });
+export const deleteShare = (watchId: string, userId: string) =>
+  sendJSON<undefined>("DELETE", `${watchPath(watchId)}/shares/${encodeURIComponent(userId)}`);
+
+const credentialPath = (id: string) => `/api/v1/credentials/${encodeURIComponent(id)}`;
+
+export async function listCredentials(kind?: CredentialKind): Promise<Credential[]> {
+  const q = kind ? `?kind=${kind}` : "";
+  return (await getJSON<{ items: Credential[] }>(`/api/v1/credentials${q}`)).items;
+}
+export const createCredential = (body: CreateCredentialBody) =>
+  sendJSON<Credential>("POST", "/api/v1/credentials", body);
+export const rotateCredentialSecret = (id: string, secret: string) =>
+  sendJSON<Credential>("PUT", `${credentialPath(id)}/secret`, { secret });
+export const deleteCredential = (id: string) => sendJSON<undefined>("DELETE", credentialPath(id));

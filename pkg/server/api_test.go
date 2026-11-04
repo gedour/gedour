@@ -52,7 +52,7 @@ func newDevApp(t *testing.T) *devApp {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &devApp{pool: pool, srv: httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool))}
+	a := &devApp{pool: pool, srv: httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool, testWatches(t, pool)))}
 	t.Cleanup(a.srv.Close)
 	jar, _ := cookiejar.New(nil)
 	a.client = &http.Client{Jar: jar}

@@ -14,6 +14,7 @@
 | Go + web unit tests | `make test` |
 | Coverage gates (Go and web, 80 % each) | `make coverage` |
 | Lint (golangci-lint, eslint, tsc, prettier) | `make lint` |
+| Regenerate `api/openapi.json` and `web/src/api/schema.gen.ts` | `make openapi` |
 | Playwright e2e (real binary + compose PostgreSQL) | `make e2e` |
 | Dev stack on :8080 / :9090 | `make dev` |
 | Pre-commit | `pre-commit run --all-files` |
@@ -23,7 +24,7 @@
   ports `E2E_PORT` (18080, a realm redirect URI: change both), `E2E_METRICS_PORT`, `E2E_DB_PORT`,
   `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`. The base URL is `localhost`, never `127.0.0.1` (cookie origin).
 - Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project stores alice's
-  session in `web/playwright/.auth/`.
+  and bob's sessions in `web/playwright/.auth/`.
 
 ## Go tests without a frontend build
 
@@ -35,21 +36,24 @@
 ## Conventions
 
 - Layout: `cmd/gedour` (flags, logger, signals only), logic in `pkg/<domain>`; coverage is measured on `./pkg/...`.
-- `/api/*` is huma (OpenAPI generated from handlers, served at `/api/openapi.json`). Unknown `/api` paths
+- `/api/*` is huma (OpenAPI generated from handlers, served at `/api/openapi.json`). Changing an operation
+  needs `make openapi`: `TestOpenAPIDrift` (Go) and `pnpm check:api` (web) fail on a stale file. Huma ignores
+  embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
   Other GET paths fall back to `index.html`.
 - `/metrics` lives only on the metrics listener; `/healthz` is on both listeners.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite
   `assetsInlineLimit: 0`); CSSOM writes (React `style` prop) are fine. Radix menus run with
-  `modal={false}` (modal mode injects a `<style>`); e2e fails on any CSP violation.
+  `modal={false}` (modal mode injects a `<style>`); modals use the native `<dialog>` of
+  `components/ui/dialog.tsx`, never Radix Dialog/AlertDialog. e2e fails on any CSP violation.
 - `index.html`'s pre-paint theme script reads `%GEDOUR_THEME_KEY%`, filled by Vite from `src/lib/theme.ts`.
 - CI jobs live in the reusable `.github/workflows/checks.yml`, called by `ci.yml` and gating `release.yml`.
   Actions are pinned to commit SHAs with a `# vX.Y.Z` comment; Dependabot bumps them.
 - Migrations: goose SQL files in `pkg/db/migrations`, embedded, applied at startup under a PG advisory lock.
   Never edit an applied migration; add a new numbered file.
 - Version vars are injected with `-X 'main.<Var>=…'` (never the import path).
-- Frontend: `fetch` only in `web/src/api/`; UI primitives in `web/src/components/ui` (shadcn-style, Radix).
+- Frontend: `fetch` only in `web/src/api/`; API resource types come from `schema.gen.ts` (via `types/api.ts`); UI primitives in `web/src/components/ui` (shadcn-style, Radix).
 - Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`,
   `gedour.login.redirectedAt` (login redirect loop guard).
 - Auth: `auth.Guard` puts every `/api` path behind a session, except those in its `publicAPI` set; mutations

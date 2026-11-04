@@ -3,7 +3,7 @@
 Self-hosted watch service: follows upstream releases, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
-Status: phase 2 (auth, users, audit). Spec: `specs/001-gedour-v0.md`.
+Status: phase 3 (watches, credentials, sharing). Spec: `specs/001-gedour-v0.md`.
 
 ## Quickstart
 
@@ -48,6 +48,8 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
+| `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
+| `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`) may reach over plain http; others need https |
 
 The web role needs either the three `OIDC_*` variables plus `GEDOUR_PUBLIC_URL`, or `GEDOUR_DEV_USER`;
 both or neither refuse to start. The session cookie is `__Host-gedour_session` (`Secure`) with OIDC, plain
@@ -72,6 +74,19 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
   A missing or stale token answers 403 problem+json with `title: "CSRF token invalid"`; refetch
   `/api/v1/me` and retry once.
 - `GET /api/v1/audit`: audit entries, newest first (`target_type`, `actor`, `from`, `to`, `cursor`, `limit`).
+  A user sees what they did, plus entries on watches they can read now and on their credentials; share
+  entries go to the watch owner and, for their own share only, to the sharee. `GET /api/v1/audit/actors`: the actors of those entries.
+- `/api/v1/watches` (`GET ?kind=&q=&shared=mine|with_me|all`, `POST`), `/api/v1/watches/{id}` (`GET`,
+  `PATCH`, `DELETE`), `POST /api/v1/watches/{id}/pause|resume`.
+- `/api/v1/watches/{id}/shares` (`GET`, `POST {email, permission}`), `/api/v1/watches/{id}/shares/{user_id}`
+  (`PUT {permission}`, `DELETE`). Shares are `ro` (read) or `rw` (edit, pause; not credential, sharing or
+  delete; not the config of a watch that uses the owner's credential). A sharee lists only their own
+  share. A watch the caller cannot read answers 404, one they cannot change 403.
+- `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
+  it), `PUT /api/v1/credentials/{id}/secret`. Secrets are write-only; responses carry `last4` (empty for
+  secrets under 16 characters). Credentials are private to their owner.
+
+The full contract is `api/openapi.json` (also served at `/api/openapi.json`).
 
 Every other `/api` route needs a session (401 otherwise).
 

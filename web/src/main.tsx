@@ -5,10 +5,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 
+import { retryQuery } from "@/api/client";
 import { ThemeProvider } from "@/hooks/ThemeProvider";
 import { routes } from "@/router";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({ defaultOptions: { queries: { retry: retryQuery } } });
 const router = createBrowserRouter(routes);
 
 const root = document.getElementById("root");

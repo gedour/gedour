@@ -1,3 +1,5 @@
+import type { components, operations } from "@/api/schema.gen";
+
 // Mirrors server.BuildInfo (GET /api/v1/version).
 export interface VersionInfo {
   version: string;
@@ -36,7 +38,34 @@ export interface AuditPage {
 }
 
 export interface AuditFilters {
+  actor?: string;
   target_type?: string;
   from?: string;
   to?: string;
+}
+
+// Phase 3 resources: generated from api/openapi.json (make openapi), never written by hand.
+type Schemas = components["schemas"];
+export type Watch = Schemas["Watch"];
+export type WatchKind = Watch["kind"];
+export type WatchConfig = Watch["config"];
+export type Permission = Watch["permission"];
+export type CreateWatchBody = Schemas["CreateWatchInputBody"];
+export type UpdateWatchBody = Schemas["UpdateWatchInputBody"];
+export type Share = Schemas["Share"];
+export type SharePermission = Share["permission"];
+export type Credential = Schemas["Credential"];
+export type CredentialKind = Credential["kind"];
+export type CreateCredentialBody = Schemas["CreateCredentialInputBody"];
+export type AuditActor = Schemas["Actor"];
+export type ProblemDetail = Schemas["ErrorDetail"];
+
+export type SharedFilter = NonNullable<
+  NonNullable<operations["list-watches"]["parameters"]["query"]>["shared"]
+>;
+
+export interface WatchFilters {
+  kind?: WatchKind;
+  q?: string;
+  shared?: SharedFilter;
 }

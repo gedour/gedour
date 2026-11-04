@@ -27,6 +27,8 @@ services:
       GEDOUR_DATABASE_URL: postgres://gedour:gedour@db:5432/gedour?sslmode=disable
       GEDOUR_LOG_FORMAT: console
       GEDOUR_DEV_USER: dev@local
+      # Dev-only key, public in this file: never reuse it where real credentials are stored.
+      GEDOUR_ENCRYPTION_KEY: ZGV2LW9ubHktZ2Vkb3VyLWtleS0zMi1ieXRlcy0hISE=
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:9090:9090"
@@ -71,6 +73,8 @@ services:
       OIDC_CLIENT_ID: gedour
       # Test-realm secret from deploy/keycloak/realm.json, not a real one.
       OIDC_CLIENT_SECRET: gedour-test-secret
+      # Dev-only key, public in this file: never reuse it where real credentials are stored.
+      GEDOUR_ENCRYPTION_KEY: ZGV2LW9ubHktZ2Vkb3VyLWtleS0zMi1ieXRlcy0hISE=
 
 volumes:
   pgdata:

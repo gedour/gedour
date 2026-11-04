@@ -141,13 +141,15 @@ UX
 Ops and quality
 
 - [ ] **AC27** `/healthz` returns 200 when PG is reachable, 503 otherwise; `/metrics` on the metrics
-  port exposes run counts, run durations, event counts and delivery outcomes per kind/channel.
+  port exposes `gedour_build_info`.
 - [ ] **AC28** `docker compose up` brings up PG + gedour in dev mode with a working UI on a clean
   machine; `kubectl apply -k deploy/k8s` deploys 2 web + 2 worker replicas.
 - [ ] **AC29** CI runs lint, Go tests (with PG), frontend tests, Playwright e2e and the image build on
   every PR; it fails if Go coverage < 80 % or frontend coverage < 80 % (lines).
 - [ ] **AC30** The OpenAPI document is served at `/api/openapi.json` and a CI check fails if the
   handlers and the document drift.
+- [ ] **AC31** `/metrics` exposes collector run counts and durations and event counts per watch kind
+  (Phase 4), and delivery outcomes per channel type (Phase 5).
 
 ## Phases
 
@@ -181,7 +183,7 @@ Ops and quality
 ### Phase 4 — Scheduler, collectors, events
 - Work: PG queue (`next_run_at` + `FOR UPDATE SKIP LOCKED`), backoff, rate-limit handling, ETag cache,
   the 5 collectors, state store, diff → events, watch detail shows state history and events.
-- **Covers**: AC7, AC8, AC9, AC10, AC11, AC12
+- **Covers**: AC7, AC8, AC9, AC10, AC11, AC12, AC31
 - **Data model impact**: `watch_states`, `events`, scheduling columns on `watches`.
 - **DoD**: fixture tests per kind green; 2-worker exactly-once integration test green; manual run
   against real `github.com/golang/go` releases and `docker.io/library/postgres` tags shows events.
@@ -189,7 +191,7 @@ Ops and quality
 ### Phase 5 — Filters, rules, channels, inbox
 - Work: expr filters with preview, rules, channels inbox/Telegram/SMTP/webhook, delivery worker with
   retries, SSRF guard, SSE live inbox, unread count.
-- **Covers**: AC13, AC14, AC15, AC16, AC19, AC20
+- **Covers**: AC13, AC14, AC15, AC16, AC19, AC20, AC31
 - **Data model impact**: `rules`, `rule_channels`, `channels`, `deliveries`, `inbox_items`.
 - **DoD**: delivery tests against httptest servers (webhook, Telegram API stub) and a local SMTP sink
   (mailpit in compose); SSE test across 2 web replicas.
@@ -207,7 +209,8 @@ Ops and quality
   mobile drawer, keyboard pass. Lab deployment on `lab-cluster`: ArgoCD app in the `gitops-repo`
   app-of-apps, database as a `shared-pg` CNPG tenant, secrets through External Secrets
   (`lab-secret-store`), private ingress `https://gedour.lab.example` (class `private-ingress`,
-  LAN only), OIDC client in the lab Keycloak (`idp.lab.example`, realm `apps`).
+  LAN only), OIDC client in the lab Keycloak (`idp.lab.example`, realm `lab`), created by babs from the callback
+  URL `https://gedour.lab.example/auth/callback`; the deploy waits on its client secret.
 - **Covers**: AC26, AC28
 - **Data model impact**: none.
 - **DoD**: Argo app `gedour` Synced/Healthy with 2+2 replicas; login through `idp.lab.example` works on
@@ -239,6 +242,5 @@ None.
   Keycloak proves the real flow, the stub keeps `go test` free of a 30 s container start.
 - Images on GHCR `ghcr.io/gedour/gedour`, multi-arch, cosign keyless — per the GitHub Actions
   standard.
-- Lab Keycloak realm `apps` (the broker realm) rather than `lab` — app clients belong on the
-  broker; change if the client should sit on `lab`.
+- Lab Keycloak realm `lab`; babs creates the client and its secret.
 - Not-shared resources return 404 — avoids leaking which watch IDs exist.

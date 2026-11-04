@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: gedour
+      POSTGRES_USER: gedour
+      POSTGRES_PASSWORD: gedour
+    ports:
+      # Loopback only; e2e and local `go run` reach it here. Override when 55432 is taken.
+      - "127.0.0.1:${GEDOUR_DB_PORT:-55432}:5432"
+    volumes:
+      # postgres 18 images keep PGDATA under a versioned subdirectory of this path.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gedour -d gedour"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gedour:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GEDOUR_DATABASE_URL: postgres://gedour:gedour@db:5432/gedour?sslmode=disable
+      GEDOUR_LOG_FORMAT: console
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9090:9090"
+
+volumes:
+  pgdata:

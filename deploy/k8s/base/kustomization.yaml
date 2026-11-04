@@ -1,0 +1,30 @@
+# Generic base, namespace-less: deploys into the current namespace.
+# Needs a Secret `gedour` (keys in README "Kubernetes"); overlays set the tag and merge into the ConfigMap.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: gedour
+    includeSelectors: true
+
+resources:
+  - web-deployment.yaml
+  - worker-deployment.yaml
+  - service.yaml
+  - worker-service.yaml
+  - web-pdb.yaml
+  - worker-pdb.yaml
+
+images:
+  - name: ghcr.io/gedour/gedour
+    newTag: v0.1.0
+
+# Hash-suffixed name: a config change rolls both Deployments.
+configMapGenerator:
+  - name: gedour
+    literals:
+      - GEDOUR_LOG_FORMAT=json
+      - GEDOUR_LOG_LEVEL=info
+      # Below terminationGracePeriodSeconds (30) minus the web preStop sleep (5).
+      - GEDOUR_SHUTDOWN_TIMEOUT=15s

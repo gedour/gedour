@@ -16,6 +16,7 @@
 | Lint (golangci-lint, eslint, tsc, prettier) | `make lint` |
 | Regenerate `api/openapi.json` and `web/src/api/schema.gen.ts` | `make openapi` |
 | Playwright e2e (real binary + compose PostgreSQL) | `make e2e` |
+| kind + compose smoke (001-AC28), needs kind with a Kubernetes 1.30+ node (`KIND=<path>`) | `make k8s-smoke` |
 | Dev stack on :8080 / :9090 | `make dev` |
 | Pre-commit | `pre-commit run --all-files` |
 
@@ -26,7 +27,9 @@
   `E2E_SMTP_PORT`/`E2E_MAILPIT_PORT` (Mailpit). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
 - The fake upstream also serves Telegram (`/tg/bot<token>/sendMessage`) and webhook receivers
   (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got.
-- The fixture set is global: specs that switch it live in `activity.spec.ts`, which runs serially.
+- The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
+  runs before the parallel specs and leaves 3 events in bob's inbox; the a11y, 375 px and keyboard specs run
+  as bob, and only the keyboard spec touches the rc promotion item.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
   `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook targets).
@@ -48,7 +51,7 @@
   embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
   Other GET paths fall back to `index.html`.
-- `/metrics` lives only on the metrics listener; `/healthz` is on both listeners.
+- `/metrics` and `/livez` (liveness, ignores PG) live only on the metrics listener; `/healthz` is on both.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite
   `assetsInlineLimit: 0`); CSSOM writes (React `style` prop) are fine. Radix menus run with
@@ -69,6 +72,14 @@
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
+
+## Kubernetes
+
+- Base in `deploy/k8s/base` (`deploy/k8s` only includes it): kustomize refuses an overlay nested in the
+  directory it includes, so `deploy/k8s/test` (smoke only: dev mode, public key) points at `../base`.
+- The image has no shell: no `exec` probes or `sh -c` hooks; use `httpGet` and the `sleep` action.
+- A release tag must equal `newTag` in `deploy/k8s/base` and the README pins: bump them before tagging
+  (`scripts/check-release-pin.sh <tag>`, its `--self-test` runs in CI).
 
 ## Collectors
 

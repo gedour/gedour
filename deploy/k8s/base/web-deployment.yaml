@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gedour-web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: web
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # preStop 5 s + GEDOUR_SHUTDOWN_TIMEOUT 15 s, with margin.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: gedour
+              app.kubernetes.io/component: web
+          matchLabelKeys: [pod-template-hash]
+      containers:
+        - name: gedour
+          image: ghcr.io/gedour/gedour
+          args: ["--role=web"]
+          envFrom:
+            - configMapRef:
+                name: gedour
+            - secretRef:
+                name: gedour
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          # Listeners open once PostgreSQL answers (retried with backoff) and migrations ran: 5 min allowed.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 2
+          # /livez ignores PostgreSQL: a database outage drops readiness, never restarts the pods.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 6
+          lifecycle:
+            # Lets the Service and ingress drop the endpoint before the listener closes. No shell in the image.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            # Parent (idle ~10 MiB) plus 2 interactive sandbox children (dry runs, channel tests), ~210 MiB each at their cap.
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 640Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]

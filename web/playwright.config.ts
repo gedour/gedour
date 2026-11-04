@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { AUTH_FILE } from "./e2e/auth-file";
+import { AUTH_FILE, BOB_AUTH_FILE } from "./e2e/auth-file";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -14,9 +14,16 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /auth\.setup\.ts/, use: { ...devices["Desktop Chrome"] } },
+    // Switches the global fixture set: done before the parallel specs start.
+    {
+      name: "seed",
+      testMatch: /seed\.setup\.ts/,
+      dependencies: ["setup"],
+      use: { ...devices["Desktop Chrome"], storageState: BOB_AUTH_FILE },
+    },
     {
       name: "chromium",
-      dependencies: ["setup"],
+      dependencies: ["seed"],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_FILE },
     },
   ],

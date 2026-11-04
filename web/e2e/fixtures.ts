@@ -52,3 +52,21 @@ export async function signInAtProvider(page: Page, user: { username: string; pas
   await page.getByRole("textbox", { name: "Password", exact: true }).fill(user.password);
   await page.getByRole("button", { name: /^sign in$/i }).click();
 }
+
+// Watches target the fake upstream that scripts/e2e.sh starts; e2e never polls the real forges.
+export const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
+
+/** Bob's seeded watch and rule (seed.setup.ts); their 3 events are in his inbox. */
+export const SEED = { watch: "Seeded CLI releases", rule: "Seeded inbox rule" };
+
+/** Calls the API as the page's user, with the session's CSRF token. */
+export async function api(page: Page) {
+  const { csrf_token } = await (await page.request.get("/api/v1/me")).json();
+  return (method: string, path: string, data?: unknown) =>
+    page.request.fetch(path, { method, data, headers: { "X-CSRF-Token": csrf_token } });
+}
+
+/** Switches the fake upstream's global fixture set; only seed.setup.ts and activity.spec.ts may. */
+export async function setFixture(page: Page, set: "a" | "b") {
+  expect((await page.request.post(`${UPSTREAM}/_fixture/${set}`)).status()).toBe(204);
+}

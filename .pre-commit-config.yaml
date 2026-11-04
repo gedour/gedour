@@ -7,6 +7,8 @@ repos:
         exclude: ^web/patches/
       - id: end-of-file-fixer
       - id: check-yaml
+        # Kubernetes manifests put several objects in one file.
+        args: [--allow-multiple-documents]
       - id: check-added-large-files
 
   # Local hooks run the toolchain already pinned in go.mod / web/package.json, so pre-commit and CI agree.

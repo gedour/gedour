@@ -1,26 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import type { Page } from "@playwright/test";
-
-import { expect, test } from "./fixtures";
+import { api, expect, setFixture, test, UPSTREAM } from "./fixtures";
 
 // Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
 test.describe.configure({ mode: "serial" });
 
-// scripts/e2e.sh starts cmd/fakeupstream there, allowlisted for the worker.
-const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
 const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:18026";
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
-
-async function api(page: Page) {
-  const { csrf_token } = await (await page.request.get("/api/v1/me")).json();
-  return (method: string, path: string, data?: unknown) =>
-    page.request.fetch(path, { method, data, headers: { "X-CSRF-Token": csrf_token } });
-}
-
-async function setFixture(page: Page, set: "a" | "b") {
-  expect((await page.request.post(`${UPSTREAM}/_fixture/${set}`)).status()).toBe(204);
-}
 
 // 001-AC7, 001-AC8, 001-AC12: the worker records a baseline, then after the upstream changes and
 // "Run now", the timeline shows exactly the fixture's events.

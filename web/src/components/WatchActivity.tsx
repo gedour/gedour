@@ -147,10 +147,10 @@ export function ActivityTabs({ watch }: { watch: Watch }) {
           </Tabs.Trigger>
         ))}
       </Tabs.List>
-      <Tabs.Content value="events" className="focus-visible:outline-none">
+      <Tabs.Content value="events">
         <EventsTimeline watch={watch} />
       </Tabs.Content>
-      <Tabs.Content value="state" className="focus-visible:outline-none">
+      <Tabs.Content value="state">
         <StatePanel watch={watch} />
       </Tabs.Content>
     </Tabs.Root>
@@ -314,7 +314,7 @@ function ReleaseTable({ state }: { state: ReleaseState }) {
   const releases = state.releases ?? [];
   if (releases.length === 0) return <p className="text-sm text-muted">No releases upstream.</p>;
   return (
-    <div className="overflow-x-auto rounded-lg border border-line">
+    <div className="relative overflow-x-auto rounded-lg border border-line">
       <table className="w-full text-sm">
         <thead className="bg-bg/60 text-left text-xs text-muted">
           <tr>

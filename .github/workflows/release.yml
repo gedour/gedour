@@ -17,8 +17,16 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
+  # A release tag must match the image tag pinned in deploy/k8s/base and the README overlay example.
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: scripts/check-release-pin.sh "${GITHUB_REF_NAME}"
+
   build:
-    needs: checks
+    needs: [checks, pin]
     strategy:
       matrix:
         include:

@@ -1,0 +1,6 @@
+# Optional: `components: [<path to deploy/k8s>/components/networkpolicy]` in an overlay. README "Network policy".
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - networkpolicy.yaml

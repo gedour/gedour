@@ -1,0 +1,91 @@
+import AxeBuilder from "@axe-core/playwright";
+import type { Page } from "@playwright/test";
+
+import { BOB_AUTH_FILE } from "./auth-file";
+import { api, expect, SEED, test } from "./fixtures";
+
+test.use({ storageState: BOB_AUTH_FILE, reducedMotion: "reduce" });
+
+/** The seeded watch and rule ids, for their detail and form views. */
+async function seedIds(page: Page) {
+  const call = await api(page);
+  const watches = (await (await call("GET", "/api/v1/watches")).json()).items as {
+    id: string;
+    name: string;
+  }[];
+  const rules = (await (await call("GET", "/api/v1/rules")).json()).items as {
+    id: string;
+    name: string;
+  }[];
+  const watch = watches.find((w) => w.name === SEED.watch)?.id;
+  const rule = rules.find((r) => r.name === SEED.rule)?.id;
+  if (!watch || !rule) throw new Error("seed.setup.ts did not run");
+  return { watch, rule };
+}
+
+/** Serious and critical axe violations on the page as it is now, one line per rule and node. */
+async function violations(page: Page): Promise<string[]> {
+  const { violations } = await new AxeBuilder({ page }).analyze();
+  return violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .flatMap((v) => v.nodes.map((n) => `${v.id}: ${n.target.join(" ")} ${n.failureSummary}`));
+}
+
+// 001-AC26: no serious or critical axe violation on any main view, in either theme.
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`${theme} theme`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.addInitScript((t) => localStorage.setItem("gedour.theme", t), theme);
+    });
+
+    test("main views have no serious axe violation", async ({ page }) => {
+      await page.goto("/inbox");
+      const { watch, rule } = await seedIds(page);
+      const views: [string, string][] = [
+        ["/inbox?state=all", "Inbox"],
+        ["/watches", "Watches"],
+        [`/watches/${watch}`, SEED.watch],
+        ["/watches/new", "New watch"],
+        ["/rules", "Rules"],
+        ["/rules/new", "New rule"],
+        [`/rules/${rule}`, `Edit ${SEED.rule}`],
+        ["/channels", "Channels"],
+        ["/scripts", "Scripts"],
+        ["/scripts/new", "New script"],
+        ["/audit", "Audit"],
+        ["/settings", "Settings"],
+        ["/settings/credentials", "Credentials"],
+      ];
+      const found: Record<string, string[]> = {};
+      for (const [path, heading] of views) {
+        await page.goto(path);
+        await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+        await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
+        found[path] = await violations(page);
+      }
+      expect(found).toEqual(Object.fromEntries(views.map(([p]) => [p, []])));
+    });
+
+    test("dialogs and the inbox panel have no serious axe violation", async ({ page }) => {
+      await page.goto("/inbox?state=all");
+      await page
+        .getByRole("list", { name: /^Inbox, / })
+        .getByRole("button")
+        .first()
+        .click();
+      await expect(page.getByRole("button", { name: "Close details" })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+
+      await page.goto("/channels");
+      await page.getByRole("button", { name: "New channel" }).first().click();
+      await expect(page.getByRole("dialog", { name: "New channel" })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+    });
+
+    test("the signed-out page has no serious axe violation", async ({ page }) => {
+      await page.goto("/auth/signed-out");
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+    });
+  });
+}

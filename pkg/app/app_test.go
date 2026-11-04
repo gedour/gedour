@@ -5,8 +5,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -157,10 +159,17 @@ func TestNewSender(t *testing.T) {
 }
 
 func TestRunErrors(t *testing.T) {
-	t.Run("db unreachable", func(t *testing.T) {
+	// SIGTERM while waiting for the database is a clean stop: nil, so main logs no run_failed.
+	t.Run("db unreachable until stopped", func(t *testing.T) {
 		cfg := cfgFor(t, config.RoleAll, "postgres://u:p@127.0.0.1:1/db?connect_timeout=1")
-		if err := Run(context.Background(), cfg, zap.NewNop(), server.BuildInfo{}, fstest.MapFS{}); err == nil {
-			t.Fatal("want migration error")
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		core, logs := observer.New(zap.WarnLevel)
+		if err := Run(ctx, cfg, zap.New(core), server.BuildInfo{}, fstest.MapFS{}); err != nil {
+			t.Fatalf("want nil on stop, got %v", err)
+		}
+		if n := logs.FilterMessage("db_unreachable").Len(); n < 2 {
+			t.Fatalf("want retries, got %d db_unreachable logs", n)
 		}
 	})
 	t.Run("bad url", func(t *testing.T) {
@@ -195,4 +204,104 @@ func TestRunErrors(t *testing.T) {
 			t.Fatalf("want listen error, got %v", err)
 		}
 	})
+}
+
+// pgProxy forwards TCP to PostgreSQL; closed, the database looks down (connection refused).
+type pgProxy struct {
+	addr, target string
+	mu           sync.Mutex
+	ln           net.Listener
+	conns        []net.Conn
+	closed       bool
+}
+
+func (p *pgProxy) open(t *testing.T) {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", p.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.ln, p.closed = ln, false
+	p.mu.Unlock()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			up, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", p.target)
+			if err != nil {
+				_ = c.Close()
+				continue
+			}
+			p.mu.Lock()
+			if p.closed {
+				// close() ran while this connection was being dialled: it must not outlive it.
+				p.mu.Unlock()
+				_ = c.Close()
+				_ = up.Close()
+				continue
+			}
+			p.conns = append(p.conns, c, up)
+			p.mu.Unlock()
+			go func() { _, _ = io.Copy(up, c); _ = up.Close() }()
+			go func() { _, _ = io.Copy(c, up); _ = c.Close() }()
+		}
+	}()
+}
+
+func (p *pgProxy) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.ln != nil {
+		_ = p.ln.Close()
+	}
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+}
+
+// 001-AC27: a pod started during a PostgreSQL outage becomes healthy once the database is back, without a
+// restart; a later outage fails /healthz (readiness) but never /livez (liveness).
+func TestRunWaitsForDatabase(t *testing.T) {
+	u, err := url.Parse(testpg.NewDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &pgProxy{addr: freeAddr(t), target: u.Host}
+	defer proxy.close()
+	u.Host = proxy.addr
+	cfg := cfgFor(t, config.RoleAll, u.String())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	core, logs := observer.New(zap.WarnLevel)
+	go func() { done <- Run(ctx, cfg, zap.New(core), server.BuildInfo{}, fstest.MapFS{}) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for logs.FilterMessage("db_unreachable").Len() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("no db_unreachable retries while the database was down")
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("Run gave up with the database down: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	proxy.open(t)
+	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
+	waitFor(t, "http://"+cfg.MetricsAddr+"/livez", http.StatusOK)
+
+	proxy.close()
+	waitFor(t, "http://"+cfg.MetricsAddr+"/healthz", http.StatusServiceUnavailable)
+	if code, _ := getStatus("http://" + cfg.MetricsAddr + "/livez"); code != http.StatusOK {
+		t.Fatalf("livez with the database down: %d", code)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned %v", err)
+	}
 }

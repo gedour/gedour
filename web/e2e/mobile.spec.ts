@@ -1,0 +1,139 @@
+import type { Page } from "@playwright/test";
+
+import { BOB_AUTH_FILE } from "./auth-file";
+import { api, expect, SEED, test, UPSTREAM } from "./fixtures";
+
+test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, hasTouch: true });
+
+const SHOTS = process.env.E2E_SHOTS_DIR;
+const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+
+/** Fails when the page, or the shell's scrolling main area, is wider than the viewport. */
+async function expectNoHorizontalScroll(page: Page) {
+  const widths = await page.evaluate(() =>
+    [document.documentElement, document.getElementById("main")].flatMap((el) =>
+      el ? [{ scroll: el.scrollWidth, client: el.clientWidth }] : [],
+    ),
+  );
+  for (const w of widths) {
+    expect(w.scroll, `${page.url()}: content wider than the viewport`).toBeLessThanOrEqual(
+      w.client,
+    );
+  }
+}
+
+async function shot(page: Page, name: string) {
+  if (SHOTS) await page.screenshot({ path: `${SHOTS}/phase7-375-${name}.png` });
+}
+
+// 001-AC26: every main view fits 375 px without horizontal scroll.
+test("main views fit 375 px", async ({ page }) => {
+  await page.goto("/watches");
+  const watches = (await (await (await api(page))("GET", "/api/v1/watches")).json()).items as {
+    id: string;
+    name: string;
+  }[];
+  const seeded = watches.find((w) => w.name === SEED.watch)?.id;
+  expect(seeded, "seed.setup.ts did not run").toBeDefined();
+  for (const path of [
+    `/watches/${seeded}`,
+    "/inbox?state=all",
+    "/watches",
+    "/watches/new",
+    "/rules",
+    "/rules/new",
+    "/channels",
+    "/scripts",
+    "/scripts/new",
+    "/audit",
+    "/settings",
+    "/settings/credentials",
+  ]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  }
+  await page.goto("/auth/signed-out");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
+// 001-AC26: the sidebar is a drawer, a watch is created, the inbox detail is a dialog.
+test("drawer, create watch and inbox dialog at 375 px", async ({ page }) => {
+  const t = tag();
+  await page.goto("/inbox?state=all");
+  const sidebar = page.getByRole("complementary", { name: "Sidebar" });
+  await expect(sidebar.getByRole("link", { name: "Watches" })).not.toBeInViewport();
+  await page.getByRole("button", { name: "Open navigation" }).tap();
+  await expect(sidebar.getByRole("link", { name: "Watches" })).toBeInViewport();
+  await sidebar.getByRole("link", { name: "Watches" }).tap();
+  await expect(page.getByRole("heading", { level: 1, name: "Watches" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await shot(page, "watches");
+
+  await page.goto("/watches/new");
+  await page.getByLabel("Paste a URL").fill("https://github.com/cli/cli/releases");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByLabel("Name").fill(`Mobile ${t}`);
+  await expectNoHorizontalScroll(page);
+  await page.getByRole("button", { name: "Create watch" }).tap();
+  await expect(page.getByRole("heading", { level: 1, name: `Mobile ${t}` })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+
+  await page.goto("/inbox?state=all");
+  await page
+    .getByRole("list", { name: /^Inbox, / })
+    .getByRole("button")
+    .first()
+    .tap();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+  const box = await dialog.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 375).toBe(true);
+  await expectNoHorizontalScroll(page);
+  await shot(page, "inbox-dialog");
+  await dialog.getByRole("button", { name: "Close" }).tap();
+  await expect(dialog).toBeHidden();
+});
+
+// 001-AC26: the rule form and the script editor are usable at 375 px.
+test("rule form and script editor at 375 px", async ({ page }) => {
+  const t = tag();
+  await page.goto("/rules/new");
+  await page.getByLabel("Name").fill(`Mobile rule ${t}`);
+  await page.getByLabel("Watches").selectOption({ label: SEED.watch });
+  await page.getByLabel("Expression").fill('event.type == "release.published"');
+  await expect(page.getByText("Valid filter")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await shot(page, "rule-form");
+  await page.getByRole("button", { name: "Create rule" }).tap();
+  await expect(page).toHaveURL(/\/rules$/);
+  await expect(page.getByRole("list", { name: "Rules" })).toContainText(`Mobile rule ${t}`);
+
+  await page.goto("/scripts/new");
+  await page.getByLabel("Name").fill(`Mobile script ${t}`);
+  const editor = page.getByRole("textbox", { name: "Source" });
+  await editor.tap();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Delete");
+  // A long line must scroll inside the editor, not the page.
+  await page.keyboard.insertText(
+    `function main(event) {\nlog("a long line that is much wider than a phone screen", event.type, event.summary);\n}\n`,
+  );
+  await expectNoHorizontalScroll(page);
+  await page.getByRole("button", { name: "Run with sample event" }).tap();
+  await expect(page.getByTestId("script-results")).toContainText("Returned");
+  await expectNoHorizontalScroll(page);
+  await shot(page, "script-editor");
+  await page.getByRole("button", { name: "Create script" }).tap();
+  await expect(
+    page.getByRole("heading", { level: 1, name: `Edit Mobile script ${t}` }),
+  ).toBeVisible();
+
+  const call = await api(page);
+  const scripts = (await (await call("GET", "/api/v1/scripts")).json()).items as { name: string }[];
+  expect(scripts.map((s) => s.name)).toContain(`Mobile script ${t}`);
+});

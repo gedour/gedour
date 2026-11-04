@@ -422,7 +422,7 @@ export function FilterStatus({
           <pre
             data-testid="filter-marker"
             aria-label={`Line ${m.line}, column ${m.before.length + 1}`}
-            className="overflow-x-auto rounded-md bg-rose-500/8 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre text-ink"
+            className="relative overflow-x-auto rounded-md bg-rose-500/8 px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre text-ink"
           >
             {m.before}
             <mark className="bg-transparent text-rose-700 underline decoration-rose-600 decoration-wavy decoration-2 underline-offset-4 dark:text-rose-300">
@@ -492,7 +492,7 @@ export function PreviewTable({
       <p className="text-sm">
         <strong>{matched}</strong> of {items.length} recent events match.
       </p>
-      <div className="overflow-x-auto rounded-lg border border-line">
+      <div className="relative overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-[560px] text-left text-sm">
           <caption className="sr-only">Preview against recent events</caption>
           <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">

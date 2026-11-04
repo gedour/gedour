@@ -25,6 +25,7 @@ docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour w
 |---|---|---|
 | `GEDOUR_KC_PORT` | `8081` | Keycloak port, the same inside and outside the container (it is in the issuer URL) |
 | `GEDOUR_OIDC_PORT` | `8082` | Host port of the OIDC-mode gedour |
+| `GEDOUR_HTTP_PORT` / `GEDOUR_METRICS_PORT` | `8080` / `9090` | Host ports of the dev-mode gedour |
 | `GEDOUR_DB_PORT` | `55432` | Host port of PostgreSQL |
 | `GEDOUR_MAILPIT_SMTP_PORT` / `GEDOUR_MAILPIT_PORT` | `1025` / `8025` | Host ports of Mailpit's SMTP and UI |
 
@@ -38,7 +39,7 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `GEDOUR_DATABASE_URL` | (required) | PostgreSQL URL, e.g. `postgres://user:pass@host:5432/gedour` |
 | `GEDOUR_ROLE` / `--role` | `all` | `web`, `worker` or `all` |
 | `GEDOUR_HTTP_ADDR` | `:8080` | UI, `/api`, `/healthz` |
-| `GEDOUR_METRICS_ADDR` | `:9090` | `/metrics`, `/healthz` |
+| `GEDOUR_METRICS_ADDR` | `:9090` | `/metrics`, `/healthz`, `/livez` |
 | `GEDOUR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `GEDOUR_LOG_FORMAT` | `auto` | `auto` (console on a TTY, else JSON), `console`, `json` |
 | `GEDOUR_SHUTDOWN_TIMEOUT` | `15s` | Drain time on SIGTERM |
@@ -169,9 +170,145 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
   deleted while a channel runs it (409 naming them).
 - Metrics: `gedour_script_runs_total{outcome=ok|error|timeout|killed}`, `gedour_script_run_duration_seconds`.
 
+## Kubernetes
+
+`deploy/k8s` is a namespace-less Kustomize base: `kubectl apply -k deploy/k8s` deploys into the current
+namespace. Overlays reference `deploy/k8s/base`.
+
+| Object | Content |
+|---|---|
+| Deployment `gedour-web` | `--role=web`, 2 replicas, ports `http` 8080 and `metrics` 9090 |
+| Deployment `gedour-worker` | `--role=worker`, 2 replicas, port `metrics` 9090 |
+| Service `gedour` | web pods: `http` 8080, `metrics` 9090 |
+| Service `gedour-worker` | worker pods: `metrics` 9090 |
+| PodDisruptionBudgets `gedour-web`, `gedour-worker` | `minAvailable: 1`, `unhealthyPodEvictionPolicy: AlwaysAllow` |
+| ConfigMap `gedour` (generated, hash suffix) | `GEDOUR_LOG_FORMAT=json`, `GEDOUR_LOG_LEVEL=info`, `GEDOUR_SHUTDOWN_TIMEOUT=15s` |
+
+Both Deployments load the ConfigMap and a Secret `gedour` as environment (`envFrom`). The base ships no
+Secret: create it first. Pods stay in `CreateContainerConfigError` until it exists.
+
+| Secret key | Web | Worker | |
+|---|---|---|---|
+| `GEDOUR_DATABASE_URL` | required | required | |
+| `GEDOUR_ENCRYPTION_KEY` | required | required | Same value on every replica |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | required | unused | |
+| `GEDOUR_SMTP_ADDR`, `GEDOUR_SMTP_FROM`, `GEDOUR_SMTP_USERNAME`, `GEDOUR_SMTP_PASSWORD` | optional | optional | Worker sends deliveries, web sends channel tests |
+
+```sh
+kubectl create secret generic gedour \
+  --from-literal=GEDOUR_DATABASE_URL='postgres://gedour:...@db:5432/gedour' \
+  --from-literal=GEDOUR_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  --from-literal=OIDC_ISSUER=https://sso.example.com/realms/example \
+  --from-literal=OIDC_CLIENT_ID=gedour --from-literal=OIDC_CLIENT_SECRET='...'
+```
+
+Other settings (table in [Configuration](#configuration)) go into the ConfigMap from an overlay:
+`GEDOUR_PUBLIC_URL` (web, required with OIDC), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
+(both roles: web validates watch URLs, the worker fetches), `GEDOUR_WORKER_POLL` and
+`GEDOUR_WORKER_CONCURRENCY` (worker), `GEDOUR_TELEGRAM_API_URL`, `GEDOUR_SMTP_TLS` and `GEDOUR_SMTP_PLAIN_NETS`
+(both). Telegram bot tokens belong to channels, in the database. Never set `GEDOUR_DEV_USER` in a cluster.
+
+```yaml
+# kustomization.yaml of an overlay
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gedour
+resources:
+  - https://github.com/gedour/gedour//deploy/k8s/base?ref=v0.1.0
+components:
+  - https://github.com/gedour/gedour//deploy/k8s/components/networkpolicy?ref=v0.1.0
+images:
+  - name: ghcr.io/gedour/gedour
+    newTag: v0.1.0
+configMapGenerator:
+  - name: gedour
+    behavior: merge
+    literals:
+      - GEDOUR_PUBLIC_URL=https://gedour.example.com
+```
+
+- Image: `ghcr.io/gedour/gedour`. Releases push `vX.Y.Z`, `X.Y`, `X` and `latest` (pre-releases:
+  `alpha`, `beta`, `rc`); the base pins `v0.1.0` through `images:`. Pin a full version (or a digest) in
+  overlays, never a moving tag. A release tag fails before the build unless the base `newTag` and the
+  README's `?ref=` and `newTag:` pins equal it (`scripts/check-release-pin.sh`; pre-releases skip it).
+- Probes: startup and readiness on `/healthz` (web on `http`, worker on `metrics`: it has no main
+  listener), liveness on `metrics` `/livez`. At startup the process retries PostgreSQL with backoff
+  (0.5 s doubling to 10 s), then applies migrations and opens its listeners; the startup probe allows
+  5 minutes for that, so a pod started during a database outage becomes ready once PostgreSQL is back.
+  Later, `/healthz` fails while PostgreSQL is unreachable and readiness drops after 20 s; `/livez` does
+  not look at PostgreSQL, so an outage never restarts the pods.
+- Shutdown: `terminationGracePeriodSeconds: 30` covers `GEDOUR_SHUTDOWN_TIMEOUT` (15 s) and, on web, a
+  5 s `preStop` sleep that lets the ingress drop the endpoint first. The `sleep` action needs
+  Kubernetes 1.30 or later (the image has no shell). Raising the timeout means raising the grace period.
+- Scaling: any number of replicas of either role. Migrations run at startup under a PostgreSQL advisory
+  lock (other replicas wait), workers claim runs with `FOR UPDATE SKIP LOCKED`, sessions and the inbox
+  fan-out live in PostgreSQL, so no sticky sessions. Dry-run and preview rate limits are per replica.
+  Pods spread across nodes when they can (`topologySpreadConstraints`, `ScheduleAnyway`).
+- Security: UID/GID 65532, `runAsNonRoot`, read-only root filesystem, no capabilities, no privilege
+  escalation, `RuntimeDefault` seccomp, no service account token. The script sandbox runs under all of it.
+- Memory: sandbox children live in the pod and count against its limit. A child dies past 192 MiB of
+  heap (about 210 MiB resident). Worker: up to 4 children plus the parent (about 20 MiB busy),
+  request 320 MiB, limit 1 GiB. Web: up to 2 interactive children, request 256 MiB, limit 640 MiB. `GEDOUR_WORKER_CONCURRENCY` does not add
+  children: deliveries run 4 scripts per process at most. No CPU limit; a child caps its own CPU time.
+
+### Ingress
+
+Not in the base. `/api/v1/inbox/stream` is a server-sent events stream that stays open and sends a comment
+every 25 s, with `X-Accel-Buffering: no`: the proxy's read/idle timeout must exceed 25 s (60 s or more)
+and it must not buffer responses on that path.
+
+```yaml
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: gedour
+#   annotations:
+#     # ingress-nginx; other controllers have their own timeout settings.
+#     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+#     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+# spec:
+#   ingressClassName: nginx
+#   tls:
+#     - hosts: [gedour.example.com]
+#       secretName: gedour-tls
+#   rules:
+#     - host: gedour.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: gedour
+#                 port:
+#                   name: http
+```
+
+### Network policy
+
+`deploy/k8s/components/networkpolicy` is an optional component. Ingress: port 8080 from anywhere (the
+ingress controller usually runs in another namespace), 9090 from the same namespace. Egress to any
+address: DNS, 5432, 443, and SMTP on 587, 465 and 25. Add rules in an overlay when Prometheus scrapes
+from another namespace, or a webhook, script fetch or watch target listens elsewhere than 443.
+
+### Smoke test
+
+`make k8s-smoke` builds the image, creates a kind cluster (`gedour-smoke`), deploys `deploy/k8s/test` (the
+base plus a throwaway PostgreSQL, the fake upstream, dev mode and the network policy; test only), and
+checks: gedour waits for PostgreSQL, started only afterwards, then 2 web and 2 worker pods are ready
+without restarts, `/healthz` and `/livez` answer through both Services, a script dry run
+and a script over its memory cap (killed, pod alive), a watch run and script deliveries on the workers.
+Then it brings up `compose.yaml` under a fresh project and checks the dev-mode UI, `/api/v1/me` and
+`/metrics`. Cluster, compose project and the images the smoke built are removed at the end. Needs kind
+v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action; found in `PATH` or
+`KIND=<path>`, tested with v0.33.0), kubectl, Docker, Go, curl and jq. Ports:
+`K8S_SMOKE_PORT`, `K8S_SMOKE_FAKE_PORT`, `COMPOSE_SMOKE_PORT`, `COMPOSE_SMOKE_METRICS_PORT`,
+`COMPOSE_SMOKE_DB_PORT`.
+
 ## Endpoints
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
+- `GET /livez` (metrics port only): 200 while the process serves, whatever PostgreSQL does.
 - `GET /api/openapi.json`: OpenAPI document.
 - `GET /api/v1/version`: build information.
 - `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow.

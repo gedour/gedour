@@ -49,8 +49,8 @@ services:
       # Plain SMTP to the sink only: Docker's default address pools.
       GEDOUR_SMTP_PLAIN_NETS: 172.16.0.0/12,192.168.0.0/16
     ports:
-      - "127.0.0.1:8080:8080"
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:${GEDOUR_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${GEDOUR_METRICS_PORT:-9090}:9090"
 
   # `--profile oidc`: Keycloak with the test realm (alice/alice, bob/bob), and gedour on :8082 signing in through it.
   keycloak:

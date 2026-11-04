@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gedour
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gedour
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # The ingress controller usually lives in another namespace.
+    - ports:
+        - port: 8080
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 9090
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 5432
+    # SMTP: submission (587, STARTTLS), submissions (465, TLS) and relay (25).
+    - ports:
+        - port: 587
+        - port: 465
+        - port: 25
+    # Forges, registries, Telegram, webhooks and script fetches are on the internet over https.
+    - ports:
+        - port: 443

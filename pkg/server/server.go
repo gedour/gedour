@@ -177,10 +177,15 @@ func NewRegistry(build BuildInfo) *prometheus.Registry {
 }
 
 // Metrics returns the metrics-port handler; it carries /healthz too so worker-only pods have a probe.
+// /livez answers 200 while the process serves, whatever PostgreSQL does: a liveness probe on /healthz
+// would restart every pod during a database outage.
 func Metrics(log *zap.Logger, reg *prometheus.Registry, ping PingFunc) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))
 	mux.Handle("GET /healthz", Healthz(log, ping))
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
 	return mux
 }
 

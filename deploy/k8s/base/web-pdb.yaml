@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gedour-web
+  labels:
+    app.kubernetes.io/component: web
+spec:
+  minAvailable: 1
+  # A pod that is not Ready protects nothing: let a drain evict it.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web

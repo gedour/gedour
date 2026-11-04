@@ -19,7 +19,7 @@ LDFLAGS     := -s -w \
   -X 'main.ProjectURL=$(PROJECT_URL)'
 COVERAGE_MIN ?= 80
 
-.PHONY: build web go-build test coverage go-coverage web-coverage lint openapi e2e docker-build dev clean
+.PHONY: build web go-build test coverage go-coverage web-coverage lint openapi e2e docker-build k8s-smoke dev clean
 
 build: web go-build
 
@@ -73,6 +73,10 @@ docker-build:
 	  --build-arg PROJECT_URL="$(PROJECT_URL)" \
 	  --build-arg PKG="$(PKG)" \
 	  -t $(APP_NAME):local .
+
+# 001-AC28: kind cluster from deploy/k8s/test, then a clean compose project; both removed at the end.
+k8s-smoke: docker-build
+	scripts/k8s-smoke.sh
 
 dev:
 	docker compose up --build

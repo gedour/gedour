@@ -40,6 +40,10 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	}
 	defer pool.Close()
 
+	if !waitForDB(ctx, pool, log) {
+		// Stopped (SIGTERM) before the database answered: a clean stop, not a failure.
+		return nil
+	}
 	applied, err := db.Migrate(ctx, pool)
 	if err != nil {
 		return err
@@ -129,6 +133,38 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	// The worker drains within the same timeout; the pool closes only after it.
 	workers.Wait()
 	return err
+}
+
+// Retry delays while PostgreSQL is unreachable at startup.
+const (
+	dbRetryMin = 500 * time.Millisecond
+	dbRetryMax = 10 * time.Second
+)
+
+// waitForDB pings until PostgreSQL answers, so a pod started during an outage recovers by itself;
+// the orchestrator's startup probe bounds the wait. It reports false when ctx ended first.
+func waitForDB(ctx context.Context, pool *pgxpool.Pool, log *zap.Logger) bool {
+	delay := dbRetryMin
+	for attempt := 1; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := pool.Ping(pingCtx)
+		cancel()
+		if err == nil {
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		log.Warn("db_unreachable", zap.Int("attempt", attempt), zap.Duration("retry_in", delay), zap.Error(err))
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+		delay = min(delay*2, dbRetryMax)
+	}
 }
 
 // newSender builds the channel sender; webhooks and Telegram go through the guard and follow no redirect.

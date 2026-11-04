@@ -74,6 +74,15 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+// /livez stays 200 with PostgreSQL down: liveness must not restart pods during a database outage.
+func TestLivez(t *testing.T) {
+	for name, ping := range map[string]PingFunc{"db up": pingOK, "db down": pingDown} {
+		if rec := get(t, Metrics(zap.NewNop(), NewRegistry(build), ping), "/livez"); rec.Code != http.StatusOK {
+			t.Errorf("%s: want 200, got %d", name, rec.Code)
+		}
+	}
+}
+
 // 001-AC27: the metrics listener exposes the baseline gedour metric family.
 func TestMetrics(t *testing.T) {
 	rec := get(t, Metrics(zap.NewNop(), NewRegistry(build), pingOK), "/metrics")

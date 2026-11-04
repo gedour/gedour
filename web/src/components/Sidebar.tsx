@@ -92,7 +92,8 @@ export function Sidebar({
                   <NavLink
                     to={path}
                     onClick={onNavigate}
-                    aria-label={iconOnly || count ? name : undefined}
+                    // Expanded, an sr-only text names it: an aria-label that omits the visible badge fails WCAG 2.5.3.
+                    aria-label={iconOnly ? name : undefined}
                     className={({ isActive }) =>
                       cn(
                         "relative flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-harbor-muted transition-colors hover:bg-harbor-hover hover:text-harbor-ink",
@@ -103,7 +104,12 @@ export function Sidebar({
                     }
                   >
                     <Icon className="size-[18px] shrink-0" aria-hidden />
-                    {!iconOnly && <span className="truncate">{label}</span>}
+                    {!iconOnly && (
+                      <span aria-hidden={count > 0} className="truncate">
+                        {label}
+                      </span>
+                    )}
+                    {count > 0 && !iconOnly && <span className="sr-only">{name}</span>}
                     {count > 0 && (
                       <span
                         aria-hidden

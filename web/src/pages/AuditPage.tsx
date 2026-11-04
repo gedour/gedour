@@ -192,7 +192,7 @@ function AuditTable({ items, loading }: { items: AuditItem[]; loading: boolean }
   const now = new Date();
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+    <div className="relative overflow-x-auto rounded-xl border border-line bg-surface">
       <table className="w-full min-w-[640px] text-left text-sm" aria-busy={loading}>
         <caption className="sr-only">Audit entries, newest first</caption>
         <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">

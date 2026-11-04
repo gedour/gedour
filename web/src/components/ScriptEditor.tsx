@@ -1,9 +1,10 @@
 import { autocompletion } from "@codemirror/autocomplete";
 import { javascript, javascriptLanguage } from "@codemirror/lang-javascript";
-import { syntaxHighlighting } from "@codemirror/language";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { setDiagnostics } from "@codemirror/lint";
 import { Compartment, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
@@ -11,6 +12,12 @@ import { useEffect, useRef } from "react";
 import { useTheme } from "@/hooks/theme";
 import type { FilterProblem } from "@/lib/filter";
 import { problemRange, scriptCompletions } from "@/lib/scripts";
+
+// One Dark's comment grey falls under 4.5:1 on the active line; the later spec wins for its tag.
+const darkHighlight = HighlightStyle.define([
+  ...oneDarkHighlightStyle.specs,
+  { tag: tags.comment, color: "var(--muted)", fontStyle: "italic" },
+]);
 
 // Colours come from the app's CSS variables, so both themes follow the palette; `dark` switches
 // CodeMirror's own defaults (cursor, selection) and the highlight style.
@@ -55,7 +62,7 @@ function themeFor(mode: "light" | "dark"): Extension {
       { dark },
     ),
     // Light keeps basicSetup's fallback highlight style.
-    dark ? syntaxHighlighting(oneDarkHighlightStyle) : [],
+    dark ? syntaxHighlighting(darkHighlight) : [],
   ];
 }
 

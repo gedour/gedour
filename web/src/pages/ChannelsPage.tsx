@@ -742,7 +742,7 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
     onError: (err) => toast(`Could not retry: ${problemText(err)}`, "error"),
   });
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+    <div className="relative overflow-x-auto rounded-xl border border-line bg-surface">
       <table className="w-full min-w-[760px] text-left text-sm" aria-busy={loading}>
         <caption className="sr-only">Deliveries</caption>
         <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">

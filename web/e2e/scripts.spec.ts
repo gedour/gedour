@@ -1,11 +1,10 @@
-import { expect, test } from "./fixtures";
+import { expect, test, UPSTREAM } from "./fixtures";
 
-// The dry run's fetch targets the fake upstream's webhook receiver: it must see nothing.
-const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
 // 001-AC18: a script typed into CodeMirror is highlighted, saved, refused with its position when it
 // does not parse, and run on a sample event: logs, result and recorded fetches show, nothing is sent.
+// The dry run's fetch targets the fake upstream's webhook receiver: it must see nothing.
 test("alice writes a script and dry-runs it on a sample event", async ({ page }) => {
   const t = tag();
   await page.goto("/scripts");

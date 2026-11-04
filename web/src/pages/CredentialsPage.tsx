@@ -74,7 +74,7 @@ function CredentialTable({ items, loading }: { items: Credential[]; loading: boo
   const [rotating, setRotating] = useState<Credential | null>(null);
   const [deleting, setDeleting] = useState<Credential | null>(null);
   return (
-    <div className="overflow-x-auto rounded-xl border border-line bg-surface">
+    <div className="relative overflow-x-auto rounded-xl border border-line bg-surface">
       <table className="w-full min-w-[640px] text-left text-sm" aria-busy={loading}>
         <caption className="sr-only">Credentials</caption>
         <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">

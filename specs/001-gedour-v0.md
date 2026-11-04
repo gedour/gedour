@@ -209,15 +209,13 @@ Ops and quality
 
 ### Phase 7 — Kubernetes and hardening
 - Work: Kustomize manifests (web + worker Deployments, Service, PDB, probes, secrets refs), a11y pass,
-  mobile drawer, keyboard pass. Lab deployment on `lab-cluster`: ArgoCD app in the `gitops-repo`
-  app-of-apps, database as a `shared-pg` CNPG tenant, secrets through External Secrets
-  (`lab-secret-store`), private ingress `https://gedour.lab.example` (class `private-ingress`,
-  LAN only), OIDC client in the lab Keycloak (`idp.lab.example`, realm `lab`), created by babs from the callback
-  URL `https://gedour.lab.example/auth/callback`; the deploy waits on its client secret.
+  mobile drawer, keyboard pass. First deployment on a private lab cluster through GitOps (the
+  environment-specific overlay lives outside this repo), behind a LAN-only ingress, with an OIDC
+  client created by the operator from the callback URL.
 - **Covers**: AC26, AC28
 - **Data model impact**: none.
-- **DoD**: Argo app `gedour` Synced/Healthy with 2+2 replicas; login through `idp.lab.example` works on
-  `https://gedour.lab.example`; axe-core Playwright job green; 375 px Playwright run green.
+- **DoD**: the lab GitOps app is Synced/Healthy with 2+2 replicas; OIDC login works on the lab URL;
+  axe-core Playwright job green; 375 px Playwright run green.
 
 ## Data model impact (summary)
 
@@ -245,5 +243,5 @@ None.
   Keycloak proves the real flow, the stub keeps `go test` free of a 30 s container start.
 - Images on GHCR `ghcr.io/gedour/gedour`, multi-arch, cosign keyless — per the GitHub Actions
   standard.
-- Lab Keycloak realm `lab`; babs creates the client and its secret.
+- The lab IdP client and its secret are created by the operator.
 - Not-shared resources return 404 — avoids leaking which watch IDs exist.

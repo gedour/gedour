@@ -1,20 +1,10 @@
 import type { Browser, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { ALICE, expect, test, watchCsp } from "./fixtures";
-
-// Watches target the fake upstream: e2e never polls the real forges (scripts/e2e.sh checks the log).
-const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
+import { ALICE, api, expect, test, UPSTREAM, watchCsp } from "./fixtures";
 
 // Each run gets its own names: specs run in parallel against one database.
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
-
-/** Calls the API as the page's user, with the session's CSRF token. */
-async function api(page: Page) {
-  const { csrf_token } = await (await page.request.get("/api/v1/me")).json();
-  return (method: string, path: string, data?: unknown) =>
-    page.request.fetch(path, { method, data, headers: { "X-CSRF-Token": csrf_token } });
-}
 
 async function createWatch(page: Page, name: string) {
   const call = await api(page);

@@ -46,14 +46,18 @@ export function UserMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="harbor" className="gap-2 px-1.5 sm:pr-3" aria-label={`Account: ${name}`}>
+        <Button variant="harbor" className="gap-2 px-1.5 sm:pr-3">
           <span
             aria-hidden
             className="grid size-7 place-items-center rounded-full bg-harbor-beacon text-xs font-semibold text-harbor"
           >
             {initials(name)}
           </span>
-          <span className="hidden max-w-40 truncate sm:inline">{name}</span>
+          {/* No aria-label (WCAG 2.5.3); one text node, as jsdom trims spaces at element edges. */}
+          <span className="sr-only">{`Account: ${name}`}</span>
+          <span aria-hidden className="hidden max-w-40 truncate sm:inline">
+            {name}
+          </span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">

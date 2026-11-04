@@ -230,9 +230,8 @@ const maxErrorLen = 4 << 10
 
 // serve sends the run and answers the child until it is done; protocol names a broken exchange.
 func (s *session) serve(ctx context.Context, src string, in Input, stdout io.Reader) (final *message, protocol string) {
-	if err := s.write(message{T: "run", Source: src, Input: &in, TimeoutMS: s.r.o.Timeout.Milliseconds()}); err != nil {
-		return nil, ""
-	}
+	// A failed write (child already gone) still leaves its output to read: that names what went wrong.
+	_ = s.write(message{T: "run", Source: src, Input: &in, TimeoutMS: s.r.o.Timeout.Milliseconds()})
 	br := bufio.NewReaderSize(stdout, maxMessage)
 	total := 0
 	for {

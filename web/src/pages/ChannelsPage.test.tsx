@@ -139,7 +139,7 @@ describe("ChannelsPage", () => {
     expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
       name: "Phone",
       type: "telegram",
-      config: { chat_id: "-1001" },
+      config: { chat_id: "-1001", silent: false },
       secret: "123:abc",
     });
 
@@ -160,6 +160,122 @@ describe("ChannelsPage", () => {
         config: { to: ["a@x.test", "b@x.test", "c@x.test"] },
       }),
     );
+  });
+
+  // 003-AC3: the copy tells a refusal apart from a failure that retries; a dead delivery can be retried.
+  it("says a refused send is not retried but can be retried by hand", async () => {
+    mockApi({
+      "/api/v1/channels": { items: [channel({ type: "nextcloud_talk" })] },
+      "/api/v1/deliveries": {
+        items: [delivery(3, { status: "dead", last_error: "POST cloud.test: HTTP 401" })],
+      },
+    });
+    renderApp("/channels");
+    expect(
+      await screen.findByText(
+        "Failed sends are tried up to 5 times with growing delays. A refusal that cannot succeed is not retried, but you can retry it by hand.",
+      ),
+    ).toBeInTheDocument();
+    const table = await screen.findByRole("table", { name: "Deliveries" });
+    expect(table).toHaveTextContent("HTTP 401");
+    expect(within(table).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  // 003-AC1: the Talk fields, the setup commands and a write-only secret.
+  it("creates a Nextcloud Talk channel", async () => {
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(channel({ name: "Room", type: "nextcloud_talk" }), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByText("Nextcloud Talk"));
+    expect(dialog).toHaveTextContent("occ talk:bot:create -s <secret> gedour");
+    expect(dialog).toHaveTextContent(
+      "occ talk:bot:install --feature response <name> <secret> <url>",
+    );
+    expect(dialog).toHaveTextContent("occ talk:bot:setup <bot-id> <token>");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Room");
+    await userEvent.type(within(dialog).getByLabelText("Nextcloud URL"), "https://cloud.test/");
+    await userEvent.type(within(dialog).getByLabelText("Conversation token"), "abcd1234");
+    const secret = within(dialog).getByLabelText("Bot secret");
+    expect(secret).toHaveAttribute("type", "password");
+    await userEvent.type(secret, "s".repeat(40));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+      name: "Room",
+      type: "nextcloud_talk",
+      config: { url: "https://cloud.test/", conversation: "abcd1234", silent: false },
+      secret: "s".repeat(40),
+    });
+  });
+
+  // 003-AC1: editing keeps the secret unless a new one is typed; server field errors land on their field.
+  it("edits a Nextcloud Talk channel without showing its secret", async () => {
+    let refuse = true;
+    const talk = channel({
+      type: "nextcloud_talk",
+      config: { url: "https://cloud.test", conversation: "abcd1234", silent: true },
+    });
+    const fn = mockApi({
+      "/api/v1/channels": { items: [talk] },
+      "/api/v1/channels/c1": () =>
+        refuse
+          ? problem(400, "invalid channel", [
+              { location: "body.config.conversation", message: "the conversation token" },
+            ])
+          : Response.json(talk),
+    });
+    renderApp("/channels");
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Deploy bot" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("Bot secret")).toHaveValue("");
+    expect(within(dialog).getByLabelText("Bot secret")).toHaveAttribute("placeholder", "••••abcd");
+    expect(within(dialog).getByRole("switch", { name: "Silent" })).toBeChecked();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save channel" }));
+    expect(await within(dialog).findAllByText(/the conversation token/)).toHaveLength(1);
+    refuse = false;
+    await userEvent.click(within(dialog).getByRole("switch", { name: "Silent" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
+      name: "Deploy bot",
+      config: { url: "https://cloud.test", conversation: "abcd1234", silent: false },
+    });
+  });
+
+  // 003-AC5: the switch is on the Telegram and Talk forms only, named and operable from the keyboard.
+  it("shows Silent on Telegram and Nextcloud Talk only", async () => {
+    mockApi();
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    const silent = () => within(dialog).queryByRole("switch", { name: "Silent" });
+    for (const kind of ["Email", "Webhook", "Script"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(silent()).not.toBeInTheDocument();
+    }
+    for (const [kind, hint] of [
+      ["Telegram", "Notifies without sound."],
+      ["Nextcloud Talk", "Posts without a notification."],
+    ] as const) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(silent()).toHaveAccessibleDescription(hint);
+      expect(silent()).not.toBeChecked();
+    }
+    (silent() as HTMLElement).focus();
+    await userEvent.keyboard(" ");
+    expect(silent()).toBeChecked();
+    await userEvent.keyboard("{Enter}");
+    expect(silent()).not.toBeChecked();
   });
 
   // Email without an SMTP server: the type is disabled with the server's hint.

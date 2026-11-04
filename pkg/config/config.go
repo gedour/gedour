@@ -48,7 +48,7 @@ type Config struct {
 
 	// EncryptionKey is base64 of the 32-byte AES key sealing credential secrets.
 	EncryptionKey string
-	// AllowHTTPHosts are hosts a watch URL may reach over plain http (tests, lab mirrors).
+	// AllowHTTPHosts are hosts outbound requests may reach over plain http (watches, webhooks, Nextcloud Talk, script fetches).
 	AllowHTTPHosts []string
 	// AllowPrivateNets are CIDRs outbound requests may reach despite the SSRF guard.
 	AllowPrivateNets []string

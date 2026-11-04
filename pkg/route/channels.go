@@ -61,9 +61,9 @@ const TestInterval = 10 * time.Second
 type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
-	Type               string         `json:"type" enum:"telegram,email,webhook,script"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id; email: to; webhook: url; script: script_id"`
-	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, signing key); empty for short ones or none"`
+	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id"`
+	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 	LastDeliveryStatus *string        `json:"last_delivery_status" enum:"pending,sent,failed,dead" nullable:"true" doc:"Status of the newest delivery"`
@@ -92,9 +92,9 @@ type listChannelsOutput struct {
 type createChannelInput struct {
 	Body struct {
 		Name   string         `json:"name" minLength:"1" maxLength:"200"`
-		Type   string         `json:"type" enum:"telegram,email,webhook,script"`
+		Type   string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
 		Config map[string]any `json:"config"`
-		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none"`
+		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none"`
 	}
 }
 
@@ -115,7 +115,7 @@ type channelTypesOutput struct {
 
 // ChannelType tells the UI which channel types this instance can send to.
 type ChannelType struct {
-	Type      string `json:"type" enum:"telegram,email,webhook,script"`
+	Type      string `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
 	Available bool   `json:"available"`
 	Hint      string `json:"hint,omitempty" doc:"Why it is unavailable"`
 }
@@ -226,6 +226,15 @@ var chatIDRe = regexp.MustCompile(`^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$
 // The token goes into the request path: only its documented alphabet may reach the URL.
 var botTokenRe = regexp.MustCompile(`^[0-9]{1,20}:[A-Za-z0-9_-]{20,200}$`)
 
+// The conversation goes into the request path; this is the token requirement of Talk's bot route.
+var talkTokenRe = regexp.MustCompile(`^[a-z0-9]{4,30}$`)
+
+// Talk refuses to install a bot whose secret is outside these bounds, counted in bytes.
+const (
+	minTalkSecret = 40
+	maxTalkSecret = 128
+)
+
 // validateConfig normalizes a channel config; it returns field errors, never a server error.
 func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any, []error) {
 	var norm any
@@ -238,6 +247,19 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 		}
 		if c.ChatID = strings.TrimSpace(c.ChatID); !chatIDRe.MatchString(c.ChatID) {
 			errs = append(errs, configError("chat_id", "a numeric chat id (e.g. -1001234567890) or @channelname", c.ChatID))
+		}
+		norm = c
+	case notify.TypeNextcloudTalk:
+		var c notify.NextcloudTalkConfig
+		if err := decodeConfig(raw, &c); err != nil {
+			return nil, []error{err}
+		}
+		c.URL = strings.TrimRight(strings.TrimSpace(c.URL), "/")
+		if msg := s.checkTalkURL(c.URL); msg != "" {
+			errs = append(errs, configError("url", msg, c.URL))
+		}
+		if c.Conversation = strings.TrimSpace(c.Conversation); !talkTokenRe.MatchString(c.Conversation) {
+			errs = append(errs, configError("conversation", "the conversation token: 4 to 30 lowercase letters or digits, the end of the conversation's link", c.Conversation))
 		}
 		norm = c
 	case notify.TypeEmail:
@@ -269,7 +291,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 			return nil, []error{err}
 		}
 		c.URL = strings.TrimSpace(c.URL)
-		if msg := s.checkWebhookURL(c.URL); msg != "" {
+		if msg := s.checkTargetURL(c.URL, "https://hooks.example.com/gedour"); msg != "" {
 			errs = append(errs, configError("url", msg, c.URL))
 		}
 		norm = c
@@ -294,12 +316,20 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	return out, errs
 }
 
-// checkWebhookURL refuses what can be refused on save; the dial-time guard is the real SSRF check.
-func (s *Service) checkWebhookURL(raw string) string {
+// checkTalkURL checks a Nextcloud base URL: the API path is appended to it, so it holds no query.
+func (s *Service) checkTalkURL(raw string) string {
+	if strings.ContainsAny(raw, "?#") {
+		return "the Nextcloud base URL, without a query or fragment"
+	}
+	return s.checkTargetURL(raw, "https://cloud.example.com")
+}
+
+// checkTargetURL refuses what can be refused on save; the dial-time guard is the real SSRF check.
+func (s *Service) checkTargetURL(raw, example string) string {
 	u, err := url.Parse(raw)
 	switch {
 	case raw == "" || err != nil || u.Host == "" || u.Opaque != "":
-		return "an absolute URL, e.g. https://hooks.example.com/gedour"
+		return "an absolute URL, e.g. " + example
 	case len(raw) > 2048:
 		return "at most 2048 characters"
 	case u.User != nil:
@@ -323,6 +353,14 @@ func checkSecret(typ, given string) (sec string, generated bool, errs []error) {
 	case notify.TypeTelegram:
 		if !botTokenRe.MatchString(given) {
 			return "", false, bad("a bot token from @BotFather, e.g. 123456789:AAE…")
+		}
+	case notify.TypeNextcloudTalk:
+		// Pasted whitespace would sign with a key Talk does not have: every delivery would answer 401.
+		if given != strings.TrimSpace(given) {
+			return "", false, bad("no spaces or line breaks around the secret")
+		}
+		if n := len(given); n < minTalkSecret || n > maxTalkSecret {
+			return "", false, bad("the bot's shared secret, 40 to 128 characters, as given to occ talk:bot:install")
 		}
 	case notify.TypeEmail:
 		if given != "" {

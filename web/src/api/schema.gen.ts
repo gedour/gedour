@@ -677,7 +677,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id; email: to; webhook: url; script: script_id */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id */
       config: {
         [key: string]: unknown;
       };
@@ -685,7 +685,7 @@ export interface components {
       created_at: string;
       /** Format: uuid */
       id: string;
-      /** @description Last 4 characters of the secret (bot token, signing key); empty for short ones or none */
+      /** @description Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none */
       last4: string;
       /** Format: date-time */
       last_delivery_at: string | null;
@@ -696,7 +696,7 @@ export interface components {
       last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
       name: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
       /** Format: date-time */
       updated_at: string;
     };
@@ -705,14 +705,14 @@ export interface components {
       id: string;
       name: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
     };
     ChannelType: {
       available: boolean;
       /** @description Why it is unavailable */
       hint?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
     };
     ChannelTypesOutputBody: {
       items: components["schemas"]["ChannelType"][] | null;
@@ -776,10 +776,10 @@ export interface components {
         [key: string]: unknown;
       };
       name: string;
-      /** @description Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none */
+      /** @description Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none */
       secret?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
     };
     CreateCredentialInputBody: {
       /** @enum {string} */
@@ -822,7 +822,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id; email: to; webhook: url; script: script_id */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id */
       config: {
         [key: string]: unknown;
       };
@@ -830,7 +830,7 @@ export interface components {
       created_at: string;
       /** Format: uuid */
       id: string;
-      /** @description Last 4 characters of the secret (bot token, signing key); empty for short ones or none */
+      /** @description Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none */
       last4: string;
       /** Format: date-time */
       last_delivery_at: string | null;
@@ -843,7 +843,7 @@ export interface components {
       /** @description Webhook only, generated when none was given: shown in this response only */
       signing_secret?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
       /** Format: date-time */
       updated_at: string;
     };

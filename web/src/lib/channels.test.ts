@@ -17,6 +17,14 @@ describe("channelTarget", () => {
       channelTarget({ type: "script", config: { script_id: "s1" } }, new Map([["s1", "Notify"]])),
     ).toBe("runs Notify");
     expect(channelKind("email").label).toBe("Email");
+    // 003-AC1
+    expect(
+      channelTarget({
+        type: "nextcloud_talk",
+        config: { url: "https://cloud.example.com/nc", conversation: "abcd1234" },
+      }),
+    ).toBe("conversation abcd1234 on cloud.example.com");
+    expect(channelKind("nextcloud_talk").label).toBe("Nextcloud Talk");
     expect(channelKind("script").label).toBe("Script");
     expect(channelKind("nope" as "email").label).toBe("Webhook");
   });

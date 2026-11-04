@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,19 +17,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Channel types.
 const (
-	TypeTelegram = "telegram"
-	TypeEmail    = "email"
-	TypeWebhook  = "webhook"
+	TypeTelegram      = "telegram"
+	TypeNextcloudTalk = "nextcloud_talk"
+	TypeEmail         = "email"
+	TypeWebhook       = "webhook"
 	// TypeScript channels run a script in the sandbox (pkg/script), never through Send.
 	TypeScript = "script"
 )
 
 // Types lists the channel types in display order.
-var Types = []string{TypeTelegram, TypeEmail, TypeWebhook, TypeScript}
+var Types = []string{TypeTelegram, TypeNextcloudTalk, TypeEmail, TypeWebhook, TypeScript}
 
 // Webhook headers.
 const (
@@ -37,17 +40,42 @@ const (
 	DeliveryHeader  = "X-Gedour-Delivery"
 )
 
-// SendTimeout bounds one HTTP delivery (webhook, Telegram).
+// Nextcloud Talk bot headers.
+const (
+	TalkRandomHeader    = "X-Nextcloud-Talk-Bot-Random"
+	TalkSignatureHeader = "X-Nextcloud-Talk-Bot-Signature"
+)
+
+// SendTimeout bounds one HTTP delivery (webhook, Telegram, Nextcloud Talk).
 const SendTimeout = 10 * time.Second
 
 const (
 	maxResponse    = 64 << 10
 	maxTelegramLen = 4096
+	// Talk refuses over 32000 characters (413); the margin leaves room for a lower server setting.
+	maxTalkLen = 31000
+	// The longest encoded URL kept: it leaves a cut title close to 1000 characters.
+	maxTalkLink = 30000
 )
+
+// ErrPermanent marks a refusal a retry cannot fix: the delivery is dead at once.
+var ErrPermanent = errors.New("permanent failure")
+
+type permanentError struct{ error }
+
+func (permanentError) Is(target error) bool { return target == ErrPermanent }
 
 // TelegramConfig is the non-secret config of a telegram channel; the bot token is its secret.
 type TelegramConfig struct {
 	ChatID string `json:"chat_id"`
+	Silent bool   `json:"silent"`
+}
+
+// NextcloudTalkConfig is the config of a Nextcloud Talk channel; the bot's shared secret is its secret.
+type NextcloudTalkConfig struct {
+	URL          string `json:"url"`
+	Conversation string `json:"conversation"`
+	Silent       bool   `json:"silent"`
 }
 
 // EmailConfig is the config of an email channel; the SMTP server is instance config.
@@ -94,6 +122,12 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 			return fmt.Errorf("telegram config: %w", err)
 		}
 		return s.telegram(ctx, c, ch.Secret, msg)
+	case TypeNextcloudTalk:
+		var c NextcloudTalkConfig
+		if err := json.Unmarshal(ch.Config, &c); err != nil {
+			return fmt.Errorf("nextcloud talk config: %w", err)
+		}
+		return s.talk(ctx, c, ch.Secret, d.ID, msg)
 	case TypeEmail:
 		var c EmailConfig
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
@@ -138,6 +172,14 @@ func (s *Sender) post(ctx context.Context, label, target string, body []byte, hd
 	return resp.StatusCode, head, nil
 }
 
+// postLabel names a destination by its host only: paths and queries stay out of errors.
+func postLabel(fallback, target string) string {
+	if u, err := url.Parse(target); err == nil {
+		return "POST " + u.Host
+	}
+	return fallback
+}
+
 func statusError(label string, code int, detail string) error {
 	msg := fmt.Sprintf("%s: HTTP %d", label, code)
 	if code >= 300 && code < 400 {
@@ -170,10 +212,7 @@ func (s *Sender) webhook(ctx context.Context, c WebhookConfig, key string, d Del
 	if err != nil {
 		return fmt.Errorf("webhook body: %w", err)
 	}
-	label := "webhook"
-	if u, err := url.Parse(c.URL); err == nil {
-		label = "POST " + u.Host
-	}
+	label := postLabel("webhook", c.URL)
 	hdr := http.Header{}
 	hdr.Set(SignatureHeader, Sign(key, body))
 	hdr.Set(EventHeader, d.Event.Type)
@@ -209,6 +248,7 @@ func TelegramText(msg Message) string {
 func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token string, msg Message) error {
 	body, err := json.Marshal(map[string]any{
 		"chat_id": c.ChatID, "text": TelegramText(msg), "parse_mode": "HTML", "disable_web_page_preview": true,
+		"disable_notification": c.Silent,
 	})
 	if err != nil {
 		return fmt.Errorf("telegram body: %w", err)
@@ -227,4 +267,94 @@ func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token string, m
 		return statusError(label, code, strings.ReplaceAll(answer.Description, token, "[redacted]"))
 	}
 	return nil
+}
+
+// Upstream text cannot add inline Markdown links, emphasis or code, nor mention anyone: Talk's mention
+// pattern refuses a backslash before the @. Block Markdown and bare URLs stay as they are.
+var talkEscaper = strings.NewReplacer(`\`, `\\`, `*`, `\*`, `_`, `\_`, "`", "\\`", `[`, `\[`, `]`, `\]`, `~`, `\~`, `<`, `\<`, `>`, `\>`, `@`, `\@`)
+
+// talkLink percent-encodes what could close the Markdown link, break its line or mention anyone.
+func talkLink(u string) string {
+	var b strings.Builder
+	for i := range len(u) {
+		c := u[i]
+		if c < 0x20 || c == 0x7f || strings.IndexByte(` ()<>\@`, c) >= 0 {
+			fmt.Fprintf(&b, "%%%02X", c)
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// talkTitle is the bold title in at most n characters of Markdown, never cut inside an escape sequence.
+func talkTitle(title string, n int) string {
+	var b strings.Builder
+	used := len("****")
+	for _, r := range title {
+		e := talkEscaper.Replace(string(r))
+		if used += utf8.RuneCountInString(e); used > n {
+			break
+		}
+		b.WriteString(e)
+	}
+	return "**" + b.String() + "**"
+}
+
+// TalkText is the Markdown text of msg. A URL over maxTalkLink is always left out. Over the cap the text
+// falls back to the title and link, cutting the title to keep the link: Talk never answers 413.
+func TalkText(msg Message) string {
+	title := "**" + talkEscaper.Replace(msg.Title) + "**"
+	var detail, link string
+	if msg.Detail != "" {
+		detail = "\n" + talkEscaper.Replace(msg.Detail)
+	}
+	if u := talkLink(msg.URL); u != "" && utf8.RuneCountInString(u) <= maxTalkLink {
+		link = "\n[Open upstream](" + u + ")"
+	}
+	if text := title + detail + link; utf8.RuneCountInString(text) <= maxTalkLen {
+		return text
+	}
+	if text := title + link; utf8.RuneCountInString(text) <= maxTalkLen {
+		return text
+	}
+	return talkTitle(msg.Title, maxTalkLen-utf8.RuneCountInString(link)) + link
+}
+
+// TalkSignature is hex(HMAC-SHA256(secret, random + message)): Talk checks it over the decoded message.
+func TalkSignature(secret, random, message string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(random + message))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Sender) talk(ctx context.Context, c NextcloudTalkConfig, secret string, deliveryID int64, msg Message) error {
+	text := TalkText(msg)
+	reference := sha256.Sum256([]byte(strconv.FormatInt(deliveryID, 10)))
+	body, err := json.Marshal(map[string]any{"message": text, "referenceId": hex.EncodeToString(reference[:]), "silent": c.Silent})
+	if err != nil {
+		return fmt.Errorf("nextcloud talk body: %w", err)
+	}
+	random := make([]byte, 32)
+	_, _ = rand.Read(random) // crypto/rand.Read never fails (Go 1.24+)
+	nonce := hex.EncodeToString(random)
+	hdr := http.Header{}
+	hdr.Set("OCS-APIRequest", "true")
+	hdr.Set("Accept", "application/json")
+	hdr.Set(TalkRandomHeader, nonce)
+	hdr.Set(TalkSignatureHeader, TalkSignature(secret, nonce, text))
+	target := strings.TrimRight(c.URL, "/") + "/ocs/v2.php/apps/spreed/api/v1/bot/" + url.PathEscape(c.Conversation) + "/message"
+	label := postLabel("nextcloud talk", c.URL)
+	code, _, err := s.post(ctx, label, target, body, hdr)
+	if err != nil {
+		return err
+	}
+	switch code {
+	case http.StatusCreated:
+		return nil // a proxy or SSO page can answer another 2xx: only Talk's 201 proves the post
+	// Not 400: gedour's request cannot fail Talk's validation, what is left is a caught server exception.
+	case http.StatusUnauthorized, http.StatusNotFound, http.StatusRequestEntityTooLarge:
+		return permanentError{statusError(label, code, "")}
+	}
+	return statusError(label, code, "")
 }

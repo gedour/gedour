@@ -116,6 +116,28 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(item).toHaveAttribute("data-unread", "false");
 });
 
+// 003-AC5: the Talk form's type radio and Silent switch work from the keyboard.
+test("the Silent switch by keyboard", async ({ page }) => {
+  await page.goto("/channels");
+  const open = page.getByRole("button", { name: "New channel" }).first();
+  await open.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  const webhook = dialog.getByRole("radio", { name: "Webhook" });
+  await tabTo(page, webhook);
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await expect(dialog.getByRole("radio", { name: "Nextcloud Talk" })).toBeChecked();
+  const silent = dialog.getByRole("switch", { name: "Silent" });
+  await tabTo(page, silent);
+  await page.keyboard.press("Space");
+  await expect(silent).toBeChecked();
+  await page.keyboard.press("Enter");
+  await expect(silent).not.toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});
+
 test.describe("without a session", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 

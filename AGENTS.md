@@ -26,13 +26,14 @@
   `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`, `E2E_UPSTREAM_PORT` (`cmd/fakeupstream`, `POST /_fixture/a|b` switches it),
   `E2E_SMTP_PORT`/`E2E_MAILPIT_PORT` (Mailpit). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
 - The fake upstream also serves Telegram (`/tg/bot<token>/sendMessage`) and webhook receivers
-  (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got.
+  (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got. Its Talk endpoint checks
+  the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
   runs before the parallel specs and leaves 3 events in bob's inbox; the a11y, 375 px and keyboard specs run
   as bob, and only the keyboard spec touches the rc promotion item.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
-  `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook targets).
+  `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook and Nextcloud Talk targets).
 - Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project signs alice and
   bob in from the gate (`signInFromGate`) and stores their sessions in `web/playwright/.auth/`.
 

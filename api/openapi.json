@@ -139,7 +139,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id; email: to; webhook: url; script: script_id",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id",
             "type": "object"
           },
           "created_at": {
@@ -151,7 +151,7 @@
             "type": "string"
           },
           "last4": {
-            "description": "Last 4 characters of the secret (bot token, signing key); empty for short ones or none",
+            "description": "Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none",
             "type": "string"
           },
           "last_delivery_at": {
@@ -180,6 +180,7 @@
           "type": {
             "enum": [
               "telegram",
+              "nextcloud_talk",
               "email",
               "webhook",
               "script"
@@ -217,6 +218,7 @@
           "type": {
             "enum": [
               "telegram",
+              "nextcloud_talk",
               "email",
               "webhook",
               "script"
@@ -244,6 +246,7 @@
           "type": {
             "enum": [
               "telegram",
+              "nextcloud_talk",
               "email",
               "webhook",
               "script"
@@ -364,13 +367,14 @@
             "type": "string"
           },
           "secret": {
-            "description": "Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none",
+            "description": "Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none",
             "maxLength": 512,
             "type": "string"
           },
           "type": {
             "enum": [
               "telegram",
+              "nextcloud_talk",
               "email",
               "webhook",
               "script"
@@ -524,7 +528,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id; email: to; webhook: url; script: script_id",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id",
             "type": "object"
           },
           "created_at": {
@@ -536,7 +540,7 @@
             "type": "string"
           },
           "last4": {
-            "description": "Last 4 characters of the secret (bot token, signing key); empty for short ones or none",
+            "description": "Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none",
             "type": "string"
           },
           "last_delivery_at": {
@@ -569,6 +573,7 @@
           "type": {
             "enum": [
               "telegram",
+              "nextcloud_talk",
               "email",
               "webhook",
               "script"

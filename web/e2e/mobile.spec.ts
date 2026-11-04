@@ -59,6 +59,22 @@ test("main views fit 375 px", async ({ page }) => {
   await expectNoHorizontalScroll(page);
 });
 
+// 003-AC5: the Talk form, with its long setup commands, fits 375 px and Silent is reachable by touch.
+test("the Nextcloud Talk form fits 375 px", async ({ page }) => {
+  await page.goto("/channels");
+  await page.getByRole("button", { name: "New channel" }).first().tap();
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  await dialog.getByText("Nextcloud Talk", { exact: true }).tap();
+  const silent = dialog.getByRole("switch", { name: "Silent" });
+  await silent.scrollIntoViewIfNeeded();
+  await silent.tap();
+  await expect(silent).toBeChecked();
+  const width = await dialog.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(width.scroll).toBeLessThanOrEqual(width.client);
+  await expectNoHorizontalScroll(page);
+  await shot(page, "talk-form");
+});
+
 test.describe("without a session", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -120,7 +136,26 @@ test("drawer, create watch and inbox dialog at 375 px", async ({ page }) => {
 // 001-AC26: the rule form and the script editor are usable at 375 px.
 test("rule form and script editor at 375 px", async ({ page }) => {
   const t = tag();
+  await page.goto("/channels");
+  // 003-AC5: a long unbroken name beside a long target keeps the form within 375 px.
+  const created = await (
+    await api(page)
+  )("POST", "/api/v1/channels", {
+    name: `Long${t}${"n".repeat(150)}`,
+    type: "nextcloud_talk",
+    config: {
+      url: `https://${"h".repeat(60)}.example.com`,
+      conversation: `a${"0".repeat(29)}`,
+    },
+    secret: "s".repeat(40),
+  });
+  expect(created.status()).toBe(201);
+  await page.reload();
+  await expect(page.getByRole("list", { name: "Channels" })).toContainText(`Long${t}`);
+  await expectNoHorizontalScroll(page);
   await page.goto("/rules/new");
+  await expect(page.getByRole("checkbox", { name: new RegExp(`Long${t}`) })).toBeVisible();
+  await expectNoHorizontalScroll(page);
   await page.getByLabel("Name").fill(`Mobile rule ${t}`);
   await page.getByLabel("Watches").selectOption({ label: SEED.watch });
   await page.getByLabel("Expression").fill('event.type == "release.published"');

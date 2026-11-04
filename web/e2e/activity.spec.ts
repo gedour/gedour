@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { api, expect, setFixture, test, UPSTREAM } from "./fixtures";
+import { api, expect, setFixture, TALK_SECRET, test, UPSTREAM } from "./fixtures";
 
 // Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
 test.describe.configure({ mode: "serial" });
@@ -331,4 +331,119 @@ test("a script channel runs its script on a routed event", async ({ page }) => {
   await row.getByText("Logs · 2 lines").click();
   await expect(row).toContainText("forwarding v2.105.0 published");
   await expect(row).toContainText("receiver 200");
+});
+
+// 003-AC2, 003-AC3: routed events reach Talk in a request the fake's signature check accepts; a wrong
+// secret (401) and a missing room (404) end at once with the reason; a 429 stays scheduled for retry.
+test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
+  const t = tag();
+  await setFixture(page, "a");
+  await page.goto("/channels");
+  const call = await api(page);
+  const res = await call("POST", "/api/v1/watches", {
+    name: `Talk CLI ${t}`,
+    kind: "github_release",
+    schedule: "1h",
+    config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+  });
+  expect(res.status()).toBe(201);
+  const watch = (await res.json()) as { id: string; name: string };
+  await expect
+    .poll(
+      async () => (await (await call("GET", `/api/v1/watches/${watch.id}`)).json()).last_status,
+      { timeout: 15_000 },
+    )
+    .toBe("ok");
+
+  const channels: Record<string, string> = {};
+  for (const [name, conversation, secret, silent] of [
+    ["ok", `room${t}`, TALK_SECRET, true],
+    ["badsecret", `wrong${t}`, "x".repeat(40), false],
+    ["gone", `force404${t}`, TALK_SECRET, false],
+    ["busy", `force429${t}`, TALK_SECRET, false],
+  ] as const) {
+    const created = await call("POST", "/api/v1/channels", {
+      name: `Talk ${name} ${t}`,
+      type: "nextcloud_talk",
+      config: { url: `${UPSTREAM}/`, conversation, silent },
+      secret,
+    });
+    expect(created.status()).toBe(201);
+    channels[name] = (await created.json()).id;
+  }
+  const rule = await call("POST", "/api/v1/rules", {
+    name: `Talk ${t}`,
+    watch_id: watch.id,
+    filter: 'event.type == "release.published"',
+    channel_ids: Object.values(channels),
+  });
+  expect(rule.status()).toBe(201);
+
+  await setFixture(page, "b");
+  expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
+  let got: Received[] = [];
+  await expect
+    .poll(
+      async () => {
+        const all = (await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[];
+        got = all.filter((r) => r.endpoint === `talk-room${t}`);
+        return got.length;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(2);
+  const bodies = got.map(
+    (r) => JSON.parse(r.body) as { message: string; referenceId: string; silent: boolean },
+  );
+  expect(bodies.map((b) => b.message.split("\n")[0]).sort()).toEqual([
+    `**${watch.name}: v2.103.3 published**`,
+    `**${watch.name}: v2.105.0 published**`,
+  ]);
+  expect(new Set(bodies.map((b) => b.referenceId)).size).toBe(2);
+  got.forEach((r, i) => {
+    const body = bodies[i];
+    const random = r.header["X-Nextcloud-Talk-Bot-Random"] ?? "";
+    expect(random).toMatch(/^[0-9a-f]{64}$/);
+    expect(body?.referenceId).toMatch(/^[0-9a-f]{64}$/);
+    expect(body?.silent).toBe(true);
+    expect(r.header["X-Nextcloud-Talk-Bot-Signature"]).toBe(
+      createHmac("sha256", TALK_SECRET)
+        .update(random + body?.message)
+        .digest("hex"),
+    );
+  });
+
+  const deliveries = async (name: string) =>
+    (await (await call("GET", `/api/v1/deliveries?channel_id=${channels[name]}`)).json()).items as {
+      status: string;
+      attempts: number;
+      last_error: string | null;
+    }[];
+  for (const [name, status, reason] of [
+    ["ok", "sent", null],
+    ["badsecret", "dead", "HTTP 401"],
+    ["gone", "dead", "HTTP 404"],
+    ["busy", "failed", "HTTP 429"],
+  ] as const) {
+    await expect
+      .poll(async () => (await deliveries(name)).map((d) => d.status), { timeout: 20_000 })
+      .toEqual([status, status]);
+    for (const d of await deliveries(name)) {
+      expect(d.attempts).toBe(1);
+      if (reason) expect(d.last_error).toContain(reason);
+    }
+  }
+
+  // 003-AC3: the UI shows the permanent failure with its reason, no retry scheduled.
+  await page.goto("/channels");
+  await page.getByLabel("Channel", { exact: true }).selectOption({ label: `Talk badsecret ${t}` });
+  const row = page
+    .getByRole("table", { name: "Deliveries" })
+    .getByRole("row")
+    .filter({ hasText: "v2.105.0 published" });
+  await expect(row).toContainText("Failed");
+  await expect(row).toContainText("1 / 5");
+  await expect(row).toContainText("HTTP 401");
+  await expect(row).not.toContainText("Retrying");
+  await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
 });

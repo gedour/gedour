@@ -51,8 +51,8 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
 | `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
-| `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`) may reach over plain http; others need https |
-| `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry |
+| `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`), a webhook, a Nextcloud Talk URL or a script fetch may reach over plain http; others need https |
+| `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry or a Nextcloud on a private network; also opens webhook targets |
 | `GEDOUR_WORKER_POLL` | `2s` | How often an idle worker looks for due watches |
 | `GEDOUR_WORKER_CONCURRENCY` | `8` | Runs (and deliveries) one worker process executes at once |
 | `GEDOUR_TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram Bot API base URL |
@@ -139,8 +139,10 @@ a failed dev sign-in answers a plain 500.
   sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
   redirects are not followed; 10 s timeout. Same SSRF guard as collectors; a literal private IP is refused
   on save. A signing secret left empty is generated and returned once, in the create response.
-- Telegram: `sendMessage` in HTML mode with the bot token as secret. Email: multipart text + HTML through
+- Telegram: `sendMessage` in HTML mode with the bot token as secret; a Silent channel sends
+  `disable_notification: true`, which notifies without sound. Email: multipart text + HTML through
   the instance's SMTP server, at most 10 recipients per channel.
+- Nextcloud Talk: see [below](#nextcloud-talk-channels).
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing
@@ -148,6 +150,44 @@ a failed dev sign-in answers a plain 500.
 - Metrics: `gedour_events_routed_total`, `gedour_rule_eval_errors_total`,
   `gedour_deliveries_total{channel_type,status}`, `gedour_delivery_duration_seconds{channel_type}`,
   `gedour_sse_subscribers`.
+
+## Nextcloud Talk channels
+
+A Talk channel posts each delivery into a conversation as a bot. No Nextcloud user account is involved.
+
+1. Pick a shared secret of 40 to 128 characters, e.g. `openssl rand -hex 32`.
+2. On the Nextcloud server, create the bot. Talk 22.0.1 and later has a command for a
+   bot with the `response` feature only and no URL:
+   ```sh
+   occ talk:bot:create -s <secret> gedour
+   ```
+   On older servers, install it instead. This form requires a URL that no other bot uses, and Talk POSTs
+   a Join or Leave notice to it when the bot is enabled or disabled in a conversation. gedour has no
+   receiver for it and needs none: a failed notice only raises the bot's error count in Talk. Use an https
+   URL on a host you control, e.g. gedour's own:
+   ```sh
+   occ talk:bot:install --feature response gedour <secret> https://gedour.example.com/talk
+   ```
+3. Enable it in the conversation. `occ talk:bot:list` gives `<bot-id>`, the end of the conversation's
+   link (`/call/<token>`) gives `<token>`:
+   ```sh
+   occ talk:bot:setup <bot-id> <token>
+   ```
+4. In gedour, create a Nextcloud Talk channel with the Nextcloud URL, the conversation token and the
+   secret, then press "Send test". Turn on Silent to post without a notification: Talk creates none for that
+   message.
+
+- Delivery: `POST {url}/ocs/v2.php/apps/spreed/api/v1/bot/{token}/message` with `OCS-APIRequest: true`,
+  `X-Nextcloud-Talk-Bot-Random` and `X-Nextcloud-Talk-Bot-Signature` (hex HMAC-SHA256 of the random value
+  followed by the message). Body: `message` (Markdown), `referenceId` (SHA-256 of the delivery id, the same
+  on a retry), `silent`. A message over 31000 characters is cut to its title and link; the title is shortened
+  when needed to keep the link, and a URL over 30000 characters once encoded is always left out.
+- Only a 201 is sent: a proxy or SSO page answering 200 is not a post. 401, 404 and 413 are final at once
+  (`dead`, shown as Failed) with the reason; fix the channel, then retry the delivery by hand. Anything else,
+  other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.
+- https is required, and http only for hosts in `GEDOUR_ALLOW_HTTP_HOSTS`. Same SSRF guard as webhooks: a
+  Nextcloud on a private network needs its range in `GEDOUR_ALLOW_PRIVATE_NETS`.
+- Upstream text cannot mention anyone: `@` is escaped in titles, details and links.
 
 ## Script channels
 
@@ -301,7 +341,7 @@ and it must not buffer responses on that path.
 `deploy/k8s/components/networkpolicy` is an optional component. Ingress: port 8080 from anywhere (the
 ingress controller usually runs in another namespace), 9090 from the same namespace. Egress to any
 address: DNS, 5432, 443, and SMTP on 587, 465 and 25. Add rules in an overlay when Prometheus scrapes
-from another namespace, or a webhook, script fetch or watch target listens elsewhere than 443.
+from another namespace, or a webhook, Nextcloud Talk server, script fetch or watch target listens elsewhere than 443.
 
 ### Smoke test
 

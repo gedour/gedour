@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
 import { api, expect, gate, SEED, test } from "./fixtures";
@@ -21,6 +21,28 @@ async function seedIds(page: Page) {
   const rule = rules.find((r) => r.name === SEED.rule)?.id;
   if (!watch || !rule) throw new Error("seed.setup.ts did not run");
   return { watch, rule };
+}
+
+const luminance = (rgb: number[]) => {
+  const [r = 0, g = 0, b = 0] = rgb.map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+/** WCAG contrast of the switch's track against the dialog behind it, and of its knob against the track. */
+async function switchContrast(silent: Locator) {
+  const colors = await silent.evaluate((el) => {
+    const knob = el.querySelector("span") as Element;
+    const dialog = el.closest("dialog") as Element;
+    return [el, knob, dialog].map((e) => getComputedStyle(e).backgroundColor);
+  });
+  const [track, knob, surface] = colors.map((c) =>
+    luminance((c.match(/[\d.]+/g) ?? []).map(Number)),
+  ) as [number, number, number];
+  const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  return Math.min(ratio(track, surface), ratio(knob, track));
 }
 
 /** Serious and critical axe violations on the page as it is now, one line per rule and node. */
@@ -78,8 +100,23 @@ for (const theme of ["light", "dark"] as const) {
 
       await page.goto("/channels");
       await page.getByRole("button", { name: "New channel" }).first().click();
-      await expect(page.getByRole("dialog", { name: "New channel" })).toBeVisible();
+      const dialog = page.getByRole("dialog", { name: "New channel" });
+      await expect(dialog).toBeVisible();
       expect(await violations(page)).toEqual([]);
+
+      // 003-AC5: the forms with the Silent switch, off and on.
+      for (const kind of ["Telegram", "Nextcloud Talk"]) {
+        await dialog.getByText(kind, { exact: true }).click();
+        const silent = dialog.getByRole("switch", { name: "Silent" });
+        expect(await violations(page)).toEqual([]);
+        // WCAG 1.4.11; the poll waits out the colour transition.
+        await expect.poll(() => switchContrast(silent)).toBeGreaterThanOrEqual(3);
+        await silent.click();
+        await expect(silent).toBeChecked();
+        expect(await violations(page)).toEqual([]);
+        await expect.poll(() => switchContrast(silent)).toBeGreaterThanOrEqual(3);
+        await silent.click();
+      }
     });
 
     test("the signed-out page has no serious axe violation", async ({ page }) => {

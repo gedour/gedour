@@ -1,9 +1,11 @@
 // Package testupstream is a fake GitHub, GitLab and OCI registry serving recorded fixtures, for the
 // collector tests and the e2e run. Fixture set "a" is the first observation, "b" the changed one.
-// For the e2e channels it also stands in for the Telegram Bot API and webhook receivers.
+// For the e2e channels it also stands in for the Telegram Bot API, a Nextcloud Talk server and webhook
+// receivers.
 package testupstream
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 //go:embed fixtures/*.json
@@ -67,7 +70,8 @@ type Server struct {
 
 // Received is one request a fake channel endpoint got.
 type Received struct {
-	// Endpoint is "telegram" or the webhook's name (POST /_hooks/{name}).
+	// Endpoint is "telegram", the webhook's name (POST /_hooks/{name}), "talk-<token>" for a Talk message
+	// accepted, "talk-<token>-rejected" for one refused.
 	Endpoint string            `json:"endpoint"`
 	Header   map[string]string `json:"header"`
 	Body     string            `json:"body"`
@@ -97,6 +101,7 @@ func New() *Server {
 		}
 		return "telegram"
 	}))
+	s.mux.HandleFunc("POST /ocs/v2.php/apps/spreed/api/v1/bot/{token}/message", s.talk)
 	// Names starting with "fail" answer 500, to drive retries.
 	s.mux.HandleFunc("POST /_hooks/{name}", s.receive(func(r *http.Request) string { return r.PathValue("name") }))
 	s.mux.HandleFunc("GET /_received", func(w http.ResponseWriter, _ *http.Request) {
@@ -115,22 +120,71 @@ func (s *Server) receive(endpoint func(*http.Request) string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		name := endpoint(r)
-		hdr := map[string]string{}
-		for k := range r.Header {
-			hdr[k] = r.Header.Get(k)
-		}
-		s.mu.Lock()
-		s.received = append(s.received, Received{Endpoint: name, Header: hdr, Body: string(body)})
-		if len(s.received) > maxReceived {
-			s.received = s.received[1:]
-		}
-		s.mu.Unlock()
+		s.record(name, r, body)
 		if strings.HasPrefix(name, "fail") {
 			http.Error(w, "receiver down", http.StatusInternalServerError)
 			return
 		}
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}
+}
+
+func (s *Server) record(name string, r *http.Request, body []byte) {
+	hdr := map[string]string{}
+	for k := range r.Header {
+		hdr[k] = r.Header.Get(k)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.received = append(s.received, Received{Endpoint: name, Header: hdr, Body: string(body)})
+	if len(s.received) > maxReceived {
+		s.received = s.received[1:]
+	}
+}
+
+// TalkSecret is the shared secret of the fake Talk bot; any other secret is answered 401.
+const TalkSecret = "fake-talk-bot-shared-secret-0123456789abcdef" //nolint:gosec // test fixture
+
+// talkStatus answers like Talk's BotController (nextcloud/spreed e224e2d, getBotFromHeaders): the
+// signature is an HMAC of the random header followed by the decoded message. Tokens starting with
+// force404 or force429 force that status.
+func talkStatus(r *http.Request, token string, body []byte) int {
+	switch {
+	case strings.HasPrefix(token, "force404"):
+		return http.StatusNotFound
+	case strings.HasPrefix(token, "force429"):
+		return http.StatusTooManyRequests
+	case r.Header.Get("OCS-APIRequest") != "true":
+		return http.StatusPreconditionFailed // Nextcloud's CSRF check
+	}
+	var msg struct {
+		Message string `json:"message"`
+	}
+	random, signature := r.Header.Get("X-Nextcloud-Talk-Bot-Random"), r.Header.Get("X-Nextcloud-Talk-Bot-Signature")
+	if json.Unmarshal(body, &msg) != nil || strings.TrimSpace(msg.Message) == "" || len(random) < 32 || signature == "" {
+		return http.StatusBadRequest
+	}
+	mac := hmac.New(sha256.New, []byte(TalkSecret))
+	mac.Write([]byte(random + msg.Message))
+	if !hmac.Equal([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(strings.ToLower(signature))) {
+		return http.StatusUnauthorized
+	}
+	if utf8.RuneCountInString(msg.Message) > 32000 {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusCreated
+}
+
+func (s *Server) talk(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	code := talkStatus(r, token, body)
+	name := "talk-" + token
+	if code != http.StatusCreated {
+		name += "-rejected"
+	}
+	s.record(name, r, body)
+	w.WriteHeader(code)
 }
 
 // Received lists what the fake channel endpoints got, oldest first.

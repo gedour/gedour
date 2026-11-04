@@ -28,6 +28,6 @@ spec:
         - port: 587
         - port: 465
         - port: 25
-    # Forges, registries, Telegram, webhooks and script fetches are on the internet over https.
+    # Forges, registries, Telegram, Nextcloud Talk, webhooks and script fetches are on the internet over https.
     - ports:
         - port: 443

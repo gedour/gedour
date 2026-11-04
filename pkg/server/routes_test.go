@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/hmac"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +48,144 @@ func (a *devApp) problemOf(t *testing.T, u apiUser, method, path string, body an
 
 const botToken = "123456789:AAEhBOweik6ad9r_QXMENQjcrGbqCr4K-ra"
 
+// 003-AC1: a Talk channel is validated on save, signs with a secret the API and audit log never show,
+// can be edited, tested and deleted. 003-AC5: silent only exists on Telegram and Talk configs.
+func TestTalkChannels(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	secret := strings.Repeat("s3cret-talk-", 4)
+	cfg := func(url, conv string) map[string]any { return map[string]any{"url": url, "conversation": conv} }
+	talk := func(c map[string]any, sec string) map[string]any {
+		return map[string]any{"name": "Room", "type": "nextcloud_talk", "config": c, "secret": sec}
+	}
+	for _, tt := range []struct {
+		body map[string]any
+		locs []string
+	}{
+		{talk(cfg("http://cloud.example", "abcd"), secret), []string{"body.config.url"}},
+		{talk(cfg("https://u:p@cloud.example", "abcd"), secret), []string{"body.config.url"}}, //nolint:gosec // the refused shape itself
+		{talk(cfg("/relative", "abcd"), secret), []string{"body.config.url"}},
+		{talk(cfg("https://cloud.example/?x=1", "abcd"), secret), []string{"body.config.url"}},
+		{talk(cfg("https://cloud.example/#f", "abcd"), secret), []string{"body.config.url"}},
+		{talk(cfg("https://10.9.2.3", "abcd"), secret), []string{"body.config.url"}},
+		{talk(cfg("https://cloud.example", "abc"), secret), []string{"body.config.conversation"}},
+		{talk(cfg("https://cloud.example", "../../users"), secret), []string{"body.config.conversation"}},
+		{talk(cfg("https://cloud.example", "ABCD"), secret), []string{"body.config.conversation"}},
+		{talk(cfg("https://cloud.example", strings.Repeat("a", 31)), secret), []string{"body.config.conversation"}},
+		{talk(cfg("https://cloud.example", "abcd"), ""), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), strings.Repeat("s", 39)), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), strings.Repeat("s", 129)), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), secret+" "), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), " "+secret), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), secret+"\n"), []string{"body.secret"}},
+		{talk(cfg("https://cloud.example", "abcd"), "\t"+secret), []string{"body.secret"}},
+		{talk(map[string]any{"url": "https://cloud.example", "conversation": "abcd", "silent": "yes"}, secret), []string{"body.config"}},
+		{talk(map[string]any{"url": "https://cloud.example", "conversation": "abcd", "extra": 1}, secret), []string{"body.config"}},
+		// 003-AC5: no silent field on the other types.
+		{map[string]any{"name": "w", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/x", "silent": true}}, []string{"body.config"}},
+	} {
+		p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", tt.body, http.StatusBadRequest)
+		if got := p.locations(); !slices.Equal(got, tt.locs) {
+			t.Errorf("%v: locations %v, want %v", tt.body, got, tt.locs)
+		}
+	}
+	// One field error, one message: the form places it once.
+	_, refused := a.call(t, alice, http.MethodPost, "/api/v1/channels", talk(cfg("https://cloud.example", "BAD"), secret))
+	if n := strings.Count(string(refused), "the conversation token"); n != 1 {
+		t.Fatalf("conversation error %d times: %s", n, refused)
+	}
+	for _, n := range []int{40, 128} {
+		var c channelJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": fmt.Sprintf("bounds %d", n), "type": "nextcloud_talk", "config": cfg("https://cloud.example", "abcd"), "secret": strings.Repeat("s", n)}, http.StatusCreated, &c)
+	}
+
+	var mu sync.Mutex
+	var random, sig string
+	var sent map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		random, sig = r.Header.Get(notify.TalkRandomHeader), r.Header.Get(notify.TalkSignatureHeader)
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	var ch channelJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", talk(map[string]any{"url": srv.URL + "/ ", "conversation": " abcd1234 ", "silent": true}, secret), http.StatusCreated, &ch)
+	if ch.Config["url"] != srv.URL || ch.Config["conversation"] != "abcd1234" || ch.Config["silent"] != true || ch.SigningSecret != "" {
+		t.Fatalf("normalized config: %+v", ch)
+	}
+
+	var res struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels/"+ch.ID+"/test", nil, http.StatusOK, &res)
+	mu.Lock()
+	if !res.OK || sent["silent"] != true || sig != notify.TalkSignature(secret, random, fmt.Sprint(sent["message"])) {
+		t.Fatalf("test send: %+v %v", res, sent)
+	}
+	mu.Unlock()
+
+	// A patch replaces the whole config: silent left out reads as false.
+	var upd channelJSON
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"name": "Room 2", "config": cfg(srv.URL, "efgh5678")}, http.StatusOK, &upd)
+	if upd.Name != "Room 2" || upd.Config["silent"] != false || upd.Config["conversation"] != "efgh5678" {
+		t.Fatalf("update: %+v", upd)
+	}
+	a.problemOf(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"secret": "short"}, http.StatusBadRequest)
+
+	// A patch without a secret keeps it: the next send still signs with the original.
+	a.exec(t, `ALTER TABLE audit_log DISABLE TRIGGER audit_log_append_only`)
+	a.exec(t, `UPDATE audit_log SET at = at - interval '1 minute' WHERE action = 'channel.tested'`)
+	a.exec(t, `ALTER TABLE audit_log ENABLE TRIGGER audit_log_append_only`)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels/"+ch.ID+"/test", nil, http.StatusOK, &res)
+	mu.Lock()
+	if !res.OK || sig != notify.TalkSignature(secret, random, fmt.Sprint(sent["message"])) {
+		t.Fatalf("send after a patch without secret: %+v", res)
+	}
+	mu.Unlock()
+
+	_, got := a.call(t, alice, http.MethodGet, "/api/v1/channels/"+ch.ID, nil)
+	_, list := a.call(t, alice, http.MethodGet, "/api/v1/channels", nil)
+	a.mustCall(t, alice, http.MethodDelete, "/api/v1/channels/"+ch.ID, nil, http.StatusNoContent, nil)
+	var auditText string
+	if err := a.pool.QueryRow(t.Context(), `SELECT string_agg(coalesce(before::text, '') || coalesce(after::text, ''), ' ') FROM audit_log WHERE target_type = 'channel'`).Scan(&auditText); err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]string{"get": string(got), "list": string(list), "audit": auditText} {
+		if strings.Contains(s, secret) {
+			t.Errorf("%s carries the secret: %s", name, s)
+		}
+	}
+	if !strings.Contains(auditText, "nextcloud_talk") || a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'channel.deleted' AND target_id = $1`, ch.ID) != 1 {
+		t.Fatalf("not audited: %s", auditText)
+	}
+}
+
+// 003-AC4: the silent flag of a Telegram channel; a config stored before it reads as false.
+func TestTelegramSilentConfig(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var tg channelJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Quiet", "type": "telegram", "config": map[string]any{"chat_id": "-1", "silent": true}, "secret": botToken}, http.StatusCreated, &tg)
+	if tg.Config["silent"] != true {
+		t.Fatalf("silent: %+v", tg.Config)
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Loud", "type": "telegram", "config": map[string]any{"chat_id": "-2"}, "secret": botToken}, http.StatusCreated, &tg)
+	if tg.Config["silent"] != false {
+		t.Fatalf("default: %+v", tg.Config)
+	}
+	a.exec(t, `UPDATE channels SET config = '{"chat_id":"-3"}' WHERE id = '`+tg.ID+`'`)
+	var old channelJSON
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/channels/"+tg.ID, nil, http.StatusOK, &old)
+	if v, set := old.Config["silent"]; set {
+		t.Fatalf("an existing channel must stay unchanged: %v", v)
+	}
+	a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Bad", "type": "telegram", "config": map[string]any{"chat_id": "-4", "silent": 1}, "secret": botToken}, http.StatusBadRequest)
+}
+
 // 001-AC15/001-AC16: channels per type, validated on save, secrets write-only, private to their owner.
 func TestChannels(t *testing.T) {
 	a := newDevApp(t)
@@ -60,7 +199,7 @@ func TestChannels(t *testing.T) {
 		} `json:"items"`
 	}
 	a.mustCall(t, alice, http.MethodGet, "/api/v1/channel-types", nil, http.StatusOK, &types)
-	if len(types.Items) != 4 || types.Items[3].Type != "script" || !types.Items[3].Available || types.Items[1].Type != "email" || types.Items[1].Available || !strings.Contains(types.Items[1].Hint, "GEDOUR_SMTP_ADDR") {
+	if len(types.Items) != 5 || types.Items[1].Type != "nextcloud_talk" || !types.Items[1].Available || types.Items[4].Type != "script" || !types.Items[4].Available || types.Items[2].Type != "email" || types.Items[2].Available || !strings.Contains(types.Items[2].Hint, "GEDOUR_SMTP_ADDR") {
 		t.Fatalf("channel types without SMTP: %+v", types)
 	}
 	p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "mail", "type": "email", "config": map[string]any{"to": []string{"a@x.test"}}}, http.StatusBadRequest)

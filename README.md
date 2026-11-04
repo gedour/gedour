@@ -227,10 +227,11 @@ configMapGenerator:
       - GEDOUR_PUBLIC_URL=https://gedour.example.com
 ```
 
-- Image: `ghcr.io/gedour/gedour`. Releases push `vX.Y.Z`, `X.Y`, `X` and `latest` (pre-releases:
-  `alpha`, `beta`, `rc`); the base pins `v0.1.0` through `images:`. Pin a full version (or a digest) in
-  overlays, never a moving tag. A release tag fails before the build unless the base `newTag` and the
-  README's `?ref=` and `newTag:` pins equal it (`scripts/check-release-pin.sh`; pre-releases skip it).
+- Image: `ghcr.io/gedour/gedour`. Releases push `vX.Y.Z`, `X.Y`, `X` and `latest` (pre-releases: the
+  tag itself plus `alpha`, `beta` or `rc`); every push to `develop` pushes `develop-<sha>-<run>`, the run
+  number ordering them for image automation. The base pins `v0.1.0` through `images:`. Pin a full
+  version (or a digest) in overlays, never a moving tag. A release tag fails before the build unless
+  the base `newTag` and the README's `?ref=` and `newTag:` pins equal it (`scripts/check-release-pin.sh`; pre-releases skip it).
 - Probes: startup and readiness on `/healthz` (web on `http`, worker on `metrics`: it has no main
   listener), liveness on `metrics` `/livez`. At startup the process retries PostgreSQL with backoff
   (0.5 s doubling to 10 s), then applies migrations and opens its listeners; the startup probe allows

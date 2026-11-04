@@ -1,9 +1,8 @@
 name: ci
 
+# develop pushes are gated by release.yml, which runs the same checks before publishing.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

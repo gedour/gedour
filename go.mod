@@ -7,6 +7,8 @@ ignore ./web/node_modules
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/danielgtaylor/huma/v2 v2.40.0
+	github.com/dlclark/regexp2/v2 v2.11.0
+	github.com/dop251/goja v0.0.0-20261103214539-f5d1d0025744
 	github.com/expr-lang/expr v1.17.8
 	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/google/uuid v1.6.0
@@ -41,6 +43,8 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
+	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect

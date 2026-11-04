@@ -12,7 +12,12 @@ describe("channelTarget", () => {
     );
     expect(channelTarget({ type: "webhook", config: { url: "not a url" } })).toBe("not a url");
     expect(channelTarget({ type: "webhook", config: {} })).toBe("");
+    expect(channelTarget({ type: "script", config: { script_id: "s1" } })).toBe("runs a script");
+    expect(
+      channelTarget({ type: "script", config: { script_id: "s1" } }, new Map([["s1", "Notify"]])),
+    ).toBe("runs Notify");
     expect(channelKind("email").label).toBe("Email");
+    expect(channelKind("script").label).toBe("Script");
     expect(channelKind("nope" as "email").label).toBe("Webhook");
   });
 });

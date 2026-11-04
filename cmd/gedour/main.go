@@ -16,6 +16,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/app"
 	"github.com/gedour/gedour/pkg/config"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/server"
 	"github.com/gedour/gedour/web"
 )
@@ -47,6 +48,8 @@ func newLogger(levelName, format string) (*zap.Logger, error) {
 }
 
 func main() {
+	// `gedour sandbox` is the script child: it must run before any config or logger touches the process.
+	script.MaybeSandbox()
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "gedour: %v\n", err)
 		os.Exit(1)

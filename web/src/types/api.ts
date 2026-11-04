@@ -112,3 +112,14 @@ export interface DeliveryFilters {
   status?: DeliveryStatus;
 }
 export type FilterReference = Schemas["Ref"];
+
+// Phase 6 resources.
+export type Script = Schemas["Script"];
+export type ScriptSummary = Schemas["ScriptSummary"];
+export type CreateScriptBody = Schemas["CreateScriptInputBody"];
+export type UpdateScriptBody = Schemas["UpdateScriptInputBody"];
+export type SampleEvent = Schemas["SampleEvent"];
+export type DryRun = Schemas["DryRun"];
+export type DryRunFetch = Schemas["Fetch"];
+/** The event of a dry run: a real one the caller can read, or a made-up sample. */
+export type DryRunEvent = { event_id: number } | { sample: SampleEvent };

@@ -6,7 +6,10 @@ import type {
   CreateChannelBody,
   CreatedChannel,
   CreateRuleBody,
+  CreateScriptBody,
   DeliveriesPage,
+  DryRun,
+  DryRunEvent,
   Delivery,
   DeliveryFilters,
   FilterReference,
@@ -15,7 +18,10 @@ import type {
   InboxState,
   PreviewItem,
   Rule,
+  Script,
+  ScriptSummary,
   UpdateChannelBody,
+  UpdateScriptBody,
   UpdateRuleBody,
   AuditFilters,
   AuditPage,
@@ -268,8 +274,12 @@ export const createChannel = (body: CreateChannelBody) =>
 export const updateChannel = (id: string, body: UpdateChannelBody) =>
   sendJSON<Channel>("PATCH", channelPath(id), body);
 export const deleteChannel = (id: string) => sendJSON<undefined>("DELETE", channelPath(id));
+/** Sends a test message; a script channel runs its script live and returns its logs. */
 export const testChannel = (id: string) =>
-  sendJSON<{ ok: boolean; error?: string }>("POST", `${channelPath(id)}/test`);
+  sendJSON<{ ok: boolean; error?: string; logs?: string[] | null }>(
+    "POST",
+    `${channelPath(id)}/test`,
+  );
 
 export function listDeliveries(filters: DeliveryFilters, cursor: string): Promise<DeliveriesPage> {
   const q = new URLSearchParams({ limit: "25" });
@@ -295,3 +305,20 @@ export async function previewRule(filter: string, watchId: string): Promise<Prev
   return (await sendJSON<{ items: PreviewItem[] }>("POST", "/api/v1/rules/preview", body)).items;
 }
 export const getFilterReference = () => getJSON<FilterReference>("/api/v1/filters/reference");
+
+const scriptPath = (id: string) => `/api/v1/scripts/${encodeURIComponent(id)}`;
+
+export async function listScripts(): Promise<ScriptSummary[]> {
+  return (await getJSON<{ items: ScriptSummary[] | null }>("/api/v1/scripts")).items ?? [];
+}
+export const getScript = (id: string) => getJSON<Script>(scriptPath(id));
+export const createScript = (body: CreateScriptBody) =>
+  sendJSON<Script>("POST", "/api/v1/scripts", body);
+export const updateScript = (id: string, body: UpdateScriptBody) =>
+  sendJSON<Script>("PATCH", scriptPath(id), body);
+export const deleteScript = (id: string) => sendJSON<undefined>("DELETE", scriptPath(id));
+/** Runs code in the sandbox without sending anything: a saved script by id, or unsaved source. */
+export const dryRunScript = (target: { id: string } | { source: string }, on: DryRunEvent) =>
+  "id" in target
+    ? sendJSON<DryRun>("POST", `${scriptPath(target.id)}/dry-run`, on)
+    : sendJSON<DryRun>("POST", "/api/v1/scripts/dry-run", { source: target.source, ...on });

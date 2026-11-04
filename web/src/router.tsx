@@ -11,6 +11,8 @@ import { NotFound } from "@/pages/NotFound";
 import { PlaceholderPage } from "@/pages/PlaceholderPage";
 import { RuleFormPage } from "@/pages/RuleFormPage";
 import { RulesPage } from "@/pages/RulesPage";
+import { ScriptFormRoute } from "@/pages/ScriptFormRoute";
+import { ScriptsPage } from "@/pages/ScriptsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { SignedOutPage } from "@/pages/SignedOutPage";
 import { WatchDetailPage } from "@/pages/WatchDetailPage";
@@ -21,6 +23,7 @@ const PAGES: Record<string, (item: NavItem) => ReactNode> = {
   "/inbox": (item) => <InboxPage item={item} />,
   "/channels": (item) => <ChannelsPage item={item} />,
   "/rules": (item) => <RulesPage item={item} />,
+  "/scripts": (item) => <ScriptsPage item={item} />,
   "/audit": (item) => <AuditPage item={item} />,
   "/watches": (item) => <WatchesPage item={item} />,
   "/settings": (item) => <SettingsPage item={item} />,
@@ -42,6 +45,8 @@ export const routes: RouteObject[] = [
       { path: "/watches/:id/edit", element: <WatchFormPage /> },
       { path: "/rules/new", element: <RuleFormPage /> },
       { path: "/rules/:id", element: <RuleFormPage /> },
+      { path: "/scripts/new", element: <ScriptFormRoute /> },
+      { path: "/scripts/:id", element: <ScriptFormRoute /> },
       { path: "/settings/credentials", element: <CredentialsPage /> },
       { path: "*", element: <NotFound /> },
     ],

@@ -31,3 +31,7 @@ HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) {
   this.removeAttribute("open");
   this.dispatchEvent(new Event("close"));
 };
+
+// jsdom has no layout; CodeMirror measures text ranges.
+Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+Range.prototype.getBoundingClientRect ??= () => new DOMRect();

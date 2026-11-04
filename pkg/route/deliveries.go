@@ -19,7 +19,7 @@ import (
 type ChannelRef struct {
 	ID   string `json:"id" format:"uuid"`
 	Name string `json:"name"`
-	Type string `json:"type" enum:"telegram,email,webhook"`
+	Type string `json:"type" enum:"telegram,email,webhook,script"`
 }
 
 // RuleRef names a rule inside another resource.
@@ -35,6 +35,7 @@ type Delivery struct {
 	Attempts      int         `json:"attempts"`
 	NextAttemptAt *time.Time  `json:"next_attempt_at" nullable:"true" doc:"Set while pending or failed"`
 	LastError     *string     `json:"last_error" nullable:"true"`
+	Logs          *string     `json:"logs" nullable:"true" doc:"Script channels: the log lines of the last run"`
 	SentAt        *time.Time  `json:"sent_at" nullable:"true"`
 	CreatedAt     time.Time   `json:"created_at"`
 	Channel       ChannelRef  `json:"channel"`
@@ -67,7 +68,7 @@ type deliveryPath struct {
 
 // deliverySelect lists the owner's deliveries of events on watches they can still read.
 var deliverySelect = `SELECT d.id, d.status, d.attempts, CASE WHEN d.status IN ('pending', 'failed') THEN d.next_attempt_at END,
-		d.last_error, d.sent_at, d.created_at, c.id::text, c.name, c.type, r.id::text, r.name,
+		d.last_error, d.logs, d.sent_at, d.created_at, c.id::text, c.name, c.type, r.id::text, r.name,
 		e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind
 	FROM deliveries d JOIN channels c ON c.id = d.channel_id
 	JOIN events e ON e.id = d.event_id JOIN watches w ON w.id = e.watch_id
@@ -79,7 +80,7 @@ func scanDeliveries(rows pgx.Rows) ([]Delivery, error) {
 		var d Delivery
 		var ruleID, ruleName *string
 		e := &d.Event
-		err := r.Scan(&d.ID, &d.Status, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.SentAt, &d.CreatedAt,
+		err := r.Scan(&d.ID, &d.Status, &d.Attempts, &d.NextAttemptAt, &d.LastError, &d.Logs, &d.SentAt, &d.CreatedAt,
 			&d.Channel.ID, &d.Channel.Name, &d.Channel.Type, &ruleID, &ruleName,
 			&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &d.Watch.ID, &d.Watch.Name, &d.Watch.Kind)
 		if ruleID != nil {

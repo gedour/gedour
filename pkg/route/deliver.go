@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/watch"
 )
@@ -43,16 +44,17 @@ type Deliverer struct {
 	log         *zap.Logger
 	box         *secret.Box
 	sender      *notify.Sender
+	runner      *script.Runner
 	metrics     *Metrics
 	poll        time.Duration
 	concurrency int
 	drain       time.Duration
 }
 
-// NewDeliverer builds a delivery loop sending up to concurrency deliveries at once; on stop, sends in
-// flight get drain to finish before they are cancelled.
-func NewDeliverer(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, m *Metrics, poll time.Duration, concurrency int, drain time.Duration) *Deliverer {
-	return &Deliverer{pool: pool, log: log, box: box, sender: sender, metrics: m, poll: poll, concurrency: max(concurrency, 1), drain: drain}
+// NewDeliverer builds a delivery loop sending up to concurrency deliveries at once (runner runs the
+// script channels); on stop, sends in flight get drain to finish before they are cancelled.
+func NewDeliverer(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, m *Metrics, poll time.Duration, concurrency int, drain time.Duration) *Deliverer {
+	return &Deliverer{pool: pool, log: log, box: box, sender: sender, runner: runner, metrics: m, poll: poll, concurrency: max(concurrency, 1), drain: drain}
 }
 
 type claimed struct {
@@ -188,8 +190,14 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 	defer cancel()
 	start := time.Now()
 	ch, nd, err := d.load(ctx, j)
+	var logs *string
 	if err == nil {
-		err = d.sender.Send(ctx, ch, nd)
+		var lines []string
+		lines, err = send(ctx, d.pool, d.sender, d.runner, ch, nd, false)
+		if lines != nil {
+			joined := strings.Join(lines, "\n")
+			logs = &joined
+		}
 	}
 	typ := ch.Type
 	if typ == "" {
@@ -202,7 +210,7 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 		d.release(log, j)
 		return
 	}
-	status, ferr := d.finish(context.WithoutCancel(ctx), j, err)
+	status, ferr := d.finish(context.WithoutCancel(ctx), j, err, logs)
 	switch {
 	case ferr != nil:
 		// The lease expires and another attempt runs: a send may repeat, never get lost.
@@ -236,8 +244,9 @@ func (d *Deliverer) release(log *zap.Logger, j claimed) {
 	}
 }
 
-// finish records the attempt if the claim is still ours; "" means another claim took over.
-func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error) (string, error) {
+// finish records the attempt, and a script's logs, if the claim is still ours; "" means another claim
+// took over.
+func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	attempt := j.attempts + 1
@@ -251,10 +260,14 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error) (strin
 			status = "dead"
 		}
 	}
+	if logs != nil {
+		clean := strings.ReplaceAll(*logs, "\x00", "")
+		logs = &clean
+	}
 	tag, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = $3, attempts = $4, last_error = COALESCE($5, last_error),
-			sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
+			logs = COALESCE($7, logs), sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
 			next_attempt_at = now() + make_interval(secs => $6), claim_token = NULL, leased_until = NULL
-		WHERE id = $1 AND claim_token = $2`, j.id, j.token, status, attempt, lastErr, delay.Seconds())
+		WHERE id = $1 AND claim_token = $2`, j.id, j.token, status, attempt, lastErr, delay.Seconds(), logs)
 	if err != nil {
 		return "", fmt.Errorf("finish delivery: %w", err)
 	}

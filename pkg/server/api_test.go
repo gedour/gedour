@@ -21,10 +21,12 @@ import (
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/testpg"
 )
 
 func TestMain(m *testing.M) {
+	script.MaybeSandbox()
 	code := m.Run()
 	testpg.Terminate()
 	os.Exit(code)

@@ -1,4 +1,4 @@
-import { Mail, Send, Webhook, type LucideIcon } from "lucide-react";
+import { FileCode2, Mail, Send, Webhook, type LucideIcon } from "lucide-react";
 
 import type { Channel, ChannelKind } from "@/types/api";
 
@@ -6,6 +6,7 @@ export const CHANNEL_KINDS: { type: ChannelKind; label: string; icon: LucideIcon
   { type: "telegram", label: "Telegram", icon: Send },
   { type: "email", label: "Email", icon: Mail },
   { type: "webhook", label: "Webhook", icon: Webhook },
+  { type: "script", label: "Script", icon: FileCode2 },
 ];
 
 export function channelKind(type: ChannelKind) {
@@ -15,10 +16,15 @@ export function channelKind(type: ChannelKind) {
   );
 }
 
-/** Where a channel sends: the chat, the recipients, or the webhook's host. */
-export function channelTarget(c: Pick<Channel, "type" | "config">): string {
+/** Where a channel sends: the chat, the recipients, the webhook's host, or the script it runs (named when scripts knows it). */
+export function channelTarget(
+  c: Pick<Channel, "type" | "config">,
+  scripts?: Map<string, string>,
+): string {
   const cfg = c.config;
   switch (c.type) {
+    case "script":
+      return `runs ${scripts?.get(String(cfg.script_id)) ?? "a script"}`;
     case "telegram":
       return `chat ${String(cfg.chat_id ?? "")}`;
     case "email":

@@ -259,3 +259,90 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   await expect(row).toContainText("HTTP 500");
   await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
 });
+
+// 001-AC17: a script channel runs on routed events in the sandbox: its http.fetch reaches the
+// (allowlisted) receiver and the delivery shows the script's logs.
+test("a script channel runs its script on a routed event", async ({ page }) => {
+  const t = tag();
+  await setFixture(page, "a");
+  await page.goto("/channels");
+  const call = await api(page);
+  const res = await call("POST", "/api/v1/watches", {
+    name: `Scripted CLI ${t}`,
+    kind: "github_release",
+    schedule: "1h",
+    config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+  });
+  expect(res.status()).toBe(201);
+  const watch = (await res.json()) as { id: string; name: string };
+  await expect
+    .poll(
+      async () => (await (await call("GET", `/api/v1/watches/${watch.id}`)).json()).last_status,
+      { timeout: 15_000 },
+    )
+    .toBe("ok");
+  const created = await call("POST", "/api/v1/scripts", {
+    name: `Forward ${t}`,
+    source: `function main(event, ctx) {
+  log("forwarding", event.summary);
+  const r = http.fetch("${UPSTREAM}/_hooks/script-${t}", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text: ctx.watch.name + ": " + event.summary, rule: ctx.rule.name})});
+  log("receiver", r.status);
+}`,
+  });
+  expect(created.status()).toBe(201);
+
+  // The channel through the UI.
+  await page.reload();
+  await page.getByRole("button", { name: "New channel" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  await dialog.getByText("Script", { exact: true }).click();
+  await dialog.getByLabel("Name").fill(`Scripted ${t}`);
+  await dialog.getByRole("combobox", { name: "Script" }).selectOption({ label: `Forward ${t}` });
+  await dialog.getByRole("button", { name: "Create channel" }).click();
+  await expect(dialog).toBeHidden();
+  const channels = (await (await call("GET", "/api/v1/channels")).json()).items as {
+    id: string;
+    name: string;
+  }[];
+  const channel = channels.find((c) => c.name === `Scripted ${t}`);
+  expect(channel).toBeDefined();
+  const rule = await call("POST", "/api/v1/rules", {
+    name: `Scripted ${t}`,
+    watch_id: watch.id,
+    filter: 'event.type == "release.published"',
+    channel_ids: [channel?.id],
+  });
+  expect(rule.status()).toBe(201);
+
+  await setFixture(page, "b");
+  expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
+  let got: Received[] = [];
+  await expect
+    .poll(
+      async () => {
+        const all = (await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[];
+        got = all.filter((r) => r.endpoint === `script-${t}`);
+        return got.length;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(2);
+  expect(got.map((r) => JSON.parse(r.body).text).sort()).toEqual([
+    `${watch.name}: v2.103.3 published`,
+    `${watch.name}: v2.105.0 published`,
+  ]);
+  expect(JSON.parse(got[0]?.body ?? "{}").rule).toBe(`Scripted ${t}`);
+
+  await page.getByLabel("Channel", { exact: true }).selectOption({ label: `Scripted ${t}` });
+  const table = page.getByRole("table", { name: "Deliveries" });
+  await expect(async () => {
+    await expect(table.getByRole("row").filter({ hasText: "Sent" })).toHaveCount(2, {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 15_000 });
+  const row = table.getByRole("row").filter({ hasText: "v2.105.0 published" });
+  await row.getByText("Logs · 2 lines").click();
+  await expect(row).toContainText("forwarding v2.105.0 published");
+  await expect(row).toContainText("receiver 200");
+});

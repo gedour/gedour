@@ -22,11 +22,13 @@ import (
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/testpg"
 )
 
 func TestMain(m *testing.M) {
+	script.MaybeSandbox()
 	code := m.Run()
 	testpg.Terminate()
 	os.Exit(code)
@@ -267,7 +269,18 @@ func (e *env) deliverer(t *testing.T) *Deliverer {
 	t.Helper()
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
 	s := &notify.Sender{Client: g.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: []string{"127.0.0.1"}, NoRedirects: true}), UserAgent: "gedour/test"}
-	return NewDeliverer(e.pool, zap.NewNop(), e.box, s, e.m, 10*time.Millisecond, 4, time.Second)
+	return NewDeliverer(e.pool, zap.NewNop(), e.box, s, testRunner(t, s.Client, g), e.m, 10*time.Millisecond, 4, time.Second)
+}
+
+// testRunner starts this test binary as the sandbox (TestMain hands it to script.MaybeSandbox).
+func testRunner(t *testing.T, client *http.Client, g *netguard.Guard) *script.Runner {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return script.NewRunner(script.Options{Exe: exe, Args: []string{script.Subcommand}, Client: client, Guard: g,
+		HTTPHosts: []string{"127.0.0.1"}, UserAgent: "gedour/test"})
 }
 
 type delivery struct {

@@ -7,13 +7,13 @@ export interface FilterProblem {
   column?: number;
 }
 
-/** The filter's compile error out of a 400 problem (location body.filter), or null. */
-export function filterProblem(err: unknown): FilterProblem | null {
+/** The compile error out of a 400 problem at location (a filter's by default; a script's is body.source), or null. */
+export function filterProblem(err: unknown, location = "body.filter"): FilterProblem | null {
   if (!(err instanceof ApiError)) return null;
-  const e = err.errors.find((x) => x.location === "body.filter");
+  const e = err.errors.find((x) => x.location === location);
   if (!e) return null;
   const pos = e.value as { line?: unknown; column?: unknown } | null | undefined;
-  const p: FilterProblem = { message: e.message ?? "invalid filter" };
+  const p: FilterProblem = { message: e.message ?? "invalid" };
   if (typeof pos?.line === "number" && typeof pos.column === "number") {
     p.line = pos.line;
     p.column = pos.column;

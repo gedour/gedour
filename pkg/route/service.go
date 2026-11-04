@@ -16,6 +16,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 )
 
@@ -25,6 +26,7 @@ type Service struct {
 	log       *zap.Logger
 	box       *secret.Box
 	sender    *notify.Sender
+	runner    *script.Runner
 	guard     *netguard.Guard
 	httpHosts []string
 	metrics   *Metrics
@@ -32,14 +34,17 @@ type Service struct {
 	viewer    func(context.Context) (string, bool)
 	alive     func(*http.Request) bool
 	previews  *limiter
+	dryRuns   *limiter
 	// Heartbeat is the SSE keep-alive and session re-check period; tests shorten it.
 	Heartbeat time.Duration
 }
 
-// New builds the service; sender also serves channel tests, guard the save-time webhook URL check.
-func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, guard *netguard.Guard, httpHosts []string, m *Metrics) *Service {
-	return &Service{pool: pool, log: log, box: box, sender: sender, guard: guard, httpHosts: httpHosts, metrics: m,
-		hub: newHub(pool, log, m), Heartbeat: 25 * time.Second, previews: newLimiter(previewRate, previewBurst)}
+// New builds the service; sender and runner also serve channel tests (runner the script dry runs),
+// guard the save-time webhook URL check.
+func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, guard *netguard.Guard, httpHosts []string, m *Metrics) *Service {
+	return &Service{pool: pool, log: log, box: box, sender: sender, runner: runner, guard: guard, httpHosts: httpHosts, metrics: m,
+		hub: newHub(pool, log, m), Heartbeat: 25 * time.Second, previews: newLimiter(previewRate, previewBurst),
+		dryRuns: newLimiter(dryRunRate, dryRunBurst)}
 }
 
 // Register mounts the API on api and the inbox stream on mux. viewer returns the authenticated user's ID;
@@ -47,6 +52,7 @@ func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Se
 func (s *Service) Register(api huma.API, mux *http.ServeMux, viewer func(context.Context) (string, bool), alive func(*http.Request) bool) {
 	s.viewer, s.alive = viewer, alive
 	s.registerChannels(api)
+	s.registerScripts(api)
 	s.registerRules(api)
 	s.registerDeliveries(api)
 	s.registerInbox(api)

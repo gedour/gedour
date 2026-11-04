@@ -1,7 +1,7 @@
 // Package audit records every mutation in the append-only audit_log, inside the mutation's transaction.
 //
 // Contract: Before and After are stored as their encoding/json form, then every secret-looking key
-// (see isSecretKey) is redacted. That deny-list is a safety net, not the mechanism: a type passed here
+// (see IsSecretKey) is redacted. That deny-list is a safety net, not the mechanism: a type passed here
 // must not carry secrets in its JSON form (tag secret fields `json:"-"`, or pass the API response type).
 package audit
 

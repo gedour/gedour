@@ -60,7 +60,7 @@ func TestChannels(t *testing.T) {
 		} `json:"items"`
 	}
 	a.mustCall(t, alice, http.MethodGet, "/api/v1/channel-types", nil, http.StatusOK, &types)
-	if len(types.Items) != 3 || types.Items[1].Type != "email" || types.Items[1].Available || !strings.Contains(types.Items[1].Hint, "GEDOUR_SMTP_ADDR") {
+	if len(types.Items) != 4 || types.Items[3].Type != "script" || !types.Items[3].Available || types.Items[1].Type != "email" || types.Items[1].Available || !strings.Contains(types.Items[1].Hint, "GEDOUR_SMTP_ADDR") {
 		t.Fatalf("channel types without SMTP: %+v", types)
 	}
 	p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "mail", "type": "email", "config": map[string]any{"to": []string{"a@x.test"}}}, http.StatusBadRequest)

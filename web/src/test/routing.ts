@@ -1,4 +1,12 @@
-import type { Channel, Delivery, InboxItem, PreviewItem, Rule, WatchEvent } from "@/types/api";
+import type {
+  Channel,
+  Delivery,
+  InboxItem,
+  PreviewItem,
+  Rule,
+  Script,
+  WatchEvent,
+} from "@/types/api";
 
 export function event(over: Partial<WatchEvent> = {}): WatchEvent {
   return {
@@ -62,12 +70,26 @@ export function delivery(id: number, over: Partial<Delivery> = {}): Delivery {
     attempts: 1,
     next_attempt_at: null,
     last_error: null,
+    logs: null,
     sent_at: "2026-11-04T10:00:00Z",
     created_at: "2026-11-04T10:00:00Z",
     channel: { id: "c1", name: "Deploy bot", type: "webhook" },
     rule: { id: "r1", name: "Releases" },
     event: event({ id }),
     watch: watchRef,
+    ...over,
+  };
+}
+
+export function script(over: Partial<Script> = {}): Script {
+  return {
+    id: "s1",
+    name: "Notify deploy",
+    size: 42,
+    source: "function main(event) {\n  log(event.type);\n}\n",
+    channels: [],
+    created_at: "2026-11-01T00:00:00Z",
+    updated_at: "2026-11-02T00:00:00Z",
     ...over,
   };
 }

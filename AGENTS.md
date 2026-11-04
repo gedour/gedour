@@ -78,6 +78,16 @@
 - Collector HTTP goes through the `pkg/netguard` client: tests against `httptest` (127.0.0.1) allowlist
   `127.0.0.0/8` and list `127.0.0.1` as a plain-http host.
 
+## Script sandbox
+
+- Scripts run in a child process: the running binary with argument `sandbox`. A test package that runs
+  scripts calls `script.MaybeSandbox()` first in its `TestMain` and builds the runner from
+  `os.Executable()`. Coverage of `pkg/script` comes from its in-process tests (`Serve` over pipes); the
+  child's `Main` (rlimits, watchdog) only runs in subprocesses and is not measured.
+- CodeMirror's `style-mod` is patched (`web/patches/`, `pnpm-workspace.yaml` `patchedDependencies`) to use a
+  constructed stylesheet instead of a `<style>` element (CSP). A CodeMirror upgrade that bumps
+  `style-mod` needs the patch redone; the e2e CSP guard fails without it.
+
 ## Acceptance-criteria citations
 
 Every test written for a spec acceptance criterion cites it in a comment as `001-ACn`

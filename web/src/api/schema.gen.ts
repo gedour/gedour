@@ -386,6 +386,77 @@ export interface paths {
     patch: operations["update-rule"];
     trace?: never;
   };
+  "/api/v1/scripts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's scripts, without their source */
+    get: operations["list-scripts"];
+    put?: never;
+    /** Create a script; its syntax is checked first */
+    post: operations["create-script"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/scripts/dry-run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Run unsaved code on an event in the sandbox; http.fetch is recorded, never sent */
+    post: operations["dry-run-source"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/scripts/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One of the caller's scripts */
+    get: operations["get-script"];
+    put?: never;
+    post?: never;
+    /** Delete a script no channel runs */
+    delete: operations["delete-script"];
+    options?: never;
+    head?: never;
+    /** Change a script's name or source */
+    patch: operations["update-script"];
+    trace?: never;
+  };
+  "/api/v1/scripts/{id}/dry-run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Run a saved script on an event in the sandbox; http.fetch is recorded, never sent */
+    post: operations["dry-run-script"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/version": {
     parameters: {
       query?: never;
@@ -606,7 +677,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id; email: to; webhook: url */
+      /** @description telegram: chat_id; email: to; webhook: url; script: script_id */
       config: {
         [key: string]: unknown;
       };
@@ -625,7 +696,7 @@ export interface components {
       last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
       name: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook";
+      type: "telegram" | "email" | "webhook" | "script";
       /** Format: date-time */
       updated_at: string;
     };
@@ -634,14 +705,14 @@ export interface components {
       id: string;
       name: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook";
+      type: "telegram" | "email" | "webhook" | "script";
     };
     ChannelType: {
       available: boolean;
       /** @description Why it is unavailable */
       hint?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook";
+      type: "telegram" | "email" | "webhook" | "script";
     };
     ChannelTypesOutputBody: {
       items: components["schemas"]["ChannelType"][] | null;
@@ -705,10 +776,10 @@ export interface components {
         [key: string]: unknown;
       };
       name: string;
-      /** @description Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email: none */
+      /** @description Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none */
       secret?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook";
+      type: "telegram" | "email" | "webhook" | "script";
     };
     CreateCredentialInputBody: {
       /** @enum {string} */
@@ -728,6 +799,11 @@ export interface components {
       name: string;
       /** @description A watch the caller can read; empty for all of them */
       watch_id?: string;
+    };
+    CreateScriptInputBody: {
+      name: string;
+      /** @description JavaScript defining function main(event, ctx); checked for syntax on save */
+      source: string;
     };
     CreateWatchInputBody: {
       config: {
@@ -749,7 +825,7 @@ export interface components {
       schedule: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id; email: to; webhook: url */
+      /** @description telegram: chat_id; email: to; webhook: url; script: script_id */
       config: {
         [key: string]: unknown;
       };
@@ -770,7 +846,7 @@ export interface components {
       /** @description Webhook only, generated when none was given: shown in this response only */
       signing_secret?: string;
       /** @enum {string} */
-      type: "telegram" | "email" | "webhook";
+      type: "telegram" | "email" | "webhook" | "script";
       /** Format: date-time */
       updated_at: string;
     };
@@ -804,6 +880,8 @@ export interface components {
       /** Format: int64 */
       id: number;
       last_error: string | null;
+      /** @description Script channels: the log lines of the last run */
+      logs: string | null;
       /**
        * Format: date-time
        * @description Set while pending or failed
@@ -819,6 +897,40 @@ export interface components {
        */
       status: "pending" | "sent" | "failed" | "dead";
       watch: components["schemas"]["WatchRef"];
+    };
+    DryRun: {
+      /** Format: int64 */
+      duration_ms: number;
+      error?: string;
+      /** @description The http.fetch calls, none of them sent; secret-looking header values redacted */
+      fetches: components["schemas"]["Fetch"][] | null;
+      logs: string[] | null;
+      ok: boolean;
+      /**
+       * @description error: the script threw; killed: memory limit or crash
+       * @enum {string}
+       */
+      outcome: "ok" | "error" | "timeout" | "killed";
+      /** @description main's return value as JSON text, 16 KiB at most */
+      result?: string;
+    };
+    DryRunInputBody: {
+      /**
+       * Format: int64
+       * @description An event the caller can read; or give sample
+       */
+      event_id?: number;
+      sample?: components["schemas"]["SampleEvent"];
+    };
+    DryRunSourceInputBody: {
+      /**
+       * Format: int64
+       * @description An event the caller can read; or give sample
+       */
+      event_id?: number;
+      sample?: components["schemas"]["SampleEvent"];
+      /** @description Unsaved code to run */
+      source: string;
     };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -880,6 +992,18 @@ export interface components {
       };
       /** @description e.g. release.published, pr.state_changed, tag.created */
       type: string;
+    };
+    Fetch: {
+      /**
+       * Format: int64
+       * @description Request body length in bytes
+       */
+      body_size: number;
+      headers: {
+        [key: string]: string;
+      };
+      method: string;
+      url: string;
     };
     InboxItem: {
       /** Format: date-time */
@@ -998,6 +1122,10 @@ export interface components {
       /** @description Sorted by name */
       items: components["schemas"]["Rule"][] | null;
     };
+    ListScriptsOutputBody: {
+      /** @description Sorted by name */
+      items: components["schemas"]["ScriptSummary"][] | null;
+    };
     ListSharesOutputBody: {
       /** @description Sorted by email */
       items: components["schemas"]["Share"][] | null;
@@ -1076,6 +1204,54 @@ export interface components {
       id: string;
       name: string;
     };
+    SampleEvent: {
+      /** Format: date-time */
+      occurred_at?: string;
+      payload?: {
+        [key: string]: unknown;
+      };
+      /** @description e.g. release.published */
+      type: string;
+      watch?: components["schemas"]["SampleWatch"];
+    };
+    SampleWatch: {
+      /** @enum {string} */
+      kind?: "github_release" | "github_pr" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+      name: string;
+    };
+    Script: {
+      /** @description The script channels that run it */
+      channels: components["schemas"]["ChannelRef"][] | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /**
+       * Format: int64
+       * @description Source length in bytes
+       */
+      size: number;
+      source: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    ScriptSummary: {
+      /** @description The script channels that run it */
+      channels: components["schemas"]["ChannelRef"][] | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /**
+       * Format: int64
+       * @description Source length in bytes
+       */
+      size: number;
+      /** Format: date-time */
+      updated_at: string;
+    };
     SecretBody: {
       /** @description Write-only, never returned */
       secret: string;
@@ -1099,8 +1275,10 @@ export interface components {
       state: unknown;
     };
     TestResultBody: {
-      /** @description Why the test message was not sent */
+      /** @description Why the test message was not sent; for a script, why the run failed */
       error?: string;
+      /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
+      logs?: string[] | null;
       ok: boolean;
     };
     UpdateChannelInputBody: {
@@ -1120,6 +1298,10 @@ export interface components {
       name?: string;
       /** @description Empty string: all readable watches */
       watch_id?: string;
+    };
+    UpdateScriptInputBody: {
+      name?: string;
+      source?: string;
     };
     UpdateShareInputBody: {
       /** @enum {string} */
@@ -2149,6 +2331,231 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Rule"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-scripts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListScriptsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-script": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateScriptInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Script"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "dry-run-source": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DryRunSourceInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DryRun"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-script": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Script"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-script": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "update-script": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateScriptInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Script"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "dry-run-script": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DryRunInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DryRun"];
         };
       };
       /** @description Error */

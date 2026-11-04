@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/server"
 	"github.com/gedour/gedour/pkg/watch"
@@ -58,8 +60,15 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	if err != nil {
 		return err
 	}
+	// The sandbox is this binary re-executed: os.Executable is /app in the image, bin/gedour locally.
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("sandbox executable: %w", err)
+	}
+	runner := script.NewRunner(script.Options{Exe: exe, Args: []string{script.Subcommand}, Client: sender.Client, Guard: guard,
+		HTTPHosts: cfg.AllowHTTPHosts, UserAgent: sender.UserAgent, Metrics: script.NewMetrics(reg)})
 	routeMetrics := route.NewMetrics(reg)
-	routes := route.New(pool, log, box, sender, guard, cfg.AllowHTTPHosts, routeMetrics)
+	routes := route.New(pool, log, box, sender, runner, guard, cfg.AllowHTTPHosts, routeMetrics)
 	hubCtx, stopHub := context.WithCancel(ctx)
 	defer stopHub()
 	servers := []*http.Server{newServer(cfg.MetricsAddr, server.Metrics(log, reg, ping))}
@@ -103,7 +112,7 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 		workers.Go(func() { w.Run(workerCtx) })
 		workers.Go(func() { route.NewRouter(pool, log, routeMetrics, cfg.WorkerPoll).Run(workerCtx) })
 		workers.Go(func() {
-			route.NewDeliverer(pool, log, box, sender, routeMetrics, cfg.WorkerPoll, cfg.WorkerConcurrency, cfg.ShutdownTimeout).Run(workerCtx)
+			route.NewDeliverer(pool, log, box, sender, runner, routeMetrics, cfg.WorkerPoll, cfg.WorkerConcurrency, cfg.ShutdownTimeout).Run(workerCtx)
 		})
 	}
 

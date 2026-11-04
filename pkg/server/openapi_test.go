@@ -20,6 +20,7 @@ import (
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/watch"
 )
@@ -54,7 +55,13 @@ func testRoutes(t *testing.T, pool *pgxpool.Pool, sender *notify.Sender) *route.
 		t.Fatal(err)
 	}
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
-	return route.New(pool, zaptest.NewLogger(t), box, sender, g, []string{"127.0.0.1"}, route.NewMetrics(prometheus.NewRegistry()))
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := script.NewRunner(script.Options{Exe: exe, Args: []string{script.Subcommand}, Client: sender.Client, Guard: g,
+		HTTPHosts: []string{"127.0.0.1"}, UserAgent: "gedour/test"})
+	return route.New(pool, zaptest.NewLogger(t), box, sender, runner, g, []string{"127.0.0.1"}, route.NewMetrics(prometheus.NewRegistry()))
 }
 
 // renderOpenAPI is the document the handlers serve, pretty printed, with a fixed version so the

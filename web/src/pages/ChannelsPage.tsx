@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Pencil, Plus, RotateCw, Send, Trash2, TriangleAlert } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
+import { Link } from "react-router";
 
 import {
   ApiError,
@@ -9,6 +10,7 @@ import {
   listChannels,
   listChannelTypes,
   listDeliveries,
+  listScripts,
   retryDelivery,
   testChannel,
   updateChannel,
@@ -38,8 +40,15 @@ import type {
 
 const sectionClass = "flex flex-col gap-4";
 
+/** Script names by id, for the channels that run one. */
+function useScriptNames(): Map<string, string> {
+  const scripts = useQuery({ queryKey: ["scripts"], queryFn: listScripts });
+  return new Map((scripts.data ?? []).map((s) => [s.id, s.name]));
+}
+
 export function ChannelsPage({ item }: { item: NavItem }) {
   const query = useQuery({ queryKey: ["channels"], queryFn: listChannels });
+  const scriptNames = useScriptNames();
   const [editing, setEditing] = useState<Channel | "new" | null>(null);
   const [deleting, setDeleting] = useState<Channel | null>(null);
   const newButton = (
@@ -91,6 +100,7 @@ export function ChannelsPage({ item }: { item: NavItem }) {
               <ChannelCard
                 key={c.id}
                 channel={c}
+                target={channelTarget(c, scriptNames)}
                 onEdit={() => setEditing(c)}
                 onDelete={() => setDeleting(c)}
               />
@@ -107,24 +117,29 @@ export function ChannelsPage({ item }: { item: NavItem }) {
 
 function ChannelCard({
   channel: c,
+  target,
   onEdit,
   onDelete,
 }: {
   channel: Channel;
+  target: string;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const toast = useToast();
   const client = useQueryClient();
+  const script = c.type === "script";
   const test = useMutation({
     mutationFn: () => testChannel(c.id),
     onSuccess: (r) => {
-      if (r.ok) toast(`Test message sent to ${c.name}`);
+      if (r.ok) toast(script ? `Test run of ${c.name} done` : `Test message sent to ${c.name}`);
       else toast(`Test to ${c.name} failed: ${r.error ?? "unknown error"}`, "error");
       void client.invalidateQueries({ queryKey: ["audit"] });
     },
     onError: (err) => toast(problemText(err), "error"),
   });
+  // A script test is a live run: what it logged shows under the card.
+  const run = script && test.data ? test.data : null;
   return (
     <li className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-4">
       <div className="flex items-start gap-3">
@@ -134,7 +149,7 @@ function ChannelCard({
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted">
-            {channelKind(c.type).label} · <span className="font-mono">{channelTarget(c)}</span>
+            {channelKind(c.type).label} · <span className="font-mono">{target}</span>
           </span>
         </div>
       </div>
@@ -157,7 +172,13 @@ function ChannelCard({
             onClick={() => test.mutate()}
           >
             <Send aria-hidden />
-            {test.isPending ? "Sending…" : "Send test"}
+            {test.isPending
+              ? script
+                ? "Running…"
+                : "Sending…"
+              : script
+                ? "Run test"
+                : "Send test"}
           </Button>
           <Button variant="ghost" size="sm" aria-label={`Edit ${c.name}`} onClick={onEdit}>
             <Pencil aria-hidden />
@@ -167,6 +188,35 @@ function ChannelCard({
           </Button>
         </span>
       </div>
+      {run && (
+        <section
+          aria-label={`Test run of ${c.name}`}
+          className="flex flex-col gap-2 rounded-lg bg-bg px-3 py-2 text-xs"
+        >
+          <p className="flex items-center justify-between gap-2">
+            <span
+              className={
+                run.ok
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-rose-700 dark:text-rose-300"
+              }
+            >
+              {run.ok ? "Live run returned" : `Live run failed: ${run.error ?? ""}`}
+            </span>
+            <button
+              type="button"
+              className="text-muted underline-offset-4 hover:underline"
+              onClick={() => test.reset()}
+            >
+              Hide
+            </button>
+          </p>
+          <p className="text-muted">Not a dry run: its http.fetch calls were sent.</p>
+          <pre className="max-h-40 overflow-auto font-mono break-words whitespace-pre-wrap">
+            {run.logs?.length ? run.logs.join("\n") : "No log line."}
+          </pre>
+        </section>
+      )}
     </li>
   );
 }
@@ -232,6 +282,8 @@ function ChannelForm({
   const [chatId, setChatId] = useState(String(cfg.chat_id ?? ""));
   const [to, setTo] = useState(Array.isArray(cfg.to) ? cfg.to.join("\n") : "");
   const [url, setUrl] = useState(String(cfg.url ?? ""));
+  const [scriptId, setScriptId] = useState(String(cfg.script_id ?? ""));
+  const scripts = useQuery({ queryKey: ["scripts"], queryFn: listScripts });
   const [secret, setSecret] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [signing, setSigning] = useState<{ name: string; secret: string } | null>(null);
@@ -242,6 +294,7 @@ function ChannelForm({
   const config = () => {
     if (type === "telegram") return { chat_id: chatId };
     if (type === "email") return { to: splitRecipients(to) };
+    if (type === "script") return { script_id: scriptId };
     return { url };
   };
   const save = useMutation({
@@ -282,7 +335,7 @@ function ChannelForm({
     : type === "webhook"
       ? "Write-only. Leave empty to have a strong one generated and shown once."
       : "Write-only: gedour never shows it again.";
-  const shown = ["name", "type", "secret", "chat_id", "url", "to"];
+  const shown = ["name", "type", "secret", "chat_id", "url", "to", "script_id"];
   return (
     <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
       {unplaced(errors, [...shown, ...Object.keys(errors).filter((k) => k.startsWith("to["))]).map(
@@ -295,7 +348,7 @@ function ChannelForm({
       {!channel && (
         <fieldset className="flex flex-col gap-1.5">
           <legend className="mb-1.5 text-sm font-medium">Type</legend>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {CHANNEL_KINDS.map((k) => {
               const t = types.data?.find((x) => x.type === k.type);
               const off = t ? !t.available : false;
@@ -396,7 +449,40 @@ function ChannelForm({
           )}
         </Field>
       )}
-      {type !== "email" && (
+      {type === "script" && (
+        <Field
+          label="Script"
+          error={errors.script_id}
+          hint="Runs in the sandbox for each event: 5 s, log and http.fetch only."
+        >
+          {(p) =>
+            scripts.data?.length === 0 ? (
+              <p className="text-sm">
+                No scripts yet.{" "}
+                <Link to="/scripts/new" className="font-medium underline underline-offset-4">
+                  Write one
+                </Link>{" "}
+                first.
+              </p>
+            ) : (
+              <select
+                {...p}
+                value={scriptId}
+                onChange={(e) => setScriptId(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">Pick a script…</option>
+                {(scripts.data ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )
+          }
+        </Field>
+      )}
+      {(type === "telegram" || type === "webhook") && (
         <Field
           label={type === "telegram" ? "Bot token" : "Signing secret"}
           error={errors.secret}
@@ -661,11 +747,13 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
         <caption className="sr-only">Deliveries</caption>
         <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">
           <tr>
-            {["Status", "Event", "Channel", "Attempts", "Next attempt", "Last error"].map((h) => (
-              <th key={h} scope="col" className="px-4 py-3 font-medium">
-                {h}
-              </th>
-            ))}
+            {["Status", "Event", "Channel", "Attempts", "Next attempt", "Error and logs"].map(
+              (h) => (
+                <th key={h} scope="col" className="px-4 py-3 font-medium">
+                  {h}
+                </th>
+              ),
+            )}
             <th scope="col" className="px-4 py-3">
               <span className="sr-only">Actions</span>
             </th>
@@ -714,6 +802,7 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
                       {d.next_attempt_at ? formatRelative(new Date(d.next_attempt_at)) : "—"}
                     </td>
                     <td className="max-w-52 px-4 py-3">
+                      {d.logs != null && <DeliveryLogs logs={d.logs} />}
                       {d.last_error ? (
                         <details>
                           <summary className="cursor-pointer truncate font-mono text-xs text-rose-700 marker:text-muted dark:text-rose-300">
@@ -724,7 +813,7 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
                           </pre>
                         </details>
                       ) : (
-                        <span className="text-muted">—</span>
+                        d.logs == null && <span className="text-muted">—</span>
                       )}
                     </td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
@@ -746,5 +835,20 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** A script delivery's log lines, folded. */
+export function DeliveryLogs({ logs }: { logs: string }) {
+  const lines = logs ? logs.split("\n") : [];
+  return (
+    <details className="mb-1">
+      <summary className="cursor-pointer text-xs text-muted marker:text-muted">
+        Logs · {lines.length} line{lines.length === 1 ? "" : "s"}
+      </summary>
+      <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-bg p-2 font-mono text-xs break-words whitespace-pre-wrap">
+        {logs || "No log line."}
+      </pre>
+    </details>
   );
 }

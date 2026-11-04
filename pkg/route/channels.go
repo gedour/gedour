@@ -43,7 +43,7 @@ func underCap(ctx context.Context, tx pgx.Tx, owner, table string, limit int) er
 		return err
 	}
 	var n int
-	// table is one of two constants, never input.
+	// table is one of the cap constants' tables, never input.
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE owner_id = $1`, owner).Scan(&n); err != nil {
 		return err
 	}
@@ -61,8 +61,8 @@ const TestInterval = 10 * time.Second
 type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
-	Type               string         `json:"type" enum:"telegram,email,webhook"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id; email: to; webhook: url"`
+	Type               string         `json:"type" enum:"telegram,email,webhook,script"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id; email: to; webhook: url; script: script_id"`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -92,9 +92,9 @@ type listChannelsOutput struct {
 type createChannelInput struct {
 	Body struct {
 		Name   string         `json:"name" minLength:"1" maxLength:"200"`
-		Type   string         `json:"type" enum:"telegram,email,webhook"`
+		Type   string         `json:"type" enum:"telegram,email,webhook,script"`
 		Config map[string]any `json:"config"`
-		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email: none"`
+		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none"`
 	}
 }
 
@@ -115,15 +115,16 @@ type channelTypesOutput struct {
 
 // ChannelType tells the UI which channel types this instance can send to.
 type ChannelType struct {
-	Type      string `json:"type" enum:"telegram,email,webhook"`
+	Type      string `json:"type" enum:"telegram,email,webhook,script"`
 	Available bool   `json:"available"`
 	Hint      string `json:"hint,omitempty" doc:"Why it is unavailable"`
 }
 
 type testResult struct {
 	Body struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty" doc:"Why the test message was not sent"`
+		OK    bool     `json:"ok"`
+		Error string   `json:"error,omitempty" doc:"Why the test message was not sent; for a script, why the run failed"`
+		Logs  []string `json:"logs,omitempty" doc:"Script channels: the log lines of the run (a live run: its fetches were sent)"`
 	}
 }
 
@@ -272,6 +273,18 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 			errs = append(errs, configError("url", msg, c.URL))
 		}
 		norm = c
+	case notify.TypeScript:
+		var c ScriptConfig
+		if err := decodeConfig(raw, &c); err != nil {
+			return nil, []error{err}
+		}
+		// Canonical form: the in-use check matches config->>'script_id' as text.
+		if id, err := uuid.Parse(c.ScriptID); err != nil {
+			errs = append(errs, configError("script_id", "pick one of your scripts", c.ScriptID))
+		} else {
+			c.ScriptID = id.String()
+		}
+		norm = c
 	default:
 		return nil, []error{&huma.ErrorDetail{Location: "body.type", Message: "unknown channel type", Value: typ}}
 	}
@@ -314,6 +327,10 @@ func checkSecret(typ, given string) (sec string, generated bool, errs []error) {
 	case notify.TypeEmail:
 		if given != "" {
 			return "", false, bad("email channels have no secret: the SMTP server is instance config")
+		}
+	case notify.TypeScript:
+		if given != "" {
+			return "", false, bad("script channels have no secret")
 		}
 	case notify.TypeWebhook:
 		if given == "" {
@@ -442,6 +459,11 @@ func (s *Service) createChannel(ctx context.Context, in *createChannelInput) (*c
 		if err := underCap(ctx, tx, me, "channels", MaxChannels); err != nil {
 			return err
 		}
+		if b.Type == notify.TypeScript {
+			if err := checkScriptRef(ctx, tx, me, cfg); err != nil {
+				return err
+			}
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO channels (id, owner_id, name, type, config, secret_ciphertext, secret_nonce, key_version, last4)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, me, name, b.Type, cfg, ct, nonce, keyVersion, last4(sec))
 		if isUniqueViolation(err) {
@@ -500,6 +522,11 @@ func (s *Service) updateChannel(ctx context.Context, in *updateChannelInput) (*c
 		}
 		if len(errs) > 0 {
 			return huma.Error400BadRequest("invalid channel", errs...)
+		}
+		if b.Config != nil && before.Type == notify.TypeScript {
+			if err := checkScriptRef(ctx, tx, me, next.Config); err != nil {
+				return err
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE channels SET name = $2, config = $3, updated_at = now() WHERE id = $1`, in.ID, next.Name, next.Config)
 		if isUniqueViolation(err) {
@@ -576,6 +603,19 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 	if err != nil {
 		return nil, err
 	}
+	// A script test needs a sandbox: take it before the audit row, which is also the rate limit, so a
+	// busy answer costs the user nothing. The type never changes, so this read stays true.
+	pre, err := ownChannel(ctx, s.pool, me, in.ID, false)
+	if err != nil {
+		return nil, s.fail("test-channel", err)
+	}
+	if pre.Type == notify.TypeScript {
+		release, ok := s.runner.TryReserve()
+		if !ok {
+			return nil, busy()
+		}
+		defer release()
+	}
 	var ch notify.Channel
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// The user row lock comes first, as in every user-scoped transaction that takes it (the caps):
@@ -615,7 +655,8 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 		return nil, s.fail("test-channel", err)
 	}
 	out := &testResult{}
-	sendErr := s.sender.Send(ctx, ch, notify.TestDelivery(time.Now()))
+	logs, sendErr := send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(time.Now()), true)
+	out.Body.Logs = logs
 	if sendErr != nil {
 		out.Body.Error = truncate(sendErr.Error())
 	}

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { navigation } from "@/api/client";
 import { CHANNEL_TYPES, mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
-import { channel, delivery } from "@/test/routing";
+import { channel, delivery, script } from "@/test/routing";
 import { lastCall, pending, problem } from "@/test/watches";
 import type { Channel } from "@/types/api";
 
@@ -353,5 +353,118 @@ describe("ChannelsPage", () => {
     expect(await screen.findByText("Could not retry: this one is pending")).toBeInTheDocument();
     await userEvent.selectOptions(screen.getByLabelText("Status"), "sent");
     expect(await screen.findByText("No delivery matches these filters.")).toBeInTheDocument();
+  });
+
+  // 001-AC17
+  it("creates a script channel from one of the user's scripts", async () => {
+    const fn = mockApi({
+      "/api/v1/scripts": { items: [script(), script({ id: "s2", name: "Other" })] },
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(
+              channel({ name: "Run it", type: "script", config: { script_id: "s2" } }),
+              {
+                status: 201,
+              },
+            )
+          : Response.json({
+              items: [channel({ name: "Runs", type: "script", config: { script_id: "s1" } })],
+            }),
+    });
+    renderApp("/channels");
+    expect(await screen.findByRole("list", { name: "Channels" })).toHaveTextContent(
+      "RunsScript · runs Notify deploy",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "New channel" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Script" }));
+    expect(within(dialog).queryByLabelText(/secret|token/i)).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Run it");
+    await userEvent.selectOptions(
+      within(dialog).getByRole("combobox", { name: "Script" }),
+      "Other",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+      name: "Run it",
+      type: "script",
+      config: { script_id: "s2" },
+    });
+  });
+
+  it("points to the script editor when there is no script yet", async () => {
+    mockApi({ "/api/v1/scripts": { items: [] } });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Script" }));
+    expect(await within(dialog).findByRole("link", { name: "Write one" })).toHaveAttribute(
+      "href",
+      "/scripts/new",
+    );
+  });
+
+  // 001-AC17: a script delivery shows its run's logs, folded.
+  it("shows the logs of script deliveries", async () => {
+    mockApi({
+      "/api/v1/deliveries": {
+        items: [
+          delivery(1, {
+            channel: { id: "c9", name: "Runs", type: "script" },
+            logs: "received release.published\nreceiver answered 200",
+          }),
+          delivery(2, {
+            status: "failed",
+            channel: { id: "c9", name: "Runs", type: "script" },
+            logs: "",
+            last_error: "script error: Error: boom",
+          }),
+          delivery(3),
+        ],
+      },
+    });
+    renderApp("/channels");
+    const table = await screen.findByRole("table", { name: "Deliveries" });
+    const logs = await within(table).findByText("Logs · 2 lines");
+    const rows = within(table).getAllByRole("row");
+    await userEvent.click(logs);
+    expect(within(rows[1] as HTMLElement).getByText(/receiver answered 200/)).toBeVisible();
+    expect(rows[2]).toHaveTextContent("Logs · 0 lines");
+    expect(rows[2]).toHaveTextContent("No log line.");
+    expect(rows[2]).toHaveTextContent("script error: Error: boom");
+    expect(rows[3]).not.toHaveTextContent("Logs");
+  });
+
+  // 001-AC17: a script channel's test is a live run; its logs and error show under the card.
+  it("shows the logs of a script channel's test run", async () => {
+    let n = 0;
+    mockApi({
+      "/api/v1/channels": {
+        items: [channel({ name: "Runs", type: "script", config: { script_id: "s1" } })],
+      },
+      "/api/v1/channels/c1/test": () =>
+        ++n === 1
+          ? Response.json({ ok: true, logs: ["posted", "receiver 200"] })
+          : Response.json({ ok: false, error: "script error: Error: nope", logs: [] }),
+    });
+    renderApp("/channels");
+    const card = (await screen.findByRole("list", { name: "Channels" })).querySelector("li");
+    const run = within(card as HTMLElement).getByRole("button", { name: "Run test" });
+    await userEvent.click(run);
+    const panel = await screen.findByRole("region", { name: "Test run of Runs" });
+    expect(panel).toHaveTextContent("Live run returned");
+    expect(panel).toHaveTextContent("its http.fetch calls were sent");
+    expect(panel).toHaveTextContent("posted receiver 200");
+    expect(await screen.findByText("Test run of Runs done")).toBeInTheDocument();
+    await userEvent.click(run);
+    await waitFor(() =>
+      expect(panel).toHaveTextContent("Live run failed: script error: Error: nope"),
+    );
+    expect(panel).toHaveTextContent("No log line.");
+    await userEvent.click(within(panel).getByRole("button", { name: "Hide" }));
+    expect(screen.queryByRole("region", { name: "Test run of Runs" })).not.toBeInTheDocument();
   });
 });

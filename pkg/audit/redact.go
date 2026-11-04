@@ -22,7 +22,8 @@ var (
 	notSecret = map[string]bool{"credentialid": true, "credentialids": true}
 )
 
-func isSecretKey(k string) bool {
+// IsSecretKey reports whether a field, header or parameter name looks like it holds a secret.
+func IsSecretKey(k string) bool {
 	k = strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(k))
 	if notSecret[k] {
 		return false
@@ -67,7 +68,7 @@ func redact(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, val := range t {
-			if isSecretKey(k) {
+			if IsSecretKey(k) {
 				t[k] = Redacted
 			} else {
 				t[k] = redact(val)

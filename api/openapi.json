@@ -139,7 +139,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id; email: to; webhook: url",
+            "description": "telegram: chat_id; email: to; webhook: url; script: script_id",
             "type": "object"
           },
           "created_at": {
@@ -181,7 +181,8 @@
             "enum": [
               "telegram",
               "email",
-              "webhook"
+              "webhook",
+              "script"
             ],
             "type": "string"
           },
@@ -217,7 +218,8 @@
             "enum": [
               "telegram",
               "email",
-              "webhook"
+              "webhook",
+              "script"
             ],
             "type": "string"
           }
@@ -243,7 +245,8 @@
             "enum": [
               "telegram",
               "email",
-              "webhook"
+              "webhook",
+              "script"
             ],
             "type": "string"
           }
@@ -361,7 +364,7 @@
             "type": "string"
           },
           "secret": {
-            "description": "Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email: none",
+            "description": "Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email, script: none",
             "maxLength": 512,
             "type": "string"
           },
@@ -369,7 +372,8 @@
             "enum": [
               "telegram",
               "email",
-              "webhook"
+              "webhook",
+              "script"
             ],
             "type": "string"
           }
@@ -453,6 +457,26 @@
         ],
         "type": "object"
       },
+      "CreateScriptInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "description": "JavaScript defining function main(event, ctx); checked for syntax on save",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "type": "object"
+      },
       "CreateWatchInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -501,7 +525,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id; email: to; webhook: url",
+            "description": "telegram: chat_id; email: to; webhook: url; script: script_id",
             "type": "object"
           },
           "created_at": {
@@ -547,7 +571,8 @@
             "enum": [
               "telegram",
               "email",
-              "webhook"
+              "webhook",
+              "script"
             ],
             "type": "string"
           },
@@ -651,6 +676,13 @@
               "null"
             ]
           },
+          "logs": {
+            "description": "Script channels: the log lines of the last run",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "next_attempt_at": {
             "description": "Set while pending or failed",
             "format": "date-time",
@@ -690,11 +722,106 @@
           "attempts",
           "next_attempt_at",
           "last_error",
+          "logs",
           "sent_at",
           "created_at",
           "channel",
           "event",
           "watch"
+        ],
+        "type": "object"
+      },
+      "DryRun": {
+        "additionalProperties": false,
+        "properties": {
+          "duration_ms": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "fetches": {
+            "description": "The http.fetch calls, none of them sent; secret-looking header values redacted",
+            "items": {
+              "$ref": "#/components/schemas/Fetch"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "logs": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "description": "error: the script threw; killed: memory limit or crash",
+            "enum": [
+              "ok",
+              "error",
+              "timeout",
+              "killed"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "description": "main's return value as JSON text, 16 KiB at most",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "outcome",
+          "logs",
+          "fetches",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "DryRunInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "description": "An event the caller can read; or give sample",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sample": {
+            "$ref": "#/components/schemas/SampleEvent"
+          }
+        },
+        "type": "object"
+      },
+      "DryRunSourceInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "description": "An event the caller can read; or give sample",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sample": {
+            "$ref": "#/components/schemas/SampleEvent"
+          },
+          "source": {
+            "description": "Unsaved code to run",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
         ],
         "type": "object"
       },
@@ -806,6 +933,35 @@
           "occurred_at",
           "observed_at",
           "payload"
+        ],
+        "type": "object"
+      },
+      "Fetch": {
+        "additionalProperties": false,
+        "properties": {
+          "body_size": {
+            "description": "Request body length in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "url",
+          "headers",
+          "body_size"
         ],
         "type": "object"
       },
@@ -1122,6 +1278,25 @@
         ],
         "type": "object"
       },
+      "ListScriptsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/ScriptSummary"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListSharesOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -1416,6 +1591,147 @@
         ],
         "type": "object"
       },
+      "SampleEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "occurred_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "type": {
+            "description": "e.g. release.published",
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "watch": {
+            "$ref": "#/components/schemas/SampleWatch"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "SampleWatch": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "github_release",
+              "github_pr",
+              "gitlab_release",
+              "gitlab_mr",
+              "oci_tags"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Script": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "description": "The script channels that run it",
+            "items": {
+              "$ref": "#/components/schemas/ChannelRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "description": "Source length in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "id",
+          "name",
+          "size",
+          "channels",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ScriptSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "description": "The script channels that run it",
+            "items": {
+              "$ref": "#/components/schemas/ChannelRef"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "description": "Source length in bytes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "size",
+          "channels",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "SecretBody": {
         "additionalProperties": false,
         "properties": {
@@ -1491,8 +1807,18 @@
         "additionalProperties": false,
         "properties": {
           "error": {
-            "description": "Why the test message was not sent",
+            "description": "Why the test message was not sent; for a script, why the run failed",
             "type": "string"
+          },
+          "logs": {
+            "description": "Script channels: the log lines of the run (a live run: its fetches were sent)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "ok": {
             "type": "boolean"
@@ -1552,6 +1878,21 @@
           },
           "watch_id": {
             "description": "Empty string: all readable watches",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateScriptInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 65536,
             "type": "string"
           }
         },
@@ -3059,6 +3400,294 @@
         "summary": "Change a rule",
         "tags": [
           "rules"
+        ]
+      }
+    },
+    "/api/v1/scripts": {
+      "get": {
+        "operationId": "list-scripts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListScriptsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's scripts, without their source",
+        "tags": [
+          "scripts"
+        ]
+      },
+      "post": {
+        "operationId": "create-script",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScriptInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Script"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a script; its syntax is checked first",
+        "tags": [
+          "scripts"
+        ]
+      }
+    },
+    "/api/v1/scripts/dry-run": {
+      "post": {
+        "operationId": "dry-run-source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DryRunSourceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Run unsaved code on an event in the sandbox; http.fetch is recorded, never sent",
+        "tags": [
+          "scripts"
+        ]
+      }
+    },
+    "/api/v1/scripts/{id}": {
+      "delete": {
+        "operationId": "delete-script",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a script no channel runs",
+        "tags": [
+          "scripts"
+        ]
+      },
+      "get": {
+        "operationId": "get-script",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Script"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One of the caller's scripts",
+        "tags": [
+          "scripts"
+        ]
+      },
+      "patch": {
+        "operationId": "update-script",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateScriptInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Script"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a script's name or source",
+        "tags": [
+          "scripts"
+        ]
+      }
+    },
+    "/api/v1/scripts/{id}/dry-run": {
+      "post": {
+        "operationId": "dry-run-script",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DryRunInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRun"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Run a saved script on an event in the sandbox; http.fetch is recorded, never sent",
+        "tags": [
+          "scripts"
         ]
       }
     },

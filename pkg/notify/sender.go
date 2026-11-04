@@ -23,10 +23,12 @@ const (
 	TypeTelegram = "telegram"
 	TypeEmail    = "email"
 	TypeWebhook  = "webhook"
+	// TypeScript channels run a script in the sandbox (pkg/script), never through Send.
+	TypeScript = "script"
 )
 
 // Types lists the channel types in display order.
-var Types = []string{TypeTelegram, TypeEmail, TypeWebhook}
+var Types = []string{TypeTelegram, TypeEmail, TypeWebhook, TypeScript}
 
 // Webhook headers.
 const (

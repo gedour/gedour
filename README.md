@@ -3,7 +3,7 @@
 Self-hosted watch service: follows upstream releases, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
-Status: phase 5 (filters, rules, channels, inbox). Spec: `specs/001-gedour-v0.md`.
+Status: phase 6 (script callbacks). Spec: `specs/001-gedour-v0.md`.
 
 ## Quickstart
 
@@ -137,6 +137,38 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
   `gedour_deliveries_total{channel_type,status}`, `gedour_delivery_duration_seconds{channel_type}`,
   `gedour_sse_subscribers`.
 
+## Script channels
+
+- A script (JavaScript, [goja](https://github.com/dop251/goja), 64 KiB at most, 50 per user) defines
+  `function main(event, ctx)`. It sees `event` (`type`, `occurred_at`, `payload`, `summary`, `url`),
+  `watch` (`id`, `name`, `kind`), `rule` (`id`, `name`), `delivery_id` (also on `ctx`), `log(...)` and
+  `http.fetch(url, {method, headers, body})` → `{status, ok, headers, text}`. Nothing else: no `require`,
+  timers, filesystem, process or environment. A throw (or a missing `main`) fails the delivery, which
+  retries like any other. A delivery keeps only the logs; the return value (JSON, 16 KiB) shows in dry
+  runs. Syntax is checked on save (400 on `body.source` with line and column).
+- Each run is a child process: the binary re-executed as `gedour sandbox`, empty environment, cwd `/`,
+  JSON lines over stdin/stdout, stderr discarded. The child caps its heap (GC target 128 MiB, exit past
+  192 MiB), address space (startup size + 512 MiB), open files (16), file writes (none), CPU time
+  2 × (timeout + 2 s) (GOMAXPROCS 2, all threads), kernel SIGKILL 1 s later, and each regexp match
+  (the timeout). The parent interrupts it at 5 s (fetches
+  included) and kills it 0.5 s later, and caps its output (2 MiB a message, 8 MiB a run). A child whose
+  parent is gone, or still running 2 s past its timeout, exits by itself. Per process, deliveries run
+  4 children at once (others wait); dry runs and channel tests 2 more, a 429 when both are busy, and
+  their child dies when the client goes away.
+- `http.fetch` is made by the parent with the webhook rules: SSRF guard, https (http for
+  `GEDOUR_ALLOW_HTTP_HOSTS`), no redirect followed, 10 s, 10 calls per run, 256 KiB body, 1 MiB answer;
+  `Host`, `Content-Length` and hop-by-hop headers are refused. Logs: 200 lines, 16 KiB, stored on the
+  delivery (`logs`).
+- Dry run: the same sandbox, but `http.fetch` only records the call (URL userinfo, and the values of
+  secret-looking headers, query and fragment keys, redacted) and answers 200 with an empty body.
+  1 per second per user (burst 3, per replica), not audited.
+- A script channel's test (`POST /api/v1/channels/{id}/test`) is a live run on a test event: its
+  fetches are sent, and the answer carries its `logs` and `error`. With both interactive sandboxes
+  busy it is a 429 that neither writes an audit row nor starts the 10 s interval.
+- Script changes are audited with the source's SHA-256 and size, not the source. A script cannot be
+  deleted while a channel runs it (409 naming them).
+- Metrics: `gedour_script_runs_total{outcome=ok|error|timeout|killed}`, `gedour_script_run_duration_seconds`.
+
 ## Endpoints
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
@@ -173,9 +205,13 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
   `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 readable events in scope.
   `GET /api/v1/filters/reference`: what a filter may use, and its limits.
 - `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
+- `/api/v1/scripts` (`GET` without sources, `POST`), `/api/v1/scripts/{id}` (`GET`, `PATCH`, `DELETE`),
+  `POST /api/v1/scripts/{id}/dry-run` and `POST /api/v1/scripts/dry-run {source}`, each with
+  `{event_id}` (a readable event) or `{sample: {type, payload, occurred_at, watch}}`: answers
+  `{ok, outcome, error, logs, result, fetches, duration_ms}`.
 - `GET /api/v1/inbox?state=unread|all|archived&cursor=`, `GET /api/v1/inbox/count`,
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only), `GET /api/v1/inbox/stream`.
-- Channels, rules and deliveries are private to their owner (404 for others); their changes, channel
+- Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer
   read are hidden, and a rule's `watch_name` is null then.
 

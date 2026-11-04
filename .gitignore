@@ -1,2 +1,15 @@
 .scratchpad/
 .claude/scratchpad/
+.env
+bin/
+*.exe
+*.test
+*.out
+coverage.txt
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+web/coverage/
+web/playwright-report/
+web/test-results/
+web/playwright/.auth/

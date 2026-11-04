@@ -1,0 +1,14 @@
+# Metrics only: the worker serves no traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gedour-worker
+  labels:
+    app.kubernetes.io/component: worker
+spec:
+  selector:
+    app.kubernetes.io/component: worker
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics

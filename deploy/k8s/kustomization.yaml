@@ -1,0 +1,7 @@
+# `kubectl apply -k deploy/k8s` deploys the base into the current namespace. Overlays point at base/:
+# an overlay inside this directory could not include it (kustomize refuses the cycle).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - base

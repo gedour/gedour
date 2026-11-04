@@ -1,0 +1,31 @@
+# TEST ONLY: cmd/fakeupstream (recorded GitHub/GitLab/registry fixtures), image built by scripts/k8s-smoke.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fakeupstream
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fakeupstream
+  template:
+    metadata:
+      labels:
+        app: fakeupstream
+    spec:
+      containers:
+        - name: fakeupstream
+          image: gedour-fakeupstream:smoke
+          args: ["-addr", ":8091"]
+          ports:
+            - containerPort: 8091
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fakeupstream
+spec:
+  selector:
+    app: fakeupstream
+  ports:
+    - port: 8091

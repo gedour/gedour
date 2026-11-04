@@ -1,0 +1,91 @@
+@import "tailwindcss";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/public-sans";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Harbor = the night-blue rail; beacon = the amber lamp that marks where you are. */
+:root {
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --ink: #1a2333;
+  --muted: #566176;
+  --line: #d5dbe4;
+  --beacon: #a86e00;
+  --beacon-soft: #f8ebc8;
+  --harbor: #15203a;
+  --harbor-ink: #d4dbe8;
+  --harbor-muted: #8a96ae;
+  --harbor-line: #24314f;
+  --harbor-hover: #1e2b49;
+  --harbor-beacon: #f2b92b;
+}
+
+.dark {
+  --bg: #0e1524;
+  --surface: #141d30;
+  --ink: #e4e9f2;
+  --muted: #98a3b8;
+  --line: #26324a;
+  --beacon: #f2b92b;
+  --beacon-soft: #3a2f12;
+  --harbor: #0a101d;
+  --harbor-ink: #d4dbe8;
+  --harbor-muted: #7f8ba3;
+  --harbor-line: #1a2438;
+  --harbor-hover: #131c30;
+  --harbor-beacon: #f2b92b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-beacon: var(--beacon);
+  --color-beacon-soft: var(--beacon-soft);
+  --color-harbor: var(--harbor);
+  --color-harbor-ink: var(--harbor-ink);
+  --color-harbor-muted: var(--harbor-muted);
+  --color-harbor-line: var(--harbor-line);
+  --color-harbor-hover: var(--harbor-hover);
+  --color-harbor-beacon: var(--harbor-beacon);
+  --font-sans: "Public Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg font-sans text-ink antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--beacon);
+    outline-offset: 2px;
+  }
+}
+
+/* A new inbox item slides in and glows once; nothing moves for reduced-motion users. */
+@keyframes inbox-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    background-color: var(--beacon-soft);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility animate-arrive {
+  animation: inbox-arrive 600ms ease-out;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

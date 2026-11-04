@@ -1,0 +1,202 @@
+package auth
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
+
+	"github.com/gedour/gedour/pkg/audit"
+	"github.com/gedour/gedour/pkg/db"
+)
+
+// identity is what the provider (or dev mode) asserts about the user signing in.
+type identity struct {
+	Sub         string
+	Email       string
+	DisplayName string
+	IDToken     string // raw, empty in dev mode
+}
+
+func (s *Service) devIdentity() identity {
+	id := identity{Sub: "dev:" + s.devUser, DisplayName: s.devUser}
+	if strings.Contains(s.devUser, "@") {
+		id.Email = s.devUser
+	}
+	return id
+}
+
+func randomToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b) // crypto/rand.Read never fails (Go 1.24+)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func hashToken(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
+
+// auditID names a session in the audit log without exposing the full key.
+func auditID(id []byte) string { return hex.EncodeToString(id[:8]) }
+
+// upsertUser creates or refreshes the user keyed by the provider's sub (001-AC1).
+func upsertUser(ctx context.Context, tx pgx.Tx, who identity) (User, bool, error) {
+	var u User
+	var created bool
+	// xmax = 0 only on a freshly inserted row: tells insert from update in one statement.
+	err := tx.QueryRow(ctx, `INSERT INTO users (oidc_sub, email, display_name, last_login_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (oidc_sub) DO UPDATE SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, last_login_at = now()
+		RETURNING id::text, email, display_name, xmax = 0`, who.Sub, who.Email, who.DisplayName).
+		Scan(&u.ID, &u.Email, &u.DisplayName, &created)
+	if err != nil {
+		return User{}, false, fmt.Errorf("upsert user: %w", err)
+	}
+	return u, created, nil
+}
+
+// upsertAudited upserts the user and audits its creation, within tx.
+func upsertAudited(ctx context.Context, tx pgx.Tx, who identity) (User, error) {
+	u, created, err := upsertUser(ctx, tx, who)
+	if err != nil || !created {
+		return u, err
+	}
+	after := map[string]string{"id": u.ID, "oidc_sub": who.Sub, "email": u.Email, "display_name": u.DisplayName}
+	return u, audit.Record(ctx, tx, audit.Entry{ActorUserID: u.ID, Action: "user.created", TargetType: "user", TargetID: u.ID, After: after})
+}
+
+// devSession is the dev user without a stored session: no CSRF token, so it can read but never mutate.
+func (s *Service) devSession(ctx context.Context) (*session, error) {
+	s.devMu.Lock()
+	u := s.devAccount
+	s.devMu.Unlock()
+	if u == nil {
+		// Unlocked: a concurrent first call upserts the same row, which ON CONFLICT makes harmless.
+		var fresh User
+		err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+			var err error
+			fresh, err = upsertAudited(ctx, tx, s.devIdentity())
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+		s.devMu.Lock()
+		s.devAccount = &fresh
+		s.devMu.Unlock()
+		u = &fresh
+	}
+	return &session{User: *u}, nil
+}
+
+// purgeQuery removes a bounded batch of dead sessions; a variable so a test can make it fail.
+var purgeQuery = `DELETE FROM sessions WHERE id IN (
+	SELECT id FROM sessions WHERE expires_at <= now() OR last_seen_at <= now() - $1::interval
+	LIMIT 500 FOR UPDATE SKIP LOCKED)`
+
+// login upserts the user, replaces the request's previous session (if any) with a new one, audits it
+// and sets the session cookie.
+func (s *Service) login(ctx context.Context, w http.ResponseWriter, r *http.Request, who identity) (*session, error) {
+	token := randomToken()
+	sess := &session{id: hashToken(token), csrf: randomToken()}
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		u, err := upsertAudited(ctx, tx, who)
+		if err != nil {
+			return err
+		}
+		sess.User = u
+		if err := audit.Record(ctx, tx, audit.Entry{ActorUserID: u.ID, Action: "user.login", TargetType: "user", TargetID: u.ID,
+			After: map[string]string{"session": auditID(sess.id)}}); err != nil {
+			return err
+		}
+		// A login over a live session replaces it rather than leaving it valid alongside.
+		if old, err := r.Cookie(s.sessionCookieName()); err == nil && old.Value != "" {
+			if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, hashToken(old.Value)); err != nil {
+				return fmt.Errorf("drop previous session: %w", err)
+			}
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO sessions (id, user_id, csrf_token, id_token, expires_at) VALUES ($1, $2, $3, NULLIF($4, ''), now() + $5::interval)`,
+			sess.id, u.ID, sess.csrf, who.IDToken, s.ttl)
+		if err != nil {
+			return fmt.Errorf("insert session: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.log.Info("user_login", zap.String("user_id", sess.ID))
+	http.SetCookie(w, s.sessionCookie(token, int(s.ttl.Seconds())))
+	// Opportunistic purge, outside the login tx: logins are rare, so dead rows go without a background job.
+	if _, err := s.pool.Exec(ctx, purgeQuery, s.idle); err != nil {
+		s.log.Warn("session_purge_failed", zap.Error(err))
+	}
+	return sess, nil
+}
+
+// 001-AC3: HttpOnly, Secure (but in dev mode), SameSite=Lax.
+func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{ //nolint:gosec // Secure is off only in dev mode (plain http://localhost)
+		Name:     s.sessionCookieName(),
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   s.secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
+// current returns the request's live session, or nil when there is none or it expired; it moves the
+// idle clock.
+func (s *Service) current(r *http.Request) (*session, error) {
+	return s.lookup(r, true)
+}
+
+// lookup is current, with touch false for checks that must not count as activity.
+func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
+	c, err := r.Cookie(s.sessionCookieName())
+	if err != nil || c.Value == "" {
+		return nil, nil //nolint:nilerr // no cookie is "signed out", not an error
+	}
+	ctx := r.Context()
+	sess := &session{id: hashToken(c.Value)}
+	var stale bool
+	err = s.pool.QueryRow(ctx, `SELECT u.id::text, u.email, u.display_name, s.csrf_token, COALESCE(s.id_token, ''),
+			s.last_seen_at < now() - interval '1 minute'
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.id = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval`, sess.id, s.idle).
+		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup session: %w", err)
+	}
+	// Idle clock moves at most once a minute: no write on every request.
+	if stale && touch {
+		if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = now() WHERE id = $1`, sess.id); err != nil {
+			return nil, fmt.Errorf("touch session: %w", err)
+		}
+	}
+	return sess, nil
+}
+
+// logout deletes the session and audits it in one transaction.
+func (s *Service) logout(ctx context.Context, sess *session) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, sess.id); err != nil {
+			return fmt.Errorf("delete session: %w", err)
+		}
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: sess.ID, Action: "session.logout", TargetType: "session", TargetID: auditID(sess.id)})
+	})
+}

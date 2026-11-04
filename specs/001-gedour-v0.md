@@ -73,8 +73,10 @@ Auth and users
 
 - [ ] **AC1** With OIDC configured, an unauthenticated request to any `/api/*` route returns 401 and
   any UI route redirects to the provider login; after login a user row exists with the OIDC `sub`.
-- [ ] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request is authenticated as that user;
-  the binary refuses to start if both are set, and logs a `dev_mode_enabled` warning at startup.
+- [ ] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request on a loopback Host
+  (`localhost`, `127.0.0.1`, `::1`) is authenticated as that user and any other Host gets 403 on
+  `/api` and `/auth`; the binary refuses to start if both are set, and logs a `dev_mode_enabled`
+  warning at startup.
 - [ ] **AC3** Session cookies are `HttpOnly`, `Secure` (except dev mode), `SameSite=Lax`; state-changing
   API calls without a valid CSRF token return 403.
 
@@ -141,13 +143,15 @@ UX
 Ops and quality
 
 - [ ] **AC27** `/healthz` returns 200 when PG is reachable, 503 otherwise; `/metrics` on the metrics
-  port exposes run counts, run durations, event counts and delivery outcomes per kind/channel.
+  port exposes `gedour_build_info`.
 - [ ] **AC28** `docker compose up` brings up PG + gedour in dev mode with a working UI on a clean
   machine; `kubectl apply -k deploy/k8s` deploys 2 web + 2 worker replicas.
 - [ ] **AC29** CI runs lint, Go tests (with PG), frontend tests, Playwright e2e and the image build on
   every PR; it fails if Go coverage < 80 % or frontend coverage < 80 % (lines).
 - [ ] **AC30** The OpenAPI document is served at `/api/openapi.json` and a CI check fails if the
   handlers and the document drift.
+- [ ] **AC31** `/metrics` exposes collector run counts and durations and event counts per watch kind
+  (Phase 4), and delivery outcomes per channel type (Phase 5).
 
 ## Phases
 
@@ -172,8 +176,9 @@ Ops and quality
 
 ### Phase 3 — Watches, credentials, sharing
 - Work: CRUD API + OpenAPI for watches and credentials, encryption at rest, shares, list/detail/form
-  views with validation, empty/loading/error states.
-- **Covers**: AC4, AC5, AC6, AC24, AC30
+  views with validation, empty/loading/error states. Audit visibility widens to entries on resources
+  the user can read, and the audit view gains its actor filter (AC22).
+- **Covers**: AC4, AC5, AC6, AC22, AC24, AC30
 - **Data model impact**: `watches`, `credentials`, `watch_shares`.
 - **DoD**: API tests cover ownership matrix (owner, ro share, rw share, stranger); OpenAPI drift check
   in CI; Playwright creates/edits/deletes a watch of each kind.
@@ -181,15 +186,15 @@ Ops and quality
 ### Phase 4 — Scheduler, collectors, events
 - Work: PG queue (`next_run_at` + `FOR UPDATE SKIP LOCKED`), backoff, rate-limit handling, ETag cache,
   the 5 collectors, state store, diff → events, watch detail shows state history and events.
-- **Covers**: AC7, AC8, AC9, AC10, AC11, AC12
+- **Covers**: AC7, AC8, AC9, AC10, AC11, AC12, AC31
 - **Data model impact**: `watch_states`, `events`, scheduling columns on `watches`.
 - **DoD**: fixture tests per kind green; 2-worker exactly-once integration test green; manual run
-  against real `github.com/golang/go` releases and `docker.io/library/postgres` tags shows events.
+  against real `github.com/cli/cli` releases and `docker.io/library/postgres` tags shows events.
 
 ### Phase 5 — Filters, rules, channels, inbox
 - Work: expr filters with preview, rules, channels inbox/Telegram/SMTP/webhook, delivery worker with
   retries, SSRF guard, SSE live inbox, unread count.
-- **Covers**: AC13, AC14, AC15, AC16, AC19, AC20
+- **Covers**: AC13, AC14, AC15, AC16, AC19, AC20, AC31
 - **Data model impact**: `rules`, `rule_channels`, `channels`, `deliveries`, `inbox_items`.
 - **DoD**: delivery tests against httptest servers (webhook, Telegram API stub) and a local SMTP sink
   (mailpit in compose); SSE test across 2 web replicas.
@@ -204,14 +209,13 @@ Ops and quality
 
 ### Phase 7 — Kubernetes and hardening
 - Work: Kustomize manifests (web + worker Deployments, Service, PDB, probes, secrets refs), a11y pass,
-  mobile drawer, keyboard pass. Lab deployment on `lab-cluster`: ArgoCD app in the `gitops-repo`
-  app-of-apps, database as a `shared-pg` CNPG tenant, secrets through External Secrets
-  (`lab-secret-store`), private ingress `https://gedour.lab.example` (class `private-ingress`,
-  LAN only), OIDC client in the lab Keycloak (`idp.lab.example`, realm `apps`).
+  mobile drawer, keyboard pass. First deployment on a private lab cluster through GitOps (the
+  environment-specific overlay lives outside this repo), behind a LAN-only ingress, with an OIDC
+  client created by the operator from the callback URL.
 - **Covers**: AC26, AC28
 - **Data model impact**: none.
-- **DoD**: Argo app `gedour` Synced/Healthy with 2+2 replicas; login through `idp.lab.example` works on
-  `https://gedour.lab.example`; axe-core Playwright job green; 375 px Playwright run green.
+- **DoD**: the lab GitOps app is Synced/Healthy with 2+2 replicas; OIDC login works on the lab URL;
+  axe-core Playwright job green; 375 px Playwright run green.
 
 ## Data model impact (summary)
 
@@ -239,6 +243,5 @@ None.
   Keycloak proves the real flow, the stub keeps `go test` free of a 30 s container start.
 - Images on GHCR `ghcr.io/gedour/gedour`, multi-arch, cosign keyless — per the GitHub Actions
   standard.
-- Lab Keycloak realm `apps` (the broker realm) rather than `lab` — app clients belong on the
-  broker; change if the client should sit on `lab`.
+- The lab IdP client and its secret are created by the operator.
 - Not-shared resources return 404 — avoids leaking which watch IDs exist.

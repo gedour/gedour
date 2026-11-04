@@ -1,0 +1,4 @@
+allowBuilds:
+  esbuild: true
+patchedDependencies:
+  style-mod@4.1.4: patches/style-mod@4.1.4.patch

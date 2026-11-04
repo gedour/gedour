@@ -1,0 +1,28 @@
+diff --git a/dist/style-mod.cjs b/dist/style-mod.cjs
+index 567209b15c6e78a711208beb3c5d7c075d8cb2b5..70f7d5926c060dd4e6730da5d70151f0ffa448e2 100644
+--- a/dist/style-mod.cjs
++++ b/dist/style-mod.cjs
+@@ -84,7 +84,8 @@ var adoptedSet = new Map //<Document, StyleSet>
+ 
+ var StyleSet = function StyleSet(root, nonce) {
+   var doc = root.ownerDocument || root, win = doc.defaultView
+-  if (!root.head && root.adoptedStyleSheets && win.CSSStyleSheet) {
++  // gedour: documents adopt a constructed sheet too, so a CSP without style-src 'unsafe-inline' allows it.
++  if (root.adoptedStyleSheets && win.CSSStyleSheet) {
+     var adopted = adoptedSet.get(doc)
+     if (adopted) { return root[SET] = adopted }
+     this.sheet = new win.CSSStyleSheet
+diff --git a/src/style-mod.js b/src/style-mod.js
+index 41e4a1161cbb38af3a37f1a50eefe16654a7a860..66dc4cddfade44b8709a18e7276119658df81994 100644
+--- a/src/style-mod.js
++++ b/src/style-mod.js
+@@ -91,7 +91,8 @@ let adoptedSet = new Map //<Document, StyleSet>
+ class StyleSet {
+   constructor(root, nonce) {
+     let doc = root.ownerDocument || root, win = doc.defaultView
+-    if (!root.head && root.adoptedStyleSheets && win.CSSStyleSheet) {
++    // gedour: documents adopt a constructed sheet too, so a CSP without style-src 'unsafe-inline' allows it.
++    if (root.adoptedStyleSheets && win.CSSStyleSheet) {
+       let adopted = adoptedSet.get(doc)
+       if (adopted) return root[SET] = adopted
+       this.sheet = new win.CSSStyleSheet

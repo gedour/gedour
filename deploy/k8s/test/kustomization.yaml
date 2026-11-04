@@ -1,0 +1,54 @@
+# TEST ONLY, for scripts/k8s-smoke.sh: throwaway PostgreSQL, fake upstream, dev single-user mode and a
+# public dev key. Never deploy this overlay anywhere real.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../base
+  - postgres.yaml
+  - fakeupstream.yaml
+
+components:
+  - ../components/networkpolicy
+
+images:
+  - name: ghcr.io/gedour/gedour
+    newName: gedour
+    newTag: local
+
+configMapGenerator:
+  - name: gedour
+    behavior: merge
+    literals:
+      - GEDOUR_WORKER_POLL=1s
+      # kind's pod and service ranges; the fake upstream answers plain http.
+      - GEDOUR_ALLOW_PRIVATE_NETS=10.0.0.0/8
+      - GEDOUR_ALLOW_HTTP_HOSTS=fakeupstream
+
+secretGenerator:
+  - name: gedour
+    literals:
+      - GEDOUR_DATABASE_URL=postgres://gedour:gedour@postgres:5432/gedour?sslmode=disable
+      # Same public dev-only key as compose.yaml.
+      - GEDOUR_ENCRYPTION_KEY=ZGV2LW9ubHktZ2Vkb3VyLWtleS0zMi1ieXRlcy0hISE=
+      # Dev mode answers /api on a loopback Host only: the smoke goes through kubectl port-forward.
+      - GEDOUR_DEV_USER=dev@local
+
+patches:
+  # Images loaded with `kind load`, never pulled.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  # The fake upstream listens on 8091, not 443.
+  - target:
+      kind: NetworkPolicy
+      name: gedour
+    patch: |-
+      - op: add
+        path: /spec/egress/-
+        value:
+          ports:
+            - port: 8091

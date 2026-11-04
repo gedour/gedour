@@ -1,0 +1,86 @@
+[
+  {
+    "url": "https://api.github.com/repos/cli/cli/releases/105",
+    "html_url": "https://github.com/cli/cli/releases/tag/untagged-105",
+    "id": 105,
+    "author": {
+      "login": "github-actions[bot]",
+      "id": 41898282,
+      "type": "Bot"
+    },
+    "node_id": "RE_kwDOA105",
+    "tag_name": "v2.105.0",
+    "target_commitish": "trunk",
+    "name": "GitHub CLI 2.105.0",
+    "draft": true,
+    "immutable": false,
+    "prerelease": false,
+    "created_at": "2026-11-02T09:00:00Z",
+    "published_at": null,
+    "assets": [],
+    "body": "## What's Changed\n* ..."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/releases/104",
+    "html_url": "https://github.com/cli/cli/releases/tag/v2.104.0-rc.1",
+    "id": 104,
+    "author": {
+      "login": "github-actions[bot]",
+      "id": 41898282,
+      "type": "Bot"
+    },
+    "node_id": "RE_kwDOA104",
+    "tag_name": "v2.104.0-rc.1",
+    "target_commitish": "trunk",
+    "name": "GitHub CLI 2.104.0-rc.1",
+    "draft": false,
+    "immutable": false,
+    "prerelease": true,
+    "created_at": "2026-10-20T15:02:11Z",
+    "published_at": "2026-10-20T15:02:11Z",
+    "assets": [],
+    "body": "## What's Changed\n* ..."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/releases/102",
+    "html_url": "https://github.com/cli/cli/releases/tag/v2.103.2",
+    "id": 102,
+    "author": {
+      "login": "github-actions[bot]",
+      "id": 41898282,
+      "type": "Bot"
+    },
+    "node_id": "RE_kwDOA102",
+    "tag_name": "v2.103.2",
+    "target_commitish": "trunk",
+    "name": "GitHub CLI 2.103.2",
+    "draft": false,
+    "immutable": false,
+    "prerelease": false,
+    "created_at": "2026-10-10T18:44:52Z",
+    "published_at": "2026-10-10T18:44:52Z",
+    "assets": [],
+    "body": "## What's Changed\n* ..."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/releases/101",
+    "html_url": "https://github.com/cli/cli/releases/tag/v2.103.1",
+    "id": 101,
+    "author": {
+      "login": "github-actions[bot]",
+      "id": 41898282,
+      "type": "Bot"
+    },
+    "node_id": "RE_kwDOA101",
+    "tag_name": "v2.103.1",
+    "target_commitish": "trunk",
+    "name": "GitHub CLI 2.103.1",
+    "draft": false,
+    "immutable": false,
+    "prerelease": false,
+    "created_at": "2026-10-01T12:10:03Z",
+    "published_at": "2026-10-01T12:10:03Z",
+    "assets": [],
+    "body": "## What's Changed\n* ..."
+  }
+]

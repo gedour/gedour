@@ -1,6 +1,8 @@
 package watch
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -34,4 +36,22 @@ func parseSchedule(s string) (string, string) {
 		return "", "invalid cron expression: " + err.Error()
 	}
 	return s, ""
+}
+
+// NextRun returns when a watch on schedule is next due after now, and its nominal interval (the gap
+// between two cron activations). jitter in [-1, 1] spreads interval schedules by up to ±10 %; cron
+// schedules fire on their activation, in UTC.
+func NextRun(schedule string, now time.Time, jitter float64) (time.Time, time.Duration, error) {
+	if d, err := time.ParseDuration(schedule); err == nil {
+		if d <= 0 {
+			return time.Time{}, 0, errors.New("schedule: non-positive interval")
+		}
+		return now.Add(d + time.Duration(float64(d)*0.1*jitter)), d, nil
+	}
+	sched, err := cronParser.Parse(schedule)
+	if err != nil {
+		return time.Time{}, 0, fmt.Errorf("schedule: %w", err)
+	}
+	next := sched.Next(now.UTC())
+	return next, sched.Next(next).Sub(next), nil
 }

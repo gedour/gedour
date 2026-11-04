@@ -8,8 +8,9 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { inputClass } from "@/components/ui/field";
-import { KindIcon, PausedBadge, SharedBadge } from "@/components/WatchBits";
+import { KindIcon, PausedBadge, SharedBadge, StatusDot } from "@/components/WatchBits";
 import { describeSchedule, KINDS, targetSummary } from "@/lib/watchKinds";
+import { nextRunLabel } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
 import type { SharedFilter, Watch, WatchKind } from "@/types/api";
@@ -42,7 +43,10 @@ export function WatchesPage({ item }: { item: NavItem }) {
     queryKey: ["watches", filters],
     queryFn: () => listWatches(filters),
     placeholderData: keepPreviousData,
+    // Keeps run statuses and "next in …" current while the list stays open.
+    refetchInterval: 30_000,
   });
+  const now = new Date();
   const clear = () => {
     setQ("");
     setKind("");
@@ -163,7 +167,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
       ) : (
         <ul aria-label="Watches" className="flex flex-col gap-2">
           {query.data.map((w) => (
-            <WatchRow key={w.id} watch={w} />
+            <WatchRow key={w.id} watch={w} now={now} />
           ))}
         </ul>
       )}
@@ -171,7 +175,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
   );
 }
 
-function WatchRow({ watch }: { watch: Watch }) {
+function WatchRow({ watch, now }: { watch: Watch; now: Date }) {
   return (
     <li>
       <Link
@@ -181,6 +185,7 @@ function WatchRow({ watch }: { watch: Watch }) {
         <KindIcon kind={watch.kind} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex flex-wrap items-center gap-2">
+            <StatusDot watch={watch} />
             <span className="truncate font-medium">{watch.name}</span>
             {watch.paused && <PausedBadge />}
             <SharedBadge watch={watch} />
@@ -194,6 +199,11 @@ function WatchRow({ watch }: { watch: Watch }) {
           <Clock aria-hidden className="size-3.5" />
           <span className="font-mono">{watch.schedule}</span>
         </span>
+        {(!watch.paused || watch.running) && (
+          <span className="w-28 shrink-0 text-right text-xs text-muted">
+            {nextRunLabel(watch, now)}
+          </span>
+        )}
       </Link>
     </li>
   );

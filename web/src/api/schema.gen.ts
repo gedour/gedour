@@ -162,6 +162,23 @@ export interface paths {
     patch: operations["update-watch"];
     trace?: never;
   };
+  "/api/v1/watches/{id}/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Changes found on a watch, newest first */
+    get: operations["list-watch-events"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/watches/{id}/pause": {
     parameters: {
       query?: never;
@@ -190,6 +207,23 @@ export interface paths {
     put?: never;
     /** Resume watch */
     post: operations["resume-watch"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/watches/{id}/run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Schedule a run now */
+    post: operations["run-watch"];
     delete?: never;
     options?: never;
     head?: never;
@@ -227,6 +261,23 @@ export interface paths {
     post?: never;
     /** Stop sharing a watch with a user (owner only) */
     delete: operations["delete-watch-share"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/watches/{id}/states": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** State history of a watch, latest first (the last 50 are kept) */
+    get: operations["list-watch-states"];
+    put?: never;
+    post?: never;
+    delete?: never;
     options?: never;
     head?: never;
     patch?: never;
@@ -352,6 +403,26 @@ export interface components {
        */
       type: string;
     };
+    Event: {
+      /** Format: int64 */
+      id: number;
+      /**
+       * Format: date-time
+       * @description When gedour saw the change
+       */
+      observed_at: string;
+      /**
+       * Format: date-time
+       * @description Upstream time of the change, when the upstream gives one
+       */
+      occurred_at: string | null;
+      /** @description Per-type details: tag, from/to, url... */
+      payload: {
+        [key: string]: unknown;
+      };
+      /** @description e.g. release.published, pr.state_changed, tag.created */
+      type: string;
+    };
     Item: {
       action: string;
       /** @description Actor's display name, or email when it has none */
@@ -374,6 +445,12 @@ export interface components {
       /** @description Sorted by name */
       items: components["schemas"]["Credential"][] | null;
     };
+    ListEventsOutputBody: {
+      /** @description Newest first */
+      items: components["schemas"]["Event"][] | null;
+      /** @description Absent on the last page */
+      next_cursor?: string;
+    };
     ListOutputBody: {
       items: components["schemas"]["Item"][] | null;
       /** @description Absent on the last page */
@@ -382,6 +459,10 @@ export interface components {
     ListSharesOutputBody: {
       /** @description Sorted by email */
       items: components["schemas"]["Share"][] | null;
+    };
+    ListStatesOutputBody: {
+      /** @description Latest first; the first item is the current state */
+      items: components["schemas"]["StateSnapshot"][] | null;
     };
     ListWatchesOutputBody: {
       /** @description Sorted by name */
@@ -411,6 +492,14 @@ export interface components {
       /** Format: uuid */
       user_id: string;
     };
+    StateSnapshot: {
+      /** Format: int64 */
+      id: number;
+      /** Format: date-time */
+      observed_at: string;
+      /** @description Normalized upstream state; its shape depends on the watch kind */
+      state: unknown;
+    };
     UpdateShareInputBody: {
       /** @enum {string} */
       permission: "ro" | "rw";
@@ -431,6 +520,11 @@ export interface components {
       config: {
         [key: string]: unknown;
       };
+      /**
+       * Format: int64
+       * @description Failed runs in a row; drives the backoff
+       */
+      consecutive_failures: number;
       /** Format: date-time */
       created_at: string;
       /** Format: uuid */
@@ -439,7 +533,24 @@ export interface components {
       id: string;
       /** @enum {string} */
       kind: "github_release" | "github_pr" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+      /** @description Error or rate-limit message of the last run, up to 1 KiB */
+      last_error: string | null;
+      /**
+       * Format: date-time
+       * @description Null until the first run
+       */
+      last_run_at: string | null;
+      /**
+       * @description Outcome of the last run
+       * @enum {string|null}
+       */
+      last_status: "ok" | "error" | "rate_limited" | null;
       name: string;
+      /**
+       * Format: date-time
+       * @description When the worker runs the watch next; ignored while paused
+       */
+      next_run_at: string;
       /** Format: uuid */
       owner_id: string;
       owner_name: string;
@@ -449,6 +560,8 @@ export interface components {
        * @enum {string}
        */
       permission: "owner" | "rw" | "ro";
+      /** @description A worker holds the watch right now */
+      running: boolean;
       /** @description Go duration (1m to 168h) or 5-field cron expression */
       schedule: string;
       /** Format: date-time */
@@ -916,6 +1029,41 @@ export interface operations {
       };
     };
   };
+  "list-watch-events": {
+    parameters: {
+      query?: {
+        /** @description next_cursor of the previous page */
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListEventsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "pause-watch": {
     parameters: {
       query?: never;
@@ -960,6 +1108,37 @@ export interface operations {
     responses: {
       /** @description OK */
       200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Watch"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "run-watch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Accepted */
+      202: {
         headers: {
           [name: string]: unknown;
         };
@@ -1098,6 +1277,39 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-watch-states": {
+    parameters: {
+      query?: {
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListStatesOutputBody"];
+        };
       };
       /** @description Error */
       default: {

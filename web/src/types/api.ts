@@ -59,6 +59,14 @@ export type CredentialKind = Credential["kind"];
 export type CreateCredentialBody = Schemas["CreateCredentialInputBody"];
 export type AuditActor = Schemas["Actor"];
 export type ProblemDetail = Schemas["ErrorDetail"];
+export type WatchEvent = Schemas["Event"];
+export type StateSnapshot = Schemas["StateSnapshot"];
+export type RunStatus = NonNullable<Watch["last_status"]>;
+
+export interface EventsPage {
+  items: WatchEvent[];
+  next_cursor?: string;
+}
 
 export type SharedFilter = NonNullable<
   NonNullable<operations["list-watches"]["parameters"]["query"]>["shared"]

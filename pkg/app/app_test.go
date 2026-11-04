@@ -48,6 +48,8 @@ func cfgFor(t *testing.T, role, dbURL string) config.Config {
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Hour,
 		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		WorkerPoll:         50 * time.Millisecond,
+		WorkerConcurrency:  2,
 	}
 }
 
@@ -85,7 +87,8 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	}()
 
 	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
-	if code, body := getStatus("http://" + cfg.MetricsAddr + "/metrics"); code != http.StatusOK || !strings.Contains(body, `gedour_build_info{commit="c0ffee0",version="v9.9.9"} 1`) {
+	if code, body := getStatus("http://" + cfg.MetricsAddr + "/metrics"); code != http.StatusOK || !strings.Contains(body, `gedour_build_info{commit="c0ffee0",version="v9.9.9"} 1`) ||
+		!strings.Contains(body, "gedour_watches_due 0") {
 		t.Fatalf("metrics: %d", code)
 	}
 	if code, body := getStatus("http://" + cfg.HTTPAddr + "/"); code != http.StatusOK || body != "SPA" {
@@ -140,6 +143,20 @@ func TestRunErrors(t *testing.T) {
 		cfg := cfgFor(t, config.RoleAll, "postgres://u@h:notaport/db")
 		if err := Run(context.Background(), cfg, zap.NewNop(), server.BuildInfo{}, fstest.MapFS{}); err == nil {
 			t.Fatal("want connect error")
+		}
+	})
+	t.Run("bad private nets", func(t *testing.T) {
+		cfg := cfgFor(t, config.RoleWorker, testpg.NewDB(t))
+		cfg.AllowPrivateNets = []string{"nope"}
+		if err := Run(context.Background(), cfg, zap.NewNop(), server.BuildInfo{}, fstest.MapFS{}); err == nil || !strings.Contains(err.Error(), "allowed network") {
+			t.Fatalf("want guard error, got %v", err)
+		}
+	})
+	t.Run("bad key", func(t *testing.T) {
+		cfg := cfgFor(t, config.RoleWorker, testpg.NewDB(t))
+		cfg.EncryptionKey = "short"
+		if err := Run(context.Background(), cfg, zap.NewNop(), server.BuildInfo{}, fstest.MapFS{}); err == nil {
+			t.Fatal("want key error")
 		}
 	})
 	t.Run("port taken", func(t *testing.T) {

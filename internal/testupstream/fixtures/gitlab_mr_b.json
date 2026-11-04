@@ -1,0 +1,33 @@
+{
+  "merge_request": {
+    "id": 456789012,
+    "iid": 7764,
+    "project_id": 250833,
+    "title": "fix: return context cancellation when step-runner readiness closes",
+    "state": "merged",
+    "draft": false,
+    "work_in_progress": false,
+    "sha": "e4187f8317d622c71404c398b1aaab78e2a13a0e",
+    "merge_status": "can_be_merged",
+    "web_url": "https://gitlab.com/gitlab-org/gitlab-runner/-/merge_requests/7764",
+    "merged_at": "2026-11-03T10:00:00.000Z",
+    "head_pipeline": {
+      "id": 2101,
+      "sha": "e4187f8317d622c71404c398b1aaab78e2a13a0e",
+      "status": "success"
+    }
+  },
+  "approvals": {
+    "approved": true,
+    "approvals_required": 1,
+    "approvals_left": 0,
+    "approved_by": [
+      {
+        "user": {
+          "id": 7,
+          "username": "reviewer"
+        }
+      }
+    ]
+  }
+}

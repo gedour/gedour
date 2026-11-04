@@ -7,10 +7,12 @@ import type {
   CreateWatchBody,
   Credential,
   CredentialKind,
+  EventsPage,
   Me,
   ProblemDetail,
   Share,
   SharePermission,
+  StateSnapshot,
   UpdateWatchBody,
   VersionInfo,
   Watch,
@@ -189,6 +191,18 @@ export const updateWatch = (id: string, body: UpdateWatchBody) =>
 export const setWatchPaused = (id: string, paused: boolean) =>
   sendJSON<Watch>("POST", `${watchPath(id)}/${paused ? "pause" : "resume"}`);
 export const deleteWatch = (id: string) => sendJSON<undefined>("DELETE", watchPath(id));
+export const runWatch = (id: string) => sendJSON<Watch>("POST", `${watchPath(id)}/run`);
+
+export function listWatchEvents(id: string, cursor: string, limit = 20): Promise<EventsPage> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (cursor) q.set("cursor", cursor);
+  return getJSON<EventsPage>(`${watchPath(id)}/events?${q}`);
+}
+
+export async function listWatchStates(id: string, limit = 20): Promise<StateSnapshot[]> {
+  return (await getJSON<{ items: StateSnapshot[] }>(`${watchPath(id)}/states?limit=${limit}`))
+    .items;
+}
 
 export async function listShares(watchId: string): Promise<Share[]> {
   return (await getJSON<{ items: Share[] }>(`${watchPath(watchId)}/shares`)).items;

@@ -189,7 +189,7 @@ Ops and quality
 - **Covers**: AC7, AC8, AC9, AC10, AC11, AC12, AC31
 - **Data model impact**: `watch_states`, `events`, scheduling columns on `watches`.
 - **DoD**: fixture tests per kind green; 2-worker exactly-once integration test green; manual run
-  against real `github.com/golang/go` releases and `docker.io/library/postgres` tags shows events.
+  against real `github.com/cli/cli` releases and `docker.io/library/postgres` tags shows events.
 
 ### Phase 5 — Filters, rules, channels, inbox
 - Work: expr filters with preview, rules, channels inbox/Telegram/SMTP/webhook, delivery worker with

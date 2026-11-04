@@ -18,6 +18,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { Field, inputClass } from "@/components/ui/field";
+import { ActivityTabs, StatusCard } from "@/components/WatchActivity";
 import { KindIcon, PausedBadge, SharedBadge } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { fieldErrors, problemText } from "@/lib/problems";
@@ -89,7 +90,7 @@ function WatchDetail({ watch }: { watch: Watch }) {
     <>
       <header className="flex flex-wrap items-start gap-4">
         <KindIcon kind={watch.kind} className="size-12" />
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 flex-1 basis-52 flex-col gap-1">
           <h1 className="font-display text-3xl font-semibold tracking-tight break-words">
             {watch.name}
           </h1>
@@ -135,6 +136,9 @@ function WatchDetail({ watch }: { watch: Watch }) {
           </div>
         )}
       </header>
+
+      <StatusCard watch={watch} />
+      <ActivityTabs watch={watch} />
 
       <section className={sectionClass} aria-labelledby="config-title">
         <h2 id="config-title" className="font-display text-lg font-semibold">

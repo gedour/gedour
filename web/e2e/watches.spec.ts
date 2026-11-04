@@ -3,6 +3,9 @@ import type { Browser, Page } from "@playwright/test";
 import { BOB_AUTH_FILE } from "./auth-file";
 import { ALICE, expect, test, watchCsp } from "./fixtures";
 
+// Watches target the fake upstream: e2e never polls the real forges (scripts/e2e.sh checks the log).
+const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
+
 // Each run gets its own names: specs run in parallel against one database.
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
@@ -18,7 +21,7 @@ async function createWatch(page: Page, name: string) {
   const res = await call("POST", "/api/v1/watches", {
     name,
     kind: "github_release",
-    config: { repo: "golang/go" },
+    config: { repo: "golang/go", api_url: UPSTREAM },
   });
   expect(res.status()).toBe(201);
   return (await res.json()).id as string;
@@ -42,6 +45,7 @@ test("alice creates, edits, pauses, resumes and deletes watches of every kind", 
   await expect(page.getByText("Recognized: GitHub releases")).toBeVisible();
   await expect(page.getByRole("radio", { name: /GitHub releases/ })).toBeChecked();
   await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("golang/go");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
   await page.getByLabel("Name").fill(`Go releases ${t}`);
   await page.getByRole("button", { name: "Create watch" }).click();
   await expect(page.getByRole("heading", { level: 1, name: `Go releases ${t}` })).toBeVisible();
@@ -53,12 +57,16 @@ test("alice creates, edits, pauses, resumes and deletes watches of every kind", 
       fields: [
         ["Repository", "golang/go"],
         ["Pull request number", "1"],
+        ["API URL (optional)", UPSTREAM],
       ],
     },
     {
       kind: /GitLab releases/,
       name: `GitLab ${t}`,
-      fields: [["Project path", "gitlab-org/gitlab"]],
+      fields: [
+        ["Project path", "gitlab-org/gitlab"],
+        ["GitLab URL (optional)", UPSTREAM],
+      ],
     },
     {
       kind: /GitLab merge request/,
@@ -66,13 +74,15 @@ test("alice creates, edits, pauses, resumes and deletes watches of every kind", 
       fields: [
         ["Project path", "gitlab-org/gitlab"],
         ["Merge request number", "2"],
+        ["GitLab URL (optional)", UPSTREAM],
       ],
     },
     {
       kind: /Image tags/,
       name: `postgres ${t}`,
       fields: [
-        ["Repository", "postgres"],
+        ["Registry (optional)", UPSTREAM.replace("http://", "")],
+        ["Repository", "library/postgres"],
         ["Tag filter (optional)", "^\\d+$"],
       ],
     },
@@ -212,6 +222,7 @@ test("credentials never return their secret", async ({ page }) => {
   // Attach it to a watch: the 409 on delete names the watch.
   await page.goto("/watches/new");
   await page.getByLabel("Paste a URL").fill("https://github.com/golang/go");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
   await page.getByLabel("Name").fill(`With cred ${t}`);
   await page
     .getByLabel("Credential (optional)")

@@ -16,8 +16,14 @@ import (
 	"github.com/gedour/gedour/pkg/db"
 )
 
-// Watch is a watch as the API returns it to one viewer.
+// Watch is a watch as the API returns it to one viewer: what the user set, and the worker's view.
 type Watch struct {
+	Spec
+	Status
+}
+
+// Spec is the user-set part of a watch; the audit log records this, never the run status.
+type Spec struct {
 	ID           string         `json:"id" format:"uuid"`
 	Name         string         `json:"name"`
 	Kind         string         `json:"kind" enum:"github_release,github_pr,gitlab_release,gitlab_mr,oci_tags"`
@@ -30,6 +36,16 @@ type Watch struct {
 	Permission   string         `json:"permission" enum:"owner,rw,ro" doc:"The caller's access to this watch"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
+}
+
+// Status is the worker's view of a watch.
+type Status struct {
+	NextRunAt           time.Time  `json:"next_run_at" doc:"When the worker runs the watch next; ignored while paused"`
+	Running             bool       `json:"running" doc:"A worker holds the watch right now"`
+	LastRunAt           *time.Time `json:"last_run_at" nullable:"true" doc:"Null until the first run"`
+	LastStatus          *string    `json:"last_status" enum:"ok,error,rate_limited" nullable:"true" doc:"Outcome of the last run"`
+	LastError           *string    `json:"last_error" nullable:"true" doc:"Error or rate-limit message of the last run, up to 1 KiB"`
+	ConsecutiveFailures int        `json:"consecutive_failures" doc:"Failed runs in a row; drives the backoff"`
 }
 
 type watchOutput struct {
@@ -117,6 +133,7 @@ func (s *Service) registerWatches(api huma.API) {
 			return s.setPaused(ctx, p.op, p.action, in.ID, p.paused)
 		})
 	}
+	s.registerActivity(api)
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-watch", Method: http.MethodDelete, Path: "/api/v1/watches/{id}",
 		Summary: "Delete a watch (owner only)", Tags: tags, DefaultStatus: http.StatusNoContent,
@@ -226,7 +243,7 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 		if w, err = authorize(ctx, tx, me, id, levelOwner, false); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.created", TargetType: "watch", TargetID: id, After: w})
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.created", TargetType: "watch", TargetID: id, After: w.Spec})
 	})
 	if err != nil {
 		return nil, s.fail("create-watch", err)
@@ -294,10 +311,25 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 			WHERE id = $1`, in.ID, next.Name, next.Config, next.Schedule, next.Paused, next.CredentialID); err != nil {
 			return err
 		}
+		retargeted := !reflect.DeepEqual(next.Config, before.Config)
+		if retargeted {
+			// A new target starts from a fresh baseline: diffing it against the old one would flood events.
+			if _, err := tx.Exec(ctx, `DELETE FROM watch_states WHERE watch_id = $1`, in.ID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM http_cache WHERE watch_id = $1`, in.ID); err != nil {
+				return err
+			}
+		}
+		if retargeted || next.Schedule != before.Schedule || (before.Paused && !next.Paused) {
+			if _, err := tx.Exec(ctx, `UPDATE watches SET next_run_at = now() WHERE id = $1`, in.ID); err != nil {
+				return err
+			}
+		}
 		if after, err = authorize(ctx, tx, me, in.ID, levelRead, false); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.updated", TargetType: "watch", TargetID: in.ID, Before: before, After: after})
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.updated", TargetType: "watch", TargetID: in.ID, Before: before.Spec, After: after.Spec})
 	})
 	if err != nil {
 		return nil, s.fail("update-watch", err)
@@ -321,13 +353,15 @@ func (s *Service) setPaused(ctx context.Context, op, action, id string, paused b
 		if w = before; before.Paused == paused {
 			return nil
 		}
-		if _, err := tx.Exec(ctx, `UPDATE watches SET paused = $2, updated_at = now() WHERE id = $1`, id, paused); err != nil {
+		// Resuming runs at once rather than at a due time that passed while paused.
+		if _, err := tx.Exec(ctx, `UPDATE watches SET paused = $2, updated_at = now(),
+			next_run_at = CASE WHEN $2 THEN next_run_at ELSE now() END WHERE id = $1`, id, paused); err != nil {
 			return err
 		}
 		if w, err = authorize(ctx, tx, me, id, levelRead, false); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: action, TargetType: "watch", TargetID: id, Before: before, After: w})
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: action, TargetType: "watch", TargetID: id, Before: before.Spec, After: w.Spec})
 	})
 	if err != nil {
 		return nil, s.fail(op, err)
@@ -348,7 +382,7 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		if _, err := tx.Exec(ctx, `DELETE FROM watches WHERE id = $1`, in.ID); err != nil {
 			return err
 		}
-		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.deleted", TargetType: "watch", TargetID: in.ID, Before: before})
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.deleted", TargetType: "watch", TargetID: in.ID, Before: before.Spec})
 	})
 	if err != nil {
 		return nil, s.fail("delete-watch", err)

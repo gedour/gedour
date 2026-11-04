@@ -20,6 +20,32 @@ func valid() Config {
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Minute,
 		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		WorkerPoll:         2 * time.Second,
+		WorkerConcurrency:  8,
+	}
+}
+
+func TestValidateWorker(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"defaults", func(*Config) {}, ""},
+		{"allowlist", func(c *Config) { c.AllowPrivateNets = []string{"127.0.0.0/8", "fd00::/8"} }, ""},
+		{"bad cidr", func(c *Config) { c.AllowPrivateNets = []string{"10.0.0.0"} }, "GEDOUR_ALLOW_PRIVATE_NETS"},
+		{"zero poll", func(c *Config) { c.WorkerPoll = 0 }, "GEDOUR_WORKER_POLL"},
+		{"no concurrency", func(c *Config) { c.WorkerConcurrency = 0 }, "GEDOUR_WORKER_CONCURRENCY"},
+		{"web role ignores worker settings", func(c *Config) { c.Role, c.WorkerPoll = RoleWeb, 0 }, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := valid()
+			tt.mutate(&c)
+			err := c.Validate()
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("want %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -146,6 +172,9 @@ func TestLoad(t *testing.T) {
 		t.Fatal("worker role must run the worker only")
 	}
 
+	if c.WorkerPoll != 2*time.Second || c.WorkerConcurrency != 8 || c.AllowPrivateNets != nil {
+		t.Fatalf("worker defaults: %+v", c)
+	}
 	if c.SessionTTL != 168*time.Hour || c.SessionIdleTimeout != 24*time.Hour {
 		t.Fatalf("session defaults: %v %v", c.SessionTTL, c.SessionIdleTimeout)
 	}
@@ -159,8 +188,14 @@ func TestLoad(t *testing.T) {
 	t.Setenv("GEDOUR_SESSION_IDLE_TIMEOUT", "30m")
 	t.Setenv("GEDOUR_ENCRYPTION_KEY", "k")
 	t.Setenv("GEDOUR_ALLOW_HTTP_HOSTS", " Localhost , ,127.0.0.1")
+	t.Setenv("GEDOUR_ALLOW_PRIVATE_NETS", "127.0.0.0/8, 10.0.0.0/8")
+	t.Setenv("GEDOUR_WORKER_POLL", "500ms")
+	t.Setenv("GEDOUR_WORKER_CONCURRENCY", "3")
 	if c, err = Load(); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Join(c.AllowPrivateNets, "|") != "127.0.0.0/8|10.0.0.0/8" || c.WorkerPoll != 500*time.Millisecond || c.WorkerConcurrency != 3 {
+		t.Fatalf("worker env not read: %+v", c)
 	}
 	if c.EncryptionKey != "k" || strings.Join(c.AllowHTTPHosts, "|") != "localhost|127.0.0.1" {
 		t.Fatalf("encryption env not read: %q %q", c.EncryptionKey, c.AllowHTTPHosts)
@@ -170,7 +205,7 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("auth env not read: %+v", c)
 	}
 
-	for _, key := range []string{"GEDOUR_SHUTDOWN_TIMEOUT", "GEDOUR_SESSION_TTL", "GEDOUR_SESSION_IDLE_TIMEOUT"} {
+	for _, key := range []string{"GEDOUR_SHUTDOWN_TIMEOUT", "GEDOUR_SESSION_TTL", "GEDOUR_SESSION_IDLE_TIMEOUT", "GEDOUR_WORKER_POLL", "GEDOUR_WORKER_CONCURRENCY"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "soon")
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {

@@ -298,6 +298,45 @@
         },
         "type": "object"
       },
+      "Event": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "observed_at": {
+            "description": "When gedour saw the change",
+            "format": "date-time",
+            "type": "string"
+          },
+          "occurred_at": {
+            "description": "Upstream time of the change, when the upstream gives one",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {
+            "additionalProperties": {},
+            "description": "Per-type details: tag, from/to, url...",
+            "type": "object"
+          },
+          "type": {
+            "description": "e.g. release.published, pr.state_changed, tag.created",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "occurred_at",
+          "observed_at",
+          "payload"
+        ],
+        "type": "object"
+      },
       "Item": {
         "additionalProperties": false,
         "properties": {
@@ -372,6 +411,29 @@
         ],
         "type": "object"
       },
+      "ListEventsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "description": "Absent on the last page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -401,6 +463,25 @@
             "description": "Sorted by email",
             "items": {
               "$ref": "#/components/schemas/Share"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListStatesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Latest first; the first item is the current state",
+            "items": {
+              "$ref": "#/components/schemas/StateSnapshot"
             },
             "type": [
               "array",
@@ -512,6 +593,28 @@
         ],
         "type": "object"
       },
+      "StateSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "Normalized upstream state; its shape depends on the watch kind"
+          }
+        },
+        "required": [
+          "id",
+          "observed_at",
+          "state"
+        ],
+        "type": "object"
+      },
       "UpdateShareInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -562,6 +665,11 @@
             "description": "Per-kind settings, normalized (defaults filled)",
             "type": "object"
           },
+          "consecutive_failures": {
+            "description": "Failed runs in a row; drives the backoff",
+            "format": "int64",
+            "type": "integer"
+          },
           "created_at": {
             "format": "date-time",
             "type": "string"
@@ -587,7 +695,39 @@
             ],
             "type": "string"
           },
+          "last_error": {
+            "description": "Error or rate-limit message of the last run, up to 1 KiB",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_run_at": {
+            "description": "Null until the first run",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_status": {
+            "description": "Outcome of the last run",
+            "enum": [
+              "ok",
+              "error",
+              "rate_limited"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
+            "type": "string"
+          },
+          "next_run_at": {
+            "description": "When the worker runs the watch next; ignored while paused",
+            "format": "date-time",
             "type": "string"
           },
           "owner_id": {
@@ -608,6 +748,10 @@
               "ro"
             ],
             "type": "string"
+          },
+          "running": {
+            "description": "A worker holds the watch right now",
+            "type": "boolean"
           },
           "schedule": {
             "description": "Go duration (1m to 168h) or 5-field cron expression",
@@ -630,7 +774,13 @@
           "owner_name",
           "permission",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "next_run_at",
+          "running",
+          "last_run_at",
+          "last_status",
+          "last_error",
+          "consecutive_failures"
         ],
         "type": "object"
       }
@@ -1302,6 +1452,70 @@
         ]
       }
     },
+    "/api/v1/watches/{id}/events": {
+      "get": {
+        "operationId": "list-watch-events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "next_cursor of the previous page",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "next_cursor of the previous page",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListEventsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Changes found on a watch, newest first",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
     "/api/v1/watches/{id}/pause": {
       "post": {
         "operationId": "pause-watch",
@@ -1381,6 +1595,48 @@
           }
         },
         "summary": "Resume watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/run": {
+      "post": {
+        "operationId": "run-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Schedule a run now",
         "tags": [
           "watches"
         ]
@@ -1578,6 +1834,60 @@
         "summary": "Change a share's permission (owner only)",
         "tags": [
           "shares"
+        ]
+      }
+    },
+    "/api/v1/watches/{id}/states": {
+      "get": {
+        "operationId": "list-watch-states",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStatesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "State history of a watch, latest first (the last 50 are kept)",
+        "tags": [
+          "watches"
         ]
       }
     }

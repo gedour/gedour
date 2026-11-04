@@ -14,6 +14,12 @@ export function watch(over: Partial<Watch> = {}): Watch {
     permission: "owner",
     created_at: "2026-11-01T00:00:00Z",
     updated_at: "2026-11-01T00:00:00Z",
+    next_run_at: "2026-11-01T00:15:00Z",
+    last_run_at: null,
+    last_status: null,
+    last_error: null,
+    consecutive_failures: 0,
+    running: false,
     ...over,
   };
 }

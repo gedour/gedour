@@ -12,8 +12,12 @@ readonly DB_PORT="${E2E_DB_PORT:-55433}"
 readonly KC_PORT="${E2E_KC_PORT:-18081}"
 # Published by the keycloak service for the compose gedour-oidc app; unused here but must be free.
 readonly OIDC_APP_PORT="${E2E_OIDC_APP_PORT:-18082}"
+# Fake GitHub/GitLab/registry serving the collector fixtures (cmd/fakeupstream).
+readonly UPSTREAM_PORT="${E2E_UPSTREAM_PORT:-18091}"
 readonly BIN="${ROOT}/bin/gedour"
+readonly UPSTREAM_BIN="${ROOT}/bin/fakeupstream"
 readonly LOG="${ROOT}/bin/e2e-server.log"
+readonly UPSTREAM_LOG="${ROOT}/bin/e2e-upstream.log"
 # Origin is localhost, not 127.0.0.1: the provider redirects there and the Secure cookie is scoped to it.
 readonly BASE_URL="http://localhost:${HTTP_PORT}"
 
@@ -23,11 +27,15 @@ compose() {
 }
 
 srv=""
+upstream=""
 cleanup() {
-  if [[ -n "${srv}" ]] && kill -0 "${srv}" 2>/dev/null; then
-    kill -TERM "${srv}"
-    wait "${srv}" || true
-  fi
+  local pid
+  for pid in "${srv}" "${upstream}"; do
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      kill -TERM "${pid}"
+      wait "${pid}" || true
+    fi
+  done
   # Separate compose project: `down -v` never touches the `make dev` volume.
   compose down -v >/dev/null 2>&1 || true
 }
@@ -37,12 +45,19 @@ if [[ ! -x "${BIN}" ]]; then
   echo "missing ${BIN}: run 'make build' first" >&2
   exit 1
 fi
-for port in "${HTTP_PORT}" "${METRICS_PORT}" "${DB_PORT}" "${KC_PORT}" "${OIDC_APP_PORT}"; do
+for port in "${HTTP_PORT}" "${METRICS_PORT}" "${DB_PORT}" "${KC_PORT}" "${OIDC_APP_PORT}" "${UPSTREAM_PORT}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
-    echo "port ${port} in use: set E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT" >&2
+    echo "port ${port} in use: set E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT / E2E_UPSTREAM_PORT" >&2
     exit 1
   fi
 done
+
+if ! go -C "${ROOT}" build -o "${UPSTREAM_BIN}" ./cmd/fakeupstream; then
+  echo "could not build cmd/fakeupstream" >&2
+  exit 1
+fi
+"${UPSTREAM_BIN}" -addr "127.0.0.1:${UPSTREAM_PORT}" >"${UPSTREAM_LOG}" 2>&1 &
+upstream=$!
 
 # Keycloak's healthcheck bounds the wait (60 x 3 s); --wait-timeout caps the whole start.
 if ! compose up -d --wait --wait-timeout 300 db keycloak; then
@@ -62,6 +77,10 @@ env -u GEDOUR_DEV_USER \
   OIDC_CLIENT_ID=gedour \
   OIDC_CLIENT_SECRET=gedour-test-secret \
   GEDOUR_ENCRYPTION_KEY="$(printf 'dev-only-gedour-key-32-bytes-!!!' | base64)" \
+  GEDOUR_ALLOW_PRIVATE_NETS=127.0.0.0/8 \
+  GEDOUR_ALLOW_HTTP_HOSTS=127.0.0.1 \
+  GEDOUR_WORKER_POLL=500ms \
+  GEDOUR_LOG_LEVEL=debug \
   "${BIN}" >"${LOG}" 2>&1 &
 srv=$!
 
@@ -84,4 +103,26 @@ if [[ "${healthy}" -ne 1 ]]; then
   exit 1
 fi
 
-E2E_BASE_URL="${BASE_URL}" pnpm --dir "${ROOT}/web" exec playwright test "$@"
+status=0
+E2E_BASE_URL="${BASE_URL}" E2E_UPSTREAM_URL="http://127.0.0.1:${UPSTREAM_PORT}" pnpm --dir "${ROOT}/web" exec playwright test "$@" || status=$?
+
+# Stop the server first: the log is complete (in-flight runs drained) once it has exited.
+if ! kill -TERM "${srv}" 2>/dev/null; then
+  echo "server exited during the run:" >&2
+  tail -50 "${LOG}" >&2
+  status=1
+fi
+wait "${srv}" || true
+srv=""
+
+# Every e2e watch targets the fake upstream; a real forge in a run's hosts is a test that escaped to the internet.
+readonly REAL_HOSTS='"hosts":\[[^]]*(github\.com|gitlab\.com|docker\.io|ghcr\.io|quay\.io)'
+if grep -E "${REAL_HOSTS}" "${LOG}" >&2; then
+  echo "e2e reached a real upstream (lines above): point the watch at E2E_UPSTREAM_URL" >&2
+  status=1
+fi
+if ! grep -q '"msg":"watch_run_done"' "${LOG}"; then
+  echo "no watch_run_done in ${LOG}: the outbound-host check saw no run at all" >&2
+  status=1
+fi
+exit "${status}"

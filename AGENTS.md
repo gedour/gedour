@@ -22,7 +22,7 @@
 - Go DB tests fail when Docker is down; `GEDOUR_SKIP_DB_TESTS=1` turns that into skips (never in CI).
 - `make e2e` signs in through Keycloak (compose `oidc` profile, `deploy/keycloak/realm.json`) as `alice`;
   ports `E2E_PORT` (18080, a realm redirect URI: change both), `E2E_METRICS_PORT`, `E2E_DB_PORT`,
-  `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`. The base URL is `localhost`, never `127.0.0.1` (cookie origin).
+  `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`, `E2E_UPSTREAM_PORT` (`cmd/fakeupstream`, `POST /_fixture/a|b` switches it). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
 - Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project stores alice's
   and bob's sessions in `web/playwright/.auth/`.
 
@@ -62,6 +62,14 @@
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
+
+## Collectors
+
+- Recorded upstream fixtures live in `internal/testupstream/fixtures` (`<kind>_a.json`, `<kind>_b.json`), shared
+  by the collector tests and the e2e fake. A changed collector needs both fixtures and the expected events updated.
+- e2e watches must target `E2E_UPSTREAM_URL`: `scripts/e2e.sh` fails when a run log lists a real forge host.
+- Collector HTTP goes through the `pkg/netguard` client: tests against `httptest` (127.0.0.1) allowlist
+  `127.0.0.0/8` and list `127.0.0.1` as a plain-http host.
 
 ## Acceptance-criteria citations
 

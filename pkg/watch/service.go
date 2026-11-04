@@ -83,7 +83,8 @@ type querier interface {
 // watchSelect returns watches the viewer can read, with the viewer's permission on each.
 const watchSelect = `SELECT w.id::text, w.name, w.kind, w.config, w.credential_id::text, w.schedule, w.paused,
 		w.owner_id::text, COALESCE(NULLIF(u.display_name, ''), u.email, ''),
-		CASE WHEN w.owner_id = @viewer THEN 'owner' ELSE s.permission END, w.created_at, w.updated_at
+		CASE WHEN w.owner_id = @viewer THEN 'owner' ELSE s.permission END, w.created_at, w.updated_at,
+		w.next_run_at, COALESCE(w.leased_until > now(), false), w.last_run_at, w.last_status, w.last_error, w.consecutive_failures
 	FROM watches w JOIN users u ON u.id = w.owner_id
 	LEFT JOIN watch_shares s ON s.watch_id = w.id AND s.user_id = @viewer
 	WHERE (w.owner_id = @viewer OR s.user_id IS NOT NULL)`
@@ -92,7 +93,8 @@ func scanWatches(rows pgx.Rows) ([]Watch, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Watch, error) {
 		var w Watch
 		err := r.Scan(&w.ID, &w.Name, &w.Kind, &w.Config, &w.CredentialID, &w.Schedule, &w.Paused,
-			&w.OwnerID, &w.OwnerName, &w.Permission, &w.CreatedAt, &w.UpdatedAt)
+			&w.OwnerID, &w.OwnerName, &w.Permission, &w.CreatedAt, &w.UpdatedAt,
+			&w.NextRunAt, &w.Running, &w.LastRunAt, &w.LastStatus, &w.LastError, &w.ConsecutiveFailures)
 		return w, err
 	})
 }

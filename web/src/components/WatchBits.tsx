@@ -1,6 +1,7 @@
 import { Pause, Users } from "lucide-react";
 
 import { kindInfo, PERMISSION_LABEL } from "@/lib/watchKinds";
+import { STATUS, statusOf } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
 import type { Watch, WatchKind } from "@/types/api";
 
@@ -41,6 +42,23 @@ export function SharedBadge({ watch }: { watch: Pick<Watch, "permission" | "owne
     >
       <Users aria-hidden className="size-3" />
       Shared by {watch.owner_name || "someone"} ({watch.permission})
+    </span>
+  );
+}
+
+/** Coloured dot for the run status; the label is always in the accessible name, visible on demand. */
+export function StatusDot({
+  watch,
+  showLabel = false,
+}: {
+  watch: Pick<Watch, "paused" | "last_status">;
+  showLabel?: boolean;
+}) {
+  const s = STATUS[statusOf(watch)];
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 text-xs font-medium", s.text)}>
+      <span aria-hidden className={cn("size-2.5 shrink-0 rounded-full", s.dot)} />
+      <span className={showLabel ? undefined : "sr-only"}>{s.label}</span>
     </span>
   );
 }

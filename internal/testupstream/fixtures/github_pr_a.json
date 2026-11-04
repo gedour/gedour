@@ -1,0 +1,99 @@
+{
+  "pull": {
+    "url": "https://api.github.com/repos/cli/cli/pulls/14925",
+    "id": 3012345678,
+    "html_url": "https://github.com/cli/cli/pull/14925",
+    "number": 14925,
+    "state": "open",
+    "locked": false,
+    "title": "Preserve existing SSH connection commands",
+    "user": {
+      "login": "octocat",
+      "id": 583231,
+      "type": "User"
+    },
+    "body": "Fixes #14900",
+    "created_at": "2026-11-01T08:12:40Z",
+    "updated_at": "2026-11-03T16:20:00Z",
+    "closed_at": null,
+    "merged_at": null,
+    "requested_reviewers": [
+      {
+        "login": "maintainer",
+        "id": 9,
+        "type": "User"
+      }
+    ],
+    "requested_teams": [],
+    "draft": true,
+    "merged": false,
+    "head": {
+      "label": "octocat:ssh-cmd",
+      "ref": "ssh-cmd",
+      "sha": "2203164ed0fd16789e7d9e22679cd708a70c13c2"
+    },
+    "base": {
+      "label": "cli:trunk",
+      "ref": "trunk",
+      "sha": "9f2c1d0"
+    }
+  },
+  "reviews": [
+    {
+      "id": 1148351,
+      "user": {
+        "login": "copilot-pull-request-reviewer[bot]",
+        "id": 1,
+        "type": "User"
+      },
+      "body": "",
+      "state": "COMMENTED",
+      "submitted_at": "2026-11-01T08:20:00Z",
+      "commit_id": "x"
+    }
+  ],
+  "check_runs": {
+    "total_count": 3,
+    "check_runs": [
+      {
+        "id": 15362968,
+        "name": "lint",
+        "head_sha": "x",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-01T08:13:00Z",
+        "app": {
+          "slug": "github-actions"
+        }
+      },
+      {
+        "id": 8033287,
+        "name": "build (ubuntu-latest)",
+        "head_sha": "x",
+        "status": "in_progress",
+        "conclusion": null,
+        "started_at": "2026-11-01T08:13:00Z",
+        "app": {
+          "slug": "github-actions"
+        }
+      },
+      {
+        "id": 1036890,
+        "name": "label-external",
+        "head_sha": "x",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-01T08:13:00Z",
+        "app": {
+          "slug": "github-actions"
+        }
+      }
+    ]
+  },
+  "status": {
+    "state": "pending",
+    "sha": "2203164ed0fd16789e7d9e22679cd708a70c13c2",
+    "total_count": 0,
+    "statuses": []
+  }
+}

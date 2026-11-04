@@ -4,8 +4,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +48,13 @@ type Config struct {
 	EncryptionKey string
 	// AllowHTTPHosts are hosts a watch URL may reach over plain http (tests, lab mirrors).
 	AllowHTTPHosts []string
+	// AllowPrivateNets are CIDRs outbound requests may reach despite the SSRF guard.
+	AllowPrivateNets []string
+
+	// WorkerPoll is how often an idle worker looks for due watches.
+	WorkerPoll time.Duration
+	// WorkerConcurrency caps the runs one worker process executes at once.
+	WorkerConcurrency int
 }
 
 func getEnv(key, fallback string) string {
@@ -77,6 +86,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	poll, err := getDuration("GEDOUR_WORKER_POLL", "2s")
+	if err != nil {
+		return Config{}, err
+	}
+	concurrency, err := strconv.Atoi(getEnv("GEDOUR_WORKER_CONCURRENCY", "8"))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse GEDOUR_WORKER_CONCURRENCY: %w", err)
+	}
 	return Config{
 		Role:            getEnv("GEDOUR_ROLE", RoleAll),
 		HTTPAddr:        getEnv("GEDOUR_HTTP_ADDR", ":8080"),
@@ -95,6 +112,9 @@ func Load() (Config, error) {
 		SessionIdleTimeout: idle,
 		EncryptionKey:      os.Getenv("GEDOUR_ENCRYPTION_KEY"),
 		AllowHTTPHosts:     splitList(os.Getenv("GEDOUR_ALLOW_HTTP_HOSTS")),
+		AllowPrivateNets:   splitList(os.Getenv("GEDOUR_ALLOW_PRIVATE_NETS")),
+		WorkerPoll:         poll,
+		WorkerConcurrency:  concurrency,
 	}, nil
 }
 
@@ -126,6 +146,16 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("GEDOUR_SHUTDOWN_TIMEOUT must be positive"))
+	}
+	if c.RunsWorker() {
+		if c.WorkerPoll <= 0 || c.WorkerConcurrency < 1 {
+			errs = append(errs, errors.New("GEDOUR_WORKER_POLL must be positive and GEDOUR_WORKER_CONCURRENCY at least 1"))
+		}
+		for _, n := range c.AllowPrivateNets {
+			if _, err := netip.ParsePrefix(n); err != nil {
+				errs = append(errs, fmt.Errorf("GEDOUR_ALLOW_PRIVATE_NETS: %w", err))
+			}
+		}
 	}
 	// Both roles read credentials: web seals them, the worker opens them.
 	if _, err := secret.ParseKey(c.EncryptionKey); err != nil {

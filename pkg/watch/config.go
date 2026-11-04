@@ -56,30 +56,35 @@ const (
 	maxTagRegex      = 256
 )
 
-type githubReleaseConfig struct {
+// GitHubReleaseConfig is the normalized config of a github_release watch.
+type GitHubReleaseConfig struct {
 	Repo               string `json:"repo"`
 	IncludePrereleases bool   `json:"include_prereleases"`
 	APIURL             string `json:"api_url"`
 }
 
-type githubPRConfig struct {
+// GitHubPRConfig is the normalized config of a github_pr watch.
+type GitHubPRConfig struct {
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	APIURL string `json:"api_url"`
 }
 
-type gitlabReleaseConfig struct {
+// GitLabReleaseConfig is the normalized config of a gitlab_release watch.
+type GitLabReleaseConfig struct {
 	BaseURL string `json:"base_url"`
 	Project string `json:"project"`
 }
 
-type gitlabMRConfig struct {
+// GitLabMRConfig is the normalized config of a gitlab_mr watch.
+type GitLabMRConfig struct {
 	BaseURL string `json:"base_url"`
 	Project string `json:"project"`
 	IID     int    `json:"iid"`
 }
 
-type ociTagsConfig struct {
+// OCITagsConfig is the normalized config of an oci_tags watch.
+type OCITagsConfig struct {
 	Registry   string `json:"registry"`
 	Repository string `json:"repository"`
 	TagRegex   string `json:"tag_regex,omitempty"`
@@ -122,15 +127,15 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 	var target any
 	switch kind {
 	case KindGitHubRelease:
-		target = &githubReleaseConfig{}
+		target = &GitHubReleaseConfig{}
 	case KindGitHubPR:
-		target = &githubPRConfig{}
+		target = &GitHubPRConfig{}
 	case KindGitLabRelease:
-		target = &gitlabReleaseConfig{}
+		target = &GitLabReleaseConfig{}
 	case KindGitLabMR:
-		target = &gitlabMRConfig{}
+		target = &GitLabMRConfig{}
 	case KindOCITags:
-		target = &ociTagsConfig{}
+		target = &OCITagsConfig{}
 	default:
 		fe.base = "body.kind"
 		fe.add("", "unknown kind, want one of "+strings.Join(Kinds, ", "), kind)
@@ -140,21 +145,21 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 		return nil, fe.errs
 	}
 	switch c := target.(type) {
-	case *githubReleaseConfig:
+	case *GitHubReleaseConfig:
 		c.Repo = v.repo(c.Repo, fe)
 		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
-	case *githubPRConfig:
+	case *GitHubPRConfig:
 		c.Repo = v.repo(c.Repo, fe)
 		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
 		positive("number", c.Number, fe)
-	case *gitlabReleaseConfig:
+	case *GitLabReleaseConfig:
 		c.BaseURL = v.url("base_url", c.BaseURL, defaultGitLab, fe)
 		c.Project = project(c.Project, fe)
-	case *gitlabMRConfig:
+	case *GitLabMRConfig:
 		c.BaseURL = v.url("base_url", c.BaseURL, defaultGitLab, fe)
 		c.Project = project(c.Project, fe)
 		positive("iid", c.IID, fe)
-	case *ociTagsConfig:
+	case *OCITagsConfig:
 		ociTags(c, fe)
 	}
 	if len(fe.errs) > 0 {
@@ -252,7 +257,7 @@ func (v validator) url(field, raw, fallback string, fe *fieldErrors) string {
 	return strings.TrimRight(raw, "/")
 }
 
-func ociTags(c *ociTagsConfig, fe *fieldErrors) {
+func ociTags(c *OCITagsConfig, fe *fieldErrors) {
 	c.Registry = strings.ToLower(strings.TrimSpace(c.Registry))
 	switch c.Registry {
 	case "", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":

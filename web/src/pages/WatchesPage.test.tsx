@@ -12,6 +12,30 @@ beforeEach(() => {
 });
 
 describe("WatchesPage", () => {
+  it("shows each watch's run status and next run", async () => {
+    const soon = new Date(Date.now() + 14.5 * 60_000).toISOString();
+    mockApi({
+      "/api/v1/watches": {
+        items: [
+          watch({ id: "a", name: "A", last_status: "ok", next_run_at: soon }),
+          watch({ id: "b", name: "B", last_status: "error", next_run_at: "2020-01-01T00:00:00Z" }),
+          watch({ id: "c", name: "C", last_status: "rate_limited", next_run_at: soon }),
+          watch({ id: "d", name: "D", last_status: "ok", paused: true }),
+          watch({ id: "e", name: "E" }),
+        ],
+      },
+    });
+    renderApp("/watches");
+    const rows = within(await screen.findByRole("list", { name: "Watches" })).getAllByRole("link");
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringMatching(/^OKA.*Next in 14 minutes$/),
+      expect.stringMatching(/^ErrorB.*Due now$/),
+      expect.stringMatching(/^Rate limitedC.*Next in 14 minutes$/),
+      expect.stringMatching(/^PausedD.*15m$/),
+      expect.stringMatching(/^Pending first runE/),
+    ]);
+  });
+
   it("lists watches with kind, target, schedule and badges", async () => {
     mockApi({
       "/api/v1/watches": {

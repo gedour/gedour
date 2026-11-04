@@ -1,0 +1,30 @@
+{
+  "pages": [
+    {
+      "name": "library/postgres",
+      "tags": [
+        "10",
+        "10-alpine",
+        "17",
+        "17-alpine",
+        "17.5",
+        "17.5-alpine",
+        "17.5-bookworm",
+        "17.6",
+        "17.6-alpine"
+      ]
+    },
+    {
+      "name": "library/postgres",
+      "tags": [
+        "18.0",
+        "18.0-alpine",
+        "18.0-trixie",
+        "18.1",
+        "18.1-alpine",
+        "18.1-trixie",
+        "latest"
+      ]
+    }
+  ]
+}

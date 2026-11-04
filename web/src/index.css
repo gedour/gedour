@@ -89,3 +89,22 @@
     animation: none;
   }
 }
+
+/* A load that answers within 200 ms never shows its placeholder: a one-frame skeleton read as flicker. */
+@keyframes busy-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* In a busy table only the rows wait: its header stays put while filters reload it. */
+[aria-busy="true"]:not(table),
+table[aria-busy="true"] > tbody {
+  animation: busy-reveal 150ms ease-out 200ms both;
+  @media (prefers-reduced-motion: reduce) {
+    animation-duration: 0s;
+  }
+}

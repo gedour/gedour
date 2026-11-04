@@ -1,6 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { navigation } from "@/api/client";
 import { ME, mockApi } from "@/test/api";
@@ -12,10 +12,6 @@ async function openMenu() {
 }
 
 describe("UserMenu", () => {
-  beforeEach(() => {
-    vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-  });
-
   it("shows the signed-in user's name, email and initials", async () => {
     mockApi();
     renderApp();
@@ -29,8 +25,9 @@ describe("UserMenu", () => {
   });
 
   it("falls back to the email when there is no display name", async () => {
-    mockApi({ "/api/v1/me": { ...ME, display_name: "" } });
-    renderApp();
+    const me = { ...ME, display_name: "" };
+    mockApi({ "/api/v1/me": me });
+    renderApp("/inbox", me);
     expect(
       await screen.findByRole("button", { name: "Account: alice@example.test" }),
     ).toBeInTheDocument();
@@ -62,18 +59,11 @@ describe("UserMenu", () => {
 
   // 001-AC2: dev mode has a single user and nothing to sign out of.
   it("explains dev mode instead of offering sign-out", async () => {
-    mockApi({ "/api/v1/me": { ...ME, dev_mode: true } });
-    renderApp();
+    const me = { ...ME, dev_mode: true };
+    mockApi({ "/api/v1/me": me });
+    renderApp("/inbox", me);
     const menu = await openMenu();
     expect(menu).toHaveTextContent("Dev mode");
     expect(screen.queryByRole("menuitem", { name: "Sign out" })).not.toBeInTheDocument();
-  });
-
-  it("offers to sign in when the user cannot be loaded", async () => {
-    mockApi({ "/api/v1/me": () => Response.json({}, { status: 401 }) });
-    renderApp("/watches");
-    const link = await screen.findByRole("link", { name: "Sign in" });
-    expect(link).toHaveAttribute("href", "/auth/login?return_to=%2F");
-    expect(navigation.toLogin).toHaveBeenCalled();
   });
 });

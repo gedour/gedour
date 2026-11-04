@@ -33,8 +33,8 @@
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
   `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook targets).
-- Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project stores alice's
-  and bob's sessions in `web/playwright/.auth/`.
+- Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project signs alice and
+  bob in from the gate (`signInFromGate`) and stores their sessions in `web/playwright/.auth/`.
 
 ## Go tests without a frontend build
 
@@ -66,11 +66,13 @@
   Never edit an applied migration; add a new numbered file.
 - Version vars are injected with `-X 'main.<Var>=…'` (never the import path).
 - Frontend: `fetch` only in `web/src/api/`; API resource types come from `schema.gen.ts` (via `types/api.ts`); UI primitives in `web/src/components/ui` (shadcn-style, Radix).
-- Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`,
-  `gedour.login.redirectedAt` (login redirect loop guard).
+- Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`.
+- One auth state: a 401 from `request()` or the stream's `signed_out` sets `auth` (`api/client.ts`) and
+  `AuthGate` swaps the app for `SignInGate`. Only `api/client.ts` may navigate by script; app code
+  signs out with `signOut()`, `navigation` is a test seam (ESLint `no-restricted-*`, see `src/lint.test.ts`). `renderApp(path, me)` starts signed in as `me`; `null` boots through the gate.
 - Auth: `auth.Guard` puts every `/api` path behind a session, except those in its `publicAPI` set; mutations
   need `X-CSRF-Token`. Frontend calls go through `web/src/api/client.ts`, which adds it.
-- `/auth/signed-out` is an SPA route outside the shell that must never call the API (a 401 would re-login).
+- `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).

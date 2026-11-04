@@ -1,14 +1,17 @@
 package auth
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -33,6 +36,27 @@ type stubProvider struct {
 	// discoveryDelay slows the metadata endpoint, like a sluggish IdP; discoveries counts its hits.
 	discoveryDelay time.Duration
 	discoveries    atomic.Int32
+	// tokenStatus, when set, makes /token answer that status with tokenBody (JSON), like a broken endpoint.
+	tokenStatus int
+	tokenBody   string
+	// authorizeStatus, when set, is /authorize's answer, like a provider in an outage; probeDelay slows
+	// the parameterless calls (probes), probes counts them.
+	authorizeStatus int
+	probeDelay      time.Duration
+	probes          atomic.Int32
+	// probeRedirect sends parameterless calls elsewhere, like a provider redirecting to its login page.
+	probeRedirect string
+	// authorizeURL replaces the advertised authorization endpoint, like one on another host.
+	authorizeURL string
+	// tokenStall makes /token send its headers and part of the body, then stall this long.
+	tokenStall time.Duration
+	// tokenStallParams refuses the Basic auth attempt at once (401), then stalls the params attempt
+	// oauth2 retries with, after its headers and part of its body.
+	tokenStallParams time.Duration
+	// jwksStall delays the key set, like a provider stalling the ID token check.
+	jwksStall time.Duration
+	// conns counts the connections opened to the provider.
+	conns atomic.Int32
 
 	mu    sync.Mutex
 	codes map[string]authRequest
@@ -57,7 +81,7 @@ func newStub(t *testing.T) *stubProvider {
 		time.Sleep(p.discoveryDelay)
 		meta := map[string]any{
 			"issuer":                                p.URL,
-			"authorization_endpoint":                p.URL + "/authorize",
+			"authorization_endpoint":                cmp.Or(p.authorizeURL, p.URL+"/authorize"),
 			"token_endpoint":                        p.URL + "/token",
 			"jwks_uri":                              p.URL + "/jwks",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
@@ -67,11 +91,32 @@ func newStub(t *testing.T) *stubProvider {
 		}
 		_ = json.NewEncoder(w).Encode(meta)
 	})
-	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(p.jwksStall):
+		case <-r.Context().Done():
+			return
+		}
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}})
 	})
 	mux.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		if p.authorizeStatus != 0 {
+			w.WriteHeader(p.authorizeStatus)
+			return
+		}
+		if q.Get("redirect_uri") == "" && p.probeRedirect != "" {
+			p.probes.Add(1)
+			http.Redirect(w, r, p.probeRedirect, http.StatusFound)
+			return
+		}
+		if q.Get("redirect_uri") == "" {
+			p.probes.Add(1)
+			time.Sleep(p.probeDelay)
+			// A login-page-sized answer: connection reuse must hold for a real body, not an empty one.
+			http.Error(w, strings.Repeat("missing parameters ", 160), http.StatusBadRequest)
+			return
+		}
 		code := randomToken()
 		p.mu.Lock()
 		p.seen = q
@@ -80,12 +125,45 @@ func newStub(t *testing.T) *stubProvider {
 		http.Redirect(w, r, q.Get("redirect_uri")+"?code="+code+"&state="+url.QueryEscape(q.Get("state")), http.StatusFound) //nolint:gosec // test provider, redirect_uri checked at /token
 	})
 	mux.HandleFunc("POST /token", p.token)
-	p.Server = httptest.NewServer(mux)
+	p.Server = httptest.NewUnstartedServer(mux)
+	p.Config.ConnState = func(_ net.Conn, st http.ConnState) {
+		if st == http.StateNew {
+			p.conns.Add(1)
+		}
+	}
+	p.Start()
 	t.Cleanup(p.Close)
 	return p
 }
 
 func (p *stubProvider) token(w http.ResponseWriter, r *http.Request) {
+	stall := p.tokenStall
+	if p.tokenStallParams != 0 {
+		if _, _, basic := r.BasicAuth(); basic {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid_client"}`))
+			return
+		}
+		stall = p.tokenStallParams
+	}
+	if stall != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"access_token":"at",`))
+		w.(http.Flusher).Flush()
+		select {
+		case <-time.After(stall):
+		case <-r.Context().Done():
+		}
+		return
+	}
+	if p.tokenStatus != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(p.tokenStatus)
+		_, _ = w.Write([]byte(p.tokenBody))
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return

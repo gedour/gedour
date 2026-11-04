@@ -1,22 +1,41 @@
 import { CSRF_PROBLEM_TITLE } from "../src/api/client";
-import { ALICE, BOB, expect, signInAtProvider, test } from "./fixtures";
+import { ALICE, BOB, expect, gate, signInAtProvider, signInFromGate, test } from "./fixtures";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  // 001-AC1: without a session the API is 401 and a UI route goes to the provider, then back.
-  test("unauthenticated API is 401, UI goes through the provider login", async ({
+  // 001-AC1: without a session the API is 401 and a UI route goes through the provider, then back.
+  // 002-AC1 / 002-AC2: the gate comes first, alone, calling only /api/v1/me; "Sign in" returns to the
+  // URL first requested, fragment included.
+  test("unauthenticated API is 401, UI shows the gate, then the provider login", async ({
     page,
     request,
+    baseURL,
   }) => {
     const res = await request.get("/api/v1/me");
     expect(res.status()).toBe(401);
     expect(res.headers()["content-type"]).toContain("application/problem+json");
     expect((await request.get("/api/v1/version")).status()).toBe(200);
 
-    await page.goto("/audit?from=x");
-    await signInAtProvider(page, ALICE);
-    await expect(page).toHaveURL(/\/audit\?from=x$/);
+    const apiCalls: string[] = [];
+    const origin = new URL(baseURL ?? "http://localhost").origin;
+    page.on("request", (r) => {
+      const u = new URL(r.url());
+      if (u.origin === origin && u.pathname.startsWith("/api/")) apiCalls.push(u.pathname);
+    });
+    await page.goto("/audit?from=x#top");
+    await expect(gate(page)).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("complementary", { name: "Sidebar" })).toHaveCount(0);
+    await expect(page.getByRole("banner")).toHaveCount(0);
+    expect(new Set(apiCalls)).toEqual(new Set(["/api/v1/me"]));
+    await expect(page.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+      "href",
+      "/auth/login?return_to=%2Faudit%3Ffrom%3Dx%23top",
+    );
+
+    await signInFromGate(page, ALICE);
+    await expect(page).toHaveURL(/\/audit\?from=x#top$/);
     await expect(page.getByRole("button", { name: `Account: ${ALICE.name}` })).toBeVisible();
   });
 
@@ -24,7 +43,7 @@ test.describe("signed out", () => {
   // session, and lands on a page that stays signed out.
   test("sign out ends the session at gedour and at the provider", async ({ page }) => {
     await page.goto("/inbox");
-    await signInAtProvider(page, BOB);
+    await signInFromGate(page, BOB);
     const account = page.getByRole("button", { name: `Account: ${BOB.name}` });
     await expect(account).toBeVisible();
 

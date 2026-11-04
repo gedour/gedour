@@ -49,11 +49,16 @@ export interface StreamHandlers {
   onCount: (unread: number) => void;
   /** The stream dropped (once per drop): refetch, something may have arrived meanwhile. */
   onDrop: () => void;
+  /** Any stream error may be the session ending: check it (002-AC4); throttled to SESSION_CHECK_MS. */
+  onSessionCheck: () => void;
   /** The session ended while streaming. */
   onSignedOut: () => void;
 }
 
 export const STREAM_URL = "/api/v1/inbox/stream";
+
+// The browser's own retries keep erroring every few seconds while a session is gone or the server down.
+export const SESSION_CHECK_MS = 30_000;
 
 // EventSource.CLOSED as a literal: this module also loads where the global is missing (jsdom).
 const CLOSED = 2;
@@ -71,6 +76,7 @@ export function connectInbox(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   let dropped = false;
+  let lastCheck = -Infinity;
   const connect = () => {
     es = open(STREAM_URL);
     es.addEventListener("inbox", (e) => {
@@ -87,6 +93,11 @@ export function connectInbox(
     es.onerror = () => {
       if (!dropped) h.onDrop();
       dropped = true;
+      // Native retries stay CONNECTING and may never reach CLOSED: check on any error, not on refusals.
+      if (!stopped && Date.now() - lastCheck >= SESSION_CHECK_MS) {
+        lastCheck = Date.now();
+        h.onSessionCheck();
+      }
       if (es?.readyState !== CLOSED || stopped) return;
       timer = setTimeout(connect, reconnectDelay(attempt++));
     };

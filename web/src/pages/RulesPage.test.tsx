@@ -1,17 +1,12 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { channel, preview, rule } from "@/test/routing";
 import { lastCall, pending, problem, watch } from "@/test/watches";
 import type { Rule } from "@/types/api";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 const filterProblem = (line: number, column: number, message = "unexpected token EOF") =>
   problem(400, "invalid filter", [

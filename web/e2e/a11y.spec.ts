@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, SEED, test } from "./fixtures";
+import { api, expect, gate, SEED, test } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, reducedMotion: "reduce" });
 
@@ -86,6 +86,29 @@ for (const theme of ["light", "dark"] as const) {
       await page.goto("/auth/signed-out");
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       expect(await violations(page)).toEqual([]);
+    });
+
+    test.describe("without a session", () => {
+      test.use({ storageState: { cookies: [], origins: [] } });
+
+      // 002-AC8: the sign-in gate, with and without a reason.
+      test("the sign-in gate has no serious axe violation", async ({ page }) => {
+        const found: Record<string, string[]> = {};
+        for (const [path, heading] of [
+          ["/inbox", "Sign in to continue"],
+          ["/inbox?auth=unavailable", "Sign-in service unavailable"],
+          ["/inbox?auth=failed", "Sign-in failed, try again"],
+        ] as const) {
+          await page.goto(path);
+          await expect(gate(page, heading)).toBeVisible();
+          found[path] = await violations(page);
+        }
+        expect(found).toEqual({
+          "/inbox": [],
+          "/inbox?auth=unavailable": [],
+          "/inbox?auth=failed": [],
+        });
+      });
     });
   });
 }

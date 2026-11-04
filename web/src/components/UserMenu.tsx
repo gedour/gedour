@@ -1,7 +1,7 @@
-import { LogOut, UserRound } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { useState } from "react";
 
-import { logout, navigation } from "@/api/client";
+import { signOut as endSession } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,31 +13,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useMe } from "@/hooks/useMe";
 import { initials } from "@/lib/utils";
+import type { Me } from "@/types/api";
 
 export function UserMenu() {
-  const { data: me, isPending, isError } = useMe();
+  // AuthGate renders the shell only once the user is loaded.
+  const me = useMe().data as Me;
   const [error, setError] = useState(false);
-
-  if (isPending) {
-    return <span aria-hidden className="size-8 animate-pulse rounded-full bg-harbor-hover" />;
-  }
-  if (isError) {
-    return (
-      <Button variant="harbor" asChild>
-        <a href={`/auth/login?return_to=${encodeURIComponent(window.location.pathname)}`}>
-          <UserRound aria-hidden />
-          Sign in
-        </a>
-      </Button>
-    );
-  }
 
   const name = me.display_name || me.email || "Signed in";
   const signOut = async () => {
     setError(false);
     try {
       // The provider ends its own session too, then returns to the signed-out page.
-      navigation.go(await logout());
+      await endSession();
     } catch {
       setError(true);
     }

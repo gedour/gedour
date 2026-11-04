@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, SEED, test, UPSTREAM } from "./fixtures";
+import { api, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, hasTouch: true });
 
@@ -57,6 +57,24 @@ test("main views fit 375 px", async ({ page }) => {
   await page.goto("/auth/signed-out");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+test.describe("without a session", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  // 002-AC8: the sign-in gate fits 375 px and its action is reachable by touch.
+  test("the sign-in gate fits 375 px", async ({ page }) => {
+    for (const [path, heading] of [
+      ["/watches/new", "Sign in to continue"],
+      ["/inbox?auth=unavailable", "Sign-in service unavailable"],
+    ] as const) {
+      await page.goto(path);
+      await expect(gate(page, heading)).toBeVisible();
+      await expect(page.getByRole("link", { name: /^(Sign in|Try again)$/ })).toBeInViewport();
+      await expectNoHorizontalScroll(page);
+      await shot(page, `gate-${heading.split(" ")[0]?.toLowerCase()}`);
+    }
+  });
 });
 
 // 001-AC26: the sidebar is a drawer, a watch is created, the inbox detail is a dialog.

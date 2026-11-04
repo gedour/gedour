@@ -1,18 +1,13 @@
 import { EditorView } from "@codemirror/view";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { preview, script } from "@/test/routing";
 import { lastCall, pending, problem } from "@/test/watches";
 import type { DryRun } from "@/types/api";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 function editor(): EditorView {
   const v = EditorView.findFromDOM(document.querySelector(".cm-content") as HTMLElement);

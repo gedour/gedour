@@ -73,6 +73,15 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
 - Valid post logout redirect URIs: `<GEDOUR_PUBLIC_URL>/auth/signed-out` (without it, sign-out stops on
   the provider's error page)
 
+Without a session the UI shows a sign-in gate and calls nothing but `/api/v1/me`; "Sign in" goes to the
+provider and back to the page first asked for. A session that ends later (any 401, or the inbox stream
+signing out) brings the gate back. Before sending the browser to the provider, `/auth/login` checks that
+its authorization endpoint answers (3 s timeout, one check shared by concurrent logins; skipped when that
+endpoint is on another host or port than the issuer); when it does not, or the callback's token or key fetch gets
+no answer within 10 s, the gate shows "Sign-in service unavailable". A rejected callback (state, code, ID token,
+session write) shows "Sign-in failed, try again". Dev mode signs in by itself and never renders the gate;
+a failed dev sign-in answers a plain 500.
+
 ## Collection
 
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
@@ -314,7 +323,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - `GET /livez` (metrics port only): 200 while the process serves, whatever PostgreSQL does.
 - `GET /api/openapi.json`: OpenAPI document.
 - `GET /api/v1/version`: build information.
-- `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow.
+- `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow. On failure both answer 303 to
+  `return_to` (`/` when unknown) with `auth=unavailable` (provider or token endpoint unreachable) or
+  `auth=failed` added; the rest of `return_to`, fragment included, is kept as sent.
 - `POST /auth/logout` (with `X-CSRF-Token`): ends the session and answers `{"redirect": "<url>"}`, the
   provider's `end_session_endpoint` (so its session ends too), or `/auth/signed-out` when it has none.
 - `GET /api/v1/me`: current user and the CSRF token to send as `X-CSRF-Token` on every non-GET call.

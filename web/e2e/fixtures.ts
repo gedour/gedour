@@ -53,6 +53,17 @@ export async function signInAtProvider(page: Page, user: { username: string; pas
   await page.getByRole("button", { name: /^sign in$/i }).click();
 }
 
+/** The full-screen sign-in gate (002-AC1); name is its heading, which depends on the reason. */
+export const gate = (page: Page, name: string | RegExp = "Sign in to continue") =>
+  page.getByRole("heading", { level: 1, name });
+
+/** Clicks "Sign in" on the gate, then signs in at the provider. */
+export async function signInFromGate(page: Page, user: { username: string; password: string }) {
+  await expect(gate(page)).toBeVisible();
+  await page.getByRole("link", { name: "Sign in" }).click();
+  await signInAtProvider(page, user);
+}
+
 // Watches target the fake upstream that scripts/e2e.sh starts; e2e never polls the real forges.
 export const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
 

@@ -3,8 +3,8 @@
 # PostgreSQL started only once gedour waits for it, then checks 2 web + 2 worker pods ready without a restart,
 # /healthz through the Services, a sandboxed script dry run on web, and a watch run plus a script delivery on
 # a worker. Then `docker compose up` on a clean project serves the dev UI.
-# Needs the image from `make docker-build` (gedour:local). Every cluster, container and image it builds is
-# removed; the public postgres image it may pull is kept (compose and the Go tests use it too).
+# Needs the image from `make docker-build` (gedour:local). Every cluster, container and image it creates is
+# removed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -91,15 +91,16 @@ COPY fakeupstream /fakeupstream
 ENTRYPOINT ["/fakeupstream"]
 EOF
 
-# Preloaded: a registry pull inside kind, started only when postgres is scaled up, ran past the rollout timeout.
 [[ -n "${PG_IMAGE}" ]] || fail "no postgres image in deploy/k8s/test/postgres.yaml"
-docker image inspect "${PG_IMAGE}" >/dev/null 2>&1 || docker pull -q "${PG_IMAGE}" >/dev/null || fail "could not pull ${PG_IMAGE}"
 
 echo "== kind cluster ${CLUSTER}"
 export KUBECONFIG="${tmpdir}/kubeconfig"
 cluster_created=1
 "${KIND}" create cluster --name "${CLUSTER}" --kubeconfig "${KUBECONFIG}" --wait 180s || fail "kind create cluster failed"
-"${KIND}" load docker-image --name "${CLUSTER}" "${IMAGE}" "${FAKE_IMAGE}" "${PG_IMAGE}" || fail "kind load failed"
+"${KIND}" load docker-image --name "${CLUSTER}" "${IMAGE}" "${FAKE_IMAGE}" || fail "kind load failed"
+# Pulled by the node up front: left to the scale-up, the registry pull ran past the rollout timeout. Not kind-loaded:
+# a runner's partial multi-platform index fails `ctr import --all-platforms`.
+docker exec "${CLUSTER}-control-plane" crictl pull "${PG_IMAGE}" >/dev/null || fail "node could not pull ${PG_IMAGE}"
 
 echo "== deploy"
 kubectl kustomize "${ROOT}/deploy/k8s" >/dev/null || fail "deploy/k8s does not render"

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { cn, readStorage, writeStorage } from "@/lib/utils";
+import { cn, initials, readStorage, writeStorage } from "@/lib/utils";
 
 describe("storage helpers", () => {
   it("round-trips a value", () => {
@@ -23,5 +23,17 @@ describe("storage helpers", () => {
 describe("cn", () => {
   it("lets the later Tailwind class win", () => {
     expect(cn("px-2", false, "px-4")).toBe("px-4");
+  });
+});
+
+describe("initials", () => {
+  it.each([
+    ["Ada Lovelace", "AL"],
+    ["dev@local", "DL"],
+    ["alice", "AL"],
+    ["first.last@x", "FL"],
+    ["", "?"],
+  ])("%s → %s", (name, want) => {
+    expect(initials(name)).toBe(want);
   });
 });

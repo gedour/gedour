@@ -4,19 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOBILE_QUERY } from "@/components/AppShell";
 import { COLLAPSED_KEY, SIDEBAR_MAX, SIDEBAR_MIN, WIDTH_KEY } from "@/hooks/useSidebar";
+import { mockApi } from "@/test/api";
 import { setMedia } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-const VERSION = {
-  version: "v1.2.3",
-  commit: "abc1234def",
-  build_timestamp: "",
-  builder: "",
-  project_url: "",
-};
-
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(VERSION)));
+  mockApi();
 });
 
 const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });

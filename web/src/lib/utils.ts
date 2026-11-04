@@ -21,3 +21,9 @@ export function writeStorage(key: string, value: string): void {
     // ignored: see readStorage
   }
 }
+
+/** Two-letter avatar text: "Ada Lovelace" → "AL", "dev@local" → "DL". */
+export function initials(name: string): string {
+  const [first = "?", second] = name.split(/[\s@._-]+/).filter(Boolean);
+  return (second ? first.charAt(0) + second.charAt(0) : first.slice(0, 2)).toUpperCase();
+}

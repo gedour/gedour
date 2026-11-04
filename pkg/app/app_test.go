@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/server"
@@ -42,6 +43,10 @@ func cfgFor(t *testing.T, role, dbURL string) config.Config {
 		DatabaseURL:     dbURL,
 		LogFormat:       "json",
 		ShutdownTimeout: 5 * time.Second,
+
+		DevUser:            "dev@local",
+		SessionTTL:         time.Hour,
+		SessionIdleTimeout: time.Hour,
 	}
 }
 
@@ -73,8 +78,9 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	cfg := cfgFor(t, config.RoleAll, testpg.NewDB(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	core, logs := observer.New(zap.InfoLevel)
 	go func() {
-		done <- Run(ctx, cfg, zap.NewNop(), server.BuildInfo{Version: "v9.9.9", CommitHash: "c0ffee0"}, fstest.MapFS{"index.html": {Data: []byte("SPA")}})
+		done <- Run(ctx, cfg, zap.New(core), server.BuildInfo{Version: "v9.9.9", CommitHash: "c0ffee0"}, fstest.MapFS{"index.html": {Data: []byte("SPA")}})
 	}()
 
 	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
@@ -83,6 +89,13 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	}
 	if code, body := getStatus("http://" + cfg.HTTPAddr + "/"); code != http.StatusOK || body != "SPA" {
 		t.Fatalf("spa: %d %q", code, body)
+	}
+	// 001-AC2: dev mode is announced at startup, and the API answers as the dev user.
+	if w := logs.FilterMessage("dev_mode_enabled").All(); len(w) != 1 || w[0].Level != zap.WarnLevel {
+		t.Fatalf("dev_mode_enabled warning: %+v", w)
+	}
+	if code, body := getStatus("http://" + cfg.HTTPAddr + "/api/v1/me"); code != http.StatusOK || !strings.Contains(body, `"dev@local"`) {
+		t.Fatalf("me: %d %s", code, body)
 	}
 
 	cancel()

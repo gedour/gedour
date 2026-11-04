@@ -1,0 +1,49 @@
+{
+  "realm": "gedour-test",
+  "displayName": "gedour test realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "clients": [
+    {
+      "clientId": "gedour",
+      "name": "gedour",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "gedour-test-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:18080/auth/callback", "http://localhost:8082/auth/callback"],
+      "webOrigins": ["http://localhost:18080", "http://localhost:8082"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:18080/auth/signed-out##http://localhost:8082/auth/signed-out"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@example.test",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Liddell",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "alice", "temporary": false }]
+    },
+    {
+      "username": "bob",
+      "email": "bob@example.test",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Builder",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "bob", "temporary": false }]
+    }
+  ]
+}

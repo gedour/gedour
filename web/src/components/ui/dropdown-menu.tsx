@@ -51,3 +51,21 @@ export function DropdownMenuRadioItem({
     </Primitive.RadioItem>
   );
 }
+
+const itemClass =
+  "relative flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-beacon-soft data-[disabled]:opacity-50 [&_svg]:size-4";
+
+export function DropdownMenuItem({ className, ...props }: ComponentProps<typeof Primitive.Item>) {
+  return <Primitive.Item className={cn(itemClass, className)} {...props} />;
+}
+
+export function DropdownMenuLabel({ className, ...props }: ComponentProps<typeof Primitive.Label>) {
+  return <Primitive.Label className={cn("px-2 py-1.5 text-sm", className)} {...props} />;
+}
+
+export function DropdownMenuSeparator({
+  className,
+  ...props
+}: ComponentProps<typeof Primitive.Separator>) {
+  return <Primitive.Separator className={cn("-mx-1 my-1 h-px bg-line", className)} {...props} />;
+}

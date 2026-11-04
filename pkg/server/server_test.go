@@ -7,16 +7,32 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/gedour/gedour/pkg/auth"
+	"github.com/gedour/gedour/pkg/config"
 )
 
 var build = BuildInfo{Version: "v1.2.3", CommitHash: "abc1234", BuildTimestamp: "2026-11-04T00:00:00Z", Builder: "go1.27", ProjectURL: "https://example.test"}
+
+// newHandler serves the app with OIDC configured but no database: enough for every path that needs no session.
+func newHandler(t *testing.T, ping PingFunc, ui fs.FS) http.Handler {
+	t.Helper()
+	authn, err := auth.New(config.Config{OIDCIssuer: "http://127.0.0.1:1", OIDCClientID: "c", OIDCClientSecret: "s",
+		PublicURL: "https://app.test", SessionTTL: time.Hour, SessionIdleTimeout: time.Hour}, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(zap.NewNop(), build, ping, ui, authn, nil)
+}
 
 func pingOK(context.Context) error   { return nil }
 func pingDown(context.Context) error { return errors.New("connection refused") }
@@ -42,7 +58,7 @@ func TestHealthz(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handlers := map[string]http.Handler{
-				"main":    New(zap.NewNop(), build, tt.ping, ui),
+				"main":    newHandler(t, tt.ping, ui),
 				"metrics": Metrics(zap.NewNop(), NewRegistry(build), tt.ping),
 			}
 			for listener, h := range handlers {
@@ -71,13 +87,13 @@ func TestMetrics(t *testing.T) {
 		}
 	}
 	// /metrics must never leak onto the public listener.
-	if rec := get(t, New(zap.NewNop(), build, pingOK, fstest.MapFS{}), "/metrics"); strings.Contains(rec.Body.String(), "go_goroutines") {
+	if rec := get(t, newHandler(t, pingOK, fstest.MapFS{}), "/metrics"); strings.Contains(rec.Body.String(), "go_goroutines") {
 		t.Error("main listener serves metrics")
 	}
 }
 
 func TestAPI(t *testing.T) {
-	h := New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("<html>SPA</html>")}})
+	h := newHandler(t, pingOK, fstest.MapFS{"index.html": {Data: []byte("<html>SPA</html>")}})
 
 	t.Run("version", func(t *testing.T) {
 		rec := get(t, h, "/api/v1/version")
@@ -116,7 +132,7 @@ func TestAPI(t *testing.T) {
 				t.Errorf("%s carries $schema: %s", path, body)
 			}
 		}
-		if rec := get(t, h, "/api/schemas/BuildInfo.json"); rec.Code != http.StatusNotFound {
+		if rec := get(t, h, "/api/schemas/BuildInfo.json"); rec.Code == http.StatusOK {
 			t.Errorf("schemas endpoint still served: %d", rec.Code)
 		}
 	})
@@ -130,16 +146,19 @@ func do(t *testing.T, h http.Handler, method, path string) *httptest.ResponseRec
 }
 
 func TestRouting(t *testing.T) {
-	h := New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("<html>SPA</html>")}})
+	h := newHandler(t, pingOK, fstest.MapFS{"index.html": {Data: []byte("<html>SPA</html>")}})
 	tests := []struct {
 		method, path string
 		code         int
 		ctype        string
 		allow        string
 	}{
-		{http.MethodGet, "/api/nope", http.StatusNotFound, "application/problem+json", ""},
-		{http.MethodGet, "/api/v1/nope", http.StatusNotFound, "application/problem+json", ""},
-		{http.MethodPost, "/api/v1/nope", http.StatusNotFound, "application/problem+json", ""},
+		// 001-AC1: unknown /api paths need a session too, so they never reveal which routes exist.
+		{http.MethodGet, "/api/nope", http.StatusUnauthorized, "application/problem+json", ""},
+		{http.MethodGet, "/api/v1/nope", http.StatusUnauthorized, "application/problem+json", ""},
+		{http.MethodPost, "/api/v1/nope", http.StatusUnauthorized, "application/problem+json", ""},
+		{http.MethodGet, "/api/v1/me", http.StatusUnauthorized, "application/problem+json", ""},
+		{http.MethodGet, "/api/v1/audit", http.StatusUnauthorized, "application/problem+json", ""},
 		{http.MethodPost, "/api/v1/version", http.StatusMethodNotAllowed, "application/problem+json", "GET, HEAD"},
 		{http.MethodDelete, "/api/openapi.json", http.StatusMethodNotAllowed, "application/problem+json", "GET, HEAD"},
 		{http.MethodHead, "/api/v1/version", http.StatusOK, "application/json", ""},
@@ -147,6 +166,9 @@ func TestRouting(t *testing.T) {
 		{http.MethodHead, "/healthz", http.StatusOK, "application/json", ""},
 		{http.MethodPost, "/inbox", http.StatusMethodNotAllowed, "text/plain", "GET, HEAD"},
 		{http.MethodGet, "/inbox", http.StatusOK, "text/html", ""},
+		{http.MethodGet, "/auth/logout", http.StatusOK, "text/html", ""},
+		{http.MethodGet, "/auth/signed-out", http.StatusOK, "text/html", ""},
+		{http.MethodGet, "/auth/login", http.StatusServiceUnavailable, "text/plain", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
@@ -182,7 +204,7 @@ func TestSecurityHeaders(t *testing.T) {
 		"assets/app-a1.js":     {Data: []byte("1")},
 		"assets/font-b2.woff2": {Data: []byte("1")},
 	}
-	h := New(zap.NewNop(), build, pingOK, ui)
+	h := newHandler(t, pingOK, ui)
 	for _, path := range []string{"/", "/inbox", "/assets/app-a1.js", "/assets/font-b2.woff2", "/api/v1/version", "/api/nope", "/healthz"} {
 		t.Run(path, func(t *testing.T) {
 			hd := get(t, h, path).Header()
@@ -206,13 +228,13 @@ func TestSecurityHeaders(t *testing.T) {
 
 	// The hash follows the served script: a different script must not keep the old hash.
 	ui["index.html"] = &fstest.MapFile{Data: []byte("<script>other()</script>")}
-	if csp := get(t, New(zap.NewNop(), build, pingOK, ui), "/").Header().Get("Content-Security-Policy"); strings.Contains(csp, wantHash) {
+	if csp := get(t, newHandler(t, pingOK, ui), "/").Header().Get("Content-Security-Policy"); strings.Contains(csp, wantHash) {
 		t.Fatalf("CSP kept a stale hash: %s", csp)
 	}
 }
 
 func TestHealthzRealServer(t *testing.T) {
-	srv := httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{}))
+	srv := httptest.NewServer(newHandler(t, pingOK, fstest.MapFS{}))
 	defer srv.Close()
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/healthz", nil)
 	resp, err := srv.Client().Do(req)

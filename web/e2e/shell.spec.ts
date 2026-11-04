@@ -1,28 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-// Every test fails on a CSP violation. Collected on the Node side so reloads and navigations
-// cannot wipe them; the console listener is a second net for reports the event misses.
-let cspViolations: string[] = [];
-
-test.beforeEach(async ({ page }) => {
-  cspViolations = [];
-  await page.exposeFunction("reportCspViolation", (v: string) => cspViolations.push(v));
-  await page.addInitScript(() => {
-    document.addEventListener("securitypolicyviolation", (e) => {
-      const w = window as unknown as { reportCspViolation: (v: string) => void };
-      w.reportCspViolation(`${e.violatedDirective} ${e.blockedURI}`);
-    });
-  });
-  page.on("console", (msg) => {
-    if (msg.type() === "error" && /Content Security Policy/i.test(msg.text())) {
-      cspViolations.push(msg.text());
-    }
-  });
-});
-
-test.afterEach(() => {
-  expect(cspViolations).toEqual([]);
-});
+import { expect, test } from "./fixtures";
 
 const sidebar = (page: Page) => page.getByRole("complementary", { name: "Sidebar" });
 

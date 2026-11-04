@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/server"
@@ -34,7 +35,15 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	ping := server.PingFunc(pool.Ping)
 	servers := []*http.Server{newServer(cfg.MetricsAddr, server.Metrics(log, server.NewRegistry(build), ping))}
 	if cfg.RunsWeb() {
-		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui)))
+		authn, err := auth.New(cfg, pool, log)
+		if err != nil {
+			return err
+		}
+		if authn.DevMode() {
+			// 001-AC2: loud on purpose, dev mode must never go unnoticed in a real deployment.
+			log.Warn("dev_mode_enabled", zap.String("user", cfg.DevUser))
+		}
+		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool)))
 	}
 
 	errCh := make(chan error, len(servers))

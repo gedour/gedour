@@ -73,8 +73,10 @@ Auth and users
 
 - [ ] **AC1** With OIDC configured, an unauthenticated request to any `/api/*` route returns 401 and
   any UI route redirects to the provider login; after login a user row exists with the OIDC `sub`.
-- [ ] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request is authenticated as that user;
-  the binary refuses to start if both are set, and logs a `dev_mode_enabled` warning at startup.
+- [ ] **AC2** With `GEDOUR_DEV_USER` set and OIDC unset, every request on a loopback Host
+  (`localhost`, `127.0.0.1`, `::1`) is authenticated as that user and any other Host gets 403 on
+  `/api` and `/auth`; the binary refuses to start if both are set, and logs a `dev_mode_enabled`
+  warning at startup.
 - [ ] **AC3** Session cookies are `HttpOnly`, `Secure` (except dev mode), `SameSite=Lax`; state-changing
   API calls without a valid CSRF token return 403.
 
@@ -174,8 +176,9 @@ Ops and quality
 
 ### Phase 3 — Watches, credentials, sharing
 - Work: CRUD API + OpenAPI for watches and credentials, encryption at rest, shares, list/detail/form
-  views with validation, empty/loading/error states.
-- **Covers**: AC4, AC5, AC6, AC24, AC30
+  views with validation, empty/loading/error states. Audit visibility widens to entries on resources
+  the user can read, and the audit view gains its actor filter (AC22).
+- **Covers**: AC4, AC5, AC6, AC22, AC24, AC30
 - **Data model impact**: `watches`, `credentials`, `watch_shares`.
 - **DoD**: API tests cover ownership matrix (owner, ro share, rw share, stranger); OpenAPI drift check
   in CI; Playwright creates/edits/deletes a watch of each kind.

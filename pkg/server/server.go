@@ -3,6 +3,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -12,13 +14,27 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/gedour/gedour/pkg/audit"
+	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/webui"
 )
+
+func init() {
+	// The spec answers 400 to every invalid input (001-AC4, 001-AC22); huma defaults to 422.
+	base := huma.NewError
+	huma.NewError = func(status int, msg string, errs ...error) huma.StatusError {
+		if status == http.StatusUnprocessableEntity {
+			status = http.StatusBadRequest
+		}
+		return base(status, msg, errs...)
+	}
+}
 
 // BuildInfo describes the running binary.
 type BuildInfo struct {
@@ -36,8 +52,8 @@ type versionOutput struct {
 	Body BuildInfo
 }
 
-// New returns the main handler: /healthz, the /api surface and the SPA at /, behind security headers.
-func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS) http.Handler {
+// New returns the main handler: /healthz, /auth, the guarded /api surface and the SPA at /, behind security headers.
+func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.Service, pool *pgxpool.Pool) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", Healthz(log, ping))
 
@@ -58,6 +74,8 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS) http.Handler
 	}, func(context.Context, *struct{}) (*versionOutput, error) {
 		return &versionOutput{Body: build}, nil
 	})
+	authn.Register(api, mux)
+	audit.Register(api, pool, log, auth.UserID)
 
 	// Per-method catch-alls: a method-less "/api/" would conflict with "GET /".
 	fallback := apiFallback(api, mux)
@@ -66,7 +84,18 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS) http.Handler
 	}
 	// GET only: other methods on non-API paths get the mux's 405 instead of the SPA.
 	mux.Handle("GET /", webui.Handler(ui))
-	return secureHeaders(contentSecurityPolicy(webui.InlineScriptHashes(ui)), mux)
+	return secureHeaders(contentSecurityPolicy(webui.InlineScriptHashes(ui)), requestID(authn.Guard(mux)))
+}
+
+// requestID tags each request so its audit rows and the client's error report can be matched.
+func requestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, 12)
+		_, _ = rand.Read(b)
+		id := hex.EncodeToString(b)
+		w.Header().Set("X-Request-Id", id)
+		next.ServeHTTP(w, r.WithContext(audit.WithRequestID(r.Context(), id)))
+	})
 }
 
 var apiMethods = []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}

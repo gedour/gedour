@@ -16,6 +16,10 @@ linters:
   exclusions:
     presets:
       - std-error-handling
+    rules:
+      # Test helpers close response bodies through t.Cleanup, which bodyclose cannot follow.
+      - path: _test\.go
+        linters: [bodyclose]
 
 formatters:
   enable:

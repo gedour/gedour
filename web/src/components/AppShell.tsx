@@ -4,6 +4,7 @@ import { Outlet, useLocation } from "react-router";
 
 import { Sidebar } from "@/components/Sidebar";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { UserMenu } from "@/components/UserMenu";
 import { Wordmark } from "@/components/Wordmark";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -87,8 +88,9 @@ export function AppShell() {
             <toggle.Icon aria-hidden />
           </Button>
           <Wordmark />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
             <ThemeToggle />
+            <UserMenu />
           </div>
         </header>
         <div className="relative flex min-h-0 flex-1">

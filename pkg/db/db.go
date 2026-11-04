@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -51,4 +52,12 @@ func migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (int, error) {
 		return 0, fmt.Errorf("apply migrations: %w", err)
 	}
 	return len(results), nil
+}
+
+// InTx runs fn in a transaction: committed when fn returns nil, rolled back otherwise.
+func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	if err := pgx.BeginFunc(ctx, pool, fn); err != nil {
+		return fmt.Errorf("transaction: %w", err)
+	}
+	return nil
 }

@@ -31,7 +31,7 @@ func newHandler(t *testing.T, ping PingFunc, ui fs.FS) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(zap.NewNop(), build, ping, ui, authn, nil, testWatches(t, nil))
+	return New(zap.NewNop(), build, ping, ui, authn, nil, testWatches(t, nil), testRoutes(t, nil, testSender()))
 }
 
 func pingOK(context.Context) error   { return nil }

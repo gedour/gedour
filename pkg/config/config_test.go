@@ -22,6 +22,8 @@ func valid() Config {
 		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		WorkerPoll:         2 * time.Second,
 		WorkerConcurrency:  8,
+		TelegramAPIURL:     "https://api.telegram.org",
+		SMTPTLS:            "starttls",
 	}
 }
 
@@ -37,6 +39,8 @@ func TestValidateWorker(t *testing.T) {
 		{"zero poll", func(c *Config) { c.WorkerPoll = 0 }, "GEDOUR_WORKER_POLL"},
 		{"no concurrency", func(c *Config) { c.WorkerConcurrency = 0 }, "GEDOUR_WORKER_CONCURRENCY"},
 		{"web role ignores worker settings", func(c *Config) { c.Role, c.WorkerPoll = RoleWeb, 0 }, ""},
+		{"web role checks the allowlist too", func(c *Config) { c.Role, c.AllowPrivateNets = RoleWeb, []string{"x"} }, "GEDOUR_ALLOW_PRIVATE_NETS"},
+		{"telegram url", func(c *Config) { c.TelegramAPIURL = "api.telegram.org" }, "GEDOUR_TELEGRAM_API_URL"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := valid()
@@ -44,6 +48,39 @@ func TestValidateWorker(t *testing.T) {
 			err := c.Validate()
 			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
 				t.Fatalf("want %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateSMTP(t *testing.T) {
+	smtp := func(c *Config) { c.SMTPAddr, c.SMTPFrom = "smtp.example:587", "gedour <gedour@example.com>" }
+	for _, tt := range []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"unset", func(*Config) {}, ""},
+		{"configured", smtp, ""},
+		{"with login", func(c *Config) { smtp(c); c.SMTPUsername, c.SMTPPassword = "u", "p" }, ""},
+		{"bad tls", func(c *Config) { c.SMTPTLS = "ssl" }, "GEDOUR_SMTP_TLS"},
+		{"no port", func(c *Config) { smtp(c); c.SMTPAddr = "smtp.example" }, "GEDOUR_SMTP_ADDR"},
+		{"no from", func(c *Config) { smtp(c); c.SMTPFrom = "" }, "GEDOUR_SMTP_FROM"},
+		{"bare name from", func(c *Config) { smtp(c); c.SMTPFrom = "gedour" }, "GEDOUR_SMTP_FROM"},
+		{"half a login", func(c *Config) { smtp(c); c.SMTPUsername = "u" }, "GEDOUR_SMTP_USERNAME"},
+		{"login in clear", func(c *Config) { smtp(c); c.SMTPTLS, c.SMTPUsername, c.SMTPPassword = "none", "u", "p" }, "in clear"},
+		{"plain nets", func(c *Config) { smtp(c); c.SMTPTLS, c.SMTPPlainNets = "none", []string{"172.16.0.0/12"} }, ""},
+		{"bad plain net", func(c *Config) { smtp(c); c.SMTPPlainNets = []string{"172.16.0.0"} }, "GEDOUR_SMTP_PLAIN_NETS"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := valid()
+			tt.mutate(&c)
+			err := c.Validate()
+			if tt.wantErr == "" && err != nil || tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("want %q, got %v", tt.wantErr, err)
+			}
+			if tt.wantErr == "" && c.SMTP() != (c.SMTPAddr != "") {
+				t.Fatal("SMTP() disagrees with SMTPAddr")
 			}
 		})
 	}
@@ -175,6 +212,9 @@ func TestLoad(t *testing.T) {
 	if c.WorkerPoll != 2*time.Second || c.WorkerConcurrency != 8 || c.AllowPrivateNets != nil {
 		t.Fatalf("worker defaults: %+v", c)
 	}
+	if c.TelegramAPIURL != "https://api.telegram.org" || c.SMTPTLS != "starttls" || c.SMTP() {
+		t.Fatalf("channel defaults: %+v", c)
+	}
 	if c.SessionTTL != 168*time.Hour || c.SessionIdleTimeout != 24*time.Hour {
 		t.Fatalf("session defaults: %v %v", c.SessionTTL, c.SessionIdleTimeout)
 	}
@@ -191,11 +231,22 @@ func TestLoad(t *testing.T) {
 	t.Setenv("GEDOUR_ALLOW_PRIVATE_NETS", "127.0.0.0/8, 10.0.0.0/8")
 	t.Setenv("GEDOUR_WORKER_POLL", "500ms")
 	t.Setenv("GEDOUR_WORKER_CONCURRENCY", "3")
+	t.Setenv("GEDOUR_TELEGRAM_API_URL", "http://127.0.0.1:1")
+	t.Setenv("GEDOUR_SMTP_ADDR", "mail:25")
+	t.Setenv("GEDOUR_SMTP_USERNAME", "su")
+	t.Setenv("GEDOUR_SMTP_PASSWORD", "sp")
+	t.Setenv("GEDOUR_SMTP_FROM", "g@x.test")
+	t.Setenv("GEDOUR_SMTP_TLS", "none")
+	t.Setenv("GEDOUR_SMTP_PLAIN_NETS", "10.0.0.0/8, 172.16.0.0/12")
 	if c, err = Load(); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(c.AllowPrivateNets, "|") != "127.0.0.0/8|10.0.0.0/8" || c.WorkerPoll != 500*time.Millisecond || c.WorkerConcurrency != 3 {
 		t.Fatalf("worker env not read: %+v", c)
+	}
+	if c.TelegramAPIURL != "http://127.0.0.1:1" || c.SMTPAddr != "mail:25" || c.SMTPUsername != "su" || c.SMTPPassword != "sp" ||
+		c.SMTPFrom != "g@x.test" || c.SMTPTLS != "none" || strings.Join(c.SMTPPlainNets, "|") != "10.0.0.0/8|172.16.0.0/12" {
+		t.Fatalf("channel env not read: %+v", c)
 	}
 	if c.EncryptionKey != "k" || strings.Join(c.AllowHTTPHosts, "|") != "localhost|127.0.0.1" {
 		t.Fatalf("encryption env not read: %q %q", c.EncryptionKey, c.AllowHTTPHosts)

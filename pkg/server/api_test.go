@@ -19,6 +19,8 @@ import (
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/db"
+	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/testpg"
 )
 
@@ -31,6 +33,8 @@ func TestMain(m *testing.M) {
 type devApp struct {
 	srv    *httptest.Server
 	pool   *pgxpool.Pool
+	sender *notify.Sender
+	routes *route.Service
 	client *http.Client
 	userID string
 	csrf   string
@@ -52,7 +56,9 @@ func newDevApp(t *testing.T) *devApp {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &devApp{pool: pool, srv: httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool, testWatches(t, pool)))}
+	a := &devApp{pool: pool, sender: testSender()}
+	a.routes = testRoutes(t, pool, a.sender)
+	a.srv = httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool, testWatches(t, pool), a.routes))
 	t.Cleanup(a.srv.Close)
 	jar, _ := cookiejar.New(nil)
 	a.client = &http.Client{Jar: jar}

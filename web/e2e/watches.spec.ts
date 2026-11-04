@@ -207,7 +207,11 @@ test("credentials never return their secret", async ({ page }) => {
   const secret = `ghp_e2e${t}SECRETvalue`;
   const bodies: Promise<string>[] = [];
   page.on("response", (res) => {
-    if (new URL(res.url()).pathname.startsWith("/api/")) bodies.push(res.text().catch(() => ""));
+    const path = new URL(res.url()).pathname;
+    // The inbox stream never ends: its body would never resolve.
+    if (path.startsWith("/api/") && path !== "/api/v1/inbox/stream") {
+      bodies.push(res.text().catch(() => ""));
+    }
   });
   await page.goto("/settings/credentials");
   await page.getByRole("button", { name: "Add credential" }).click();

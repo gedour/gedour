@@ -38,6 +38,77 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/channel-types": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Channel types and whether this instance can send to them */
+    get: operations["list-channel-types"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/channels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's channels; secrets are never returned */
+    get: operations["list-channels"];
+    put?: never;
+    /** Create a channel; a webhook's generated signing secret is returned once */
+    post: operations["create-channel"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/channels/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One of the caller's channels */
+    get: operations["get-channel"];
+    put?: never;
+    post?: never;
+    /** Delete a channel no rule uses */
+    delete: operations["delete-channel"];
+    options?: never;
+    head?: never;
+    /** Change a channel's name, config or secret */
+    patch: operations["update-channel"];
+    trace?: never;
+  };
+  "/api/v1/channels/{id}/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Send a test message through the channel now (one test per 10 s per user) */
+    post: operations["test-channel"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/credentials": {
     parameters: {
       query?: never;
@@ -91,6 +162,159 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/deliveries": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Deliveries to the caller's channels, newest first */
+    get: operations["list-deliveries"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/deliveries/{id}/retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Send a failed or dead delivery again now */
+    post: operations["retry-delivery"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/filters/reference": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** What a filter may use, and its limits */
+    get: operations["get-filter-reference"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's inbox, newest first */
+    get: operations["list-inbox"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Mark the caller's items archive */
+    post: operations["archive-inbox"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/count": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Unread items in the caller's inbox */
+    get: operations["count-inbox"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Mark the caller's items read */
+    post: operations["read-inbox"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/unarchive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Mark the caller's items unarchive */
+    post: operations["unarchive-inbox"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/inbox/unread": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Mark the caller's items unread */
+    post: operations["unread-inbox"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/me": {
     parameters: {
       query?: never;
@@ -106,6 +330,60 @@ export interface paths {
     options?: never;
     head?: never;
     patch?: never;
+    trace?: never;
+  };
+  "/api/v1/rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's routing rules */
+    get: operations["list-rules"];
+    put?: never;
+    /** Create a rule; its filter is compiled first */
+    post: operations["create-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/rules/preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Evaluate a filter against the last 20 events in scope, without saving */
+    post: operations["preview-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/rules/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** One of the caller's rules */
+    get: operations["get-rule"];
+    put?: never;
+    post?: never;
+    /** Delete a rule */
+    delete: operations["delete-rule"];
+    options?: never;
+    head?: never;
+    /** Change a rule */
+    patch: operations["update-rule"];
     trace?: never;
   };
   "/api/v1/version": {
@@ -314,6 +592,124 @@ export interface components {
       /** @description Release version */
       version: string;
     };
+    BulkInputBody: {
+      /** @description Inbox item IDs; others' items are ignored */
+      ids: number[] | null;
+    };
+    BulkOutputBody: {
+      /** Format: int64 */
+      unread: number;
+      /**
+       * Format: int64
+       * @description Items whose state changed
+       */
+      updated: number;
+    };
+    Channel: {
+      /** @description telegram: chat_id; email: to; webhook: url */
+      config: {
+        [key: string]: unknown;
+      };
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      /** @description Last 4 characters of the secret (bot token, signing key); empty for short ones or none */
+      last4: string;
+      /** Format: date-time */
+      last_delivery_at: string | null;
+      /**
+       * @description Status of the newest delivery
+       * @enum {string|null}
+       */
+      last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
+      name: string;
+      /** @enum {string} */
+      type: "telegram" | "email" | "webhook";
+      /** Format: date-time */
+      updated_at: string;
+    };
+    ChannelRef: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** @enum {string} */
+      type: "telegram" | "email" | "webhook";
+    };
+    ChannelType: {
+      available: boolean;
+      /** @description Why it is unavailable */
+      hint?: string;
+      /** @enum {string} */
+      type: "telegram" | "email" | "webhook";
+    };
+    ChannelTypesOutputBody: {
+      items: components["schemas"]["ChannelType"][] | null;
+    };
+    CostRef: {
+      /**
+       * Format: int64
+       * @description Most units one filter may cost
+       */
+      budget: number;
+      /**
+       * Format: int64
+       * @description Per byte of lower() and upper()
+       */
+      case_mapping: number;
+      /**
+       * Format: int64
+       * @description Each date() parse
+       */
+      date: number;
+      /**
+       * Format: int64
+       * @description Per value of a map or array compared with == or in
+       */
+      deep_value: number;
+      /**
+       * Format: int64
+       * @description Bytes assumed for an event or watch field
+       */
+      field_bytes: number;
+      /**
+       * Format: int64
+       * @description Bytes assumed for # summed over all items, paid once per use
+       */
+      item_bytes: number;
+      /**
+       * Format: int64
+       * @description Each operation; per item inside a predicate
+       */
+      node: number;
+      /**
+       * Format: int64
+       * @description Items a predicate is assumed to run over
+       */
+      predicate_items: number;
+      /**
+       * Format: int64
+       * @description Per byte of semver_gt()
+       */
+      semver: number;
+    };
+    CountOutputBody: {
+      /**
+       * Format: int64
+       * @description Unread items not archived
+       */
+      unread: number;
+    };
+    CreateChannelInputBody: {
+      config: {
+        [key: string]: unknown;
+      };
+      name: string;
+      /** @description Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email: none */
+      secret?: string;
+      /** @enum {string} */
+      type: "telegram" | "email" | "webhook";
+    };
     CreateCredentialInputBody: {
       /** @enum {string} */
       kind: "github_token" | "gitlab_token" | "registry_basic";
@@ -322,6 +718,16 @@ export interface components {
       secret: string;
       /** @description Required for registry_basic, refused otherwise */
       username?: string;
+    };
+    CreateRuleInputBody: {
+      /** @description The caller's channels */
+      channel_ids?: string[] | null;
+      /** @description Defaults to true */
+      enabled?: boolean;
+      filter?: string;
+      name: string;
+      /** @description A watch the caller can read; empty for all of them */
+      watch_id?: string;
     };
     CreateWatchInputBody: {
       config: {
@@ -342,6 +748,32 @@ export interface components {
        */
       schedule: string;
     };
+    CreatedChannel: {
+      /** @description telegram: chat_id; email: to; webhook: url */
+      config: {
+        [key: string]: unknown;
+      };
+      /** Format: date-time */
+      created_at: string;
+      /** Format: uuid */
+      id: string;
+      /** @description Last 4 characters of the secret (bot token, signing key); empty for short ones or none */
+      last4: string;
+      /** Format: date-time */
+      last_delivery_at: string | null;
+      /**
+       * @description Status of the newest delivery
+       * @enum {string|null}
+       */
+      last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
+      name: string;
+      /** @description Webhook only, generated when none was given: shown in this response only */
+      signing_secret?: string;
+      /** @enum {string} */
+      type: "telegram" | "email" | "webhook";
+      /** Format: date-time */
+      updated_at: string;
+    };
     Credential: {
       /** Format: date-time */
       created_at: string;
@@ -361,6 +793,32 @@ export interface components {
       used_by_count: number;
       /** @description registry_basic only */
       username: string | null;
+    };
+    Delivery: {
+      /** Format: int64 */
+      attempts: number;
+      channel: components["schemas"]["ChannelRef"];
+      /** Format: date-time */
+      created_at: string;
+      event: components["schemas"]["Event"];
+      /** Format: int64 */
+      id: number;
+      last_error: string | null;
+      /**
+       * Format: date-time
+       * @description Set while pending or failed
+       */
+      next_attempt_at: string | null;
+      /** @description Absent once the rule is deleted */
+      rule?: components["schemas"]["RuleRef"];
+      /** Format: date-time */
+      sent_at: string | null;
+      /**
+       * @description failed: a retry is scheduled; dead: no retry left
+       * @enum {string}
+       */
+      status: "pending" | "sent" | "failed" | "dead";
+      watch: components["schemas"]["WatchRef"];
     };
     ErrorDetail: {
       /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -423,6 +881,18 @@ export interface components {
       /** @description e.g. release.published, pr.state_changed, tag.created */
       type: string;
     };
+    InboxItem: {
+      /** Format: date-time */
+      archived_at: string | null;
+      /** Format: date-time */
+      created_at: string;
+      event: components["schemas"]["Event"];
+      /** Format: int64 */
+      id: number;
+      /** Format: date-time */
+      read_at: string | null;
+      watch: components["schemas"]["WatchRef"];
+    };
     Item: {
       action: string;
       /** @description Actor's display name, or email when it has none */
@@ -441,9 +911,71 @@ export interface components {
       target_id: string;
       target_type: string;
     };
+    Limits: {
+      /**
+       * Format: int64
+       * @description Items of an array literal
+       */
+      max_array: number;
+      /**
+       * Format: int64
+       * @description Entries of one payload array or map a filter sees
+       */
+      max_items: number;
+      /**
+       * Format: int64
+       * @description Characters of source
+       */
+      max_length: number;
+      /**
+       * Format: int64
+       * @description matches operators per filter, none inside a predicate
+       */
+      max_matches: number;
+      /**
+       * Format: int64
+       * @description Expression nodes
+       */
+      max_nodes: number;
+      /**
+       * Format: int64
+       * @description Span of a constant range a..b
+       */
+      max_range: number;
+      /**
+       * Format: int64
+       * @description Compiled size of a matches pattern
+       */
+      max_regex_instructions: number;
+      /**
+       * Format: int64
+       * @description Largest {n,m} bound in a pattern
+       */
+      max_regex_repeat: number;
+      /**
+       * Format: int64
+       * @description Bytes of one payload string a filter sees
+       */
+      max_string: number;
+      /**
+       * Format: int64
+       * @description Predicates cannot hold another predicate
+       */
+      predicate_depth: number;
+    };
+    ListChannelsOutputBody: {
+      /** @description Sorted by name */
+      items: components["schemas"]["Channel"][] | null;
+    };
     ListCredentialsOutputBody: {
       /** @description Sorted by name */
       items: components["schemas"]["Credential"][] | null;
+    };
+    ListDeliveriesOutputBody: {
+      /** @description Newest first */
+      items: components["schemas"]["Delivery"][] | null;
+      /** @description Absent on the last page */
+      next_cursor?: string;
     };
     ListEventsOutputBody: {
       /** @description Newest first */
@@ -451,10 +983,20 @@ export interface components {
       /** @description Absent on the last page */
       next_cursor?: string;
     };
+    ListInboxOutputBody: {
+      /** @description Newest first */
+      items: components["schemas"]["InboxItem"][] | null;
+      /** @description Absent on the last page */
+      next_cursor?: string;
+    };
     ListOutputBody: {
       items: components["schemas"]["Item"][] | null;
       /** @description Absent on the last page */
       next_cursor?: string;
+    };
+    ListRulesOutputBody: {
+      /** @description Sorted by name */
+      items: components["schemas"]["Rule"][] | null;
     };
     ListSharesOutputBody: {
       /** @description Sorted by email */
@@ -478,6 +1020,62 @@ export interface components {
       /** Format: uuid */
       id: string;
     };
+    PreviewInputBody: {
+      filter: string;
+      /** @description Scope like a rule's; empty for every readable watch */
+      watch_id?: string;
+    };
+    PreviewItem: {
+      /** @description Evaluation error; the rule would treat the event as not matching */
+      error?: string;
+      event: components["schemas"]["Event"];
+      matched: boolean;
+      watch: components["schemas"]["WatchRef"];
+    };
+    PreviewOutputBody: {
+      /** @description The last 20 events in scope, newest first */
+      items: components["schemas"]["PreviewItem"][] | null;
+    };
+    Ref: {
+      /** @description Functions; date() takes at most 2 arguments */
+      builtins: string[] | null;
+      cost: components["schemas"]["CostRef"];
+      limits: components["schemas"]["Limits"];
+      /** @description Binary and unary operators */
+      operators: string[] | null;
+      /** @description Take an array and a predicate {...} over its items (#) */
+      predicates: string[] | null;
+      /** @description What the limits mean, one sentence each */
+      rules: string[] | null;
+      /** @description The one-line form repeated in compile errors */
+      summary: string;
+    };
+    Rule: {
+      /** @description Channels besides the inbox, which is always on */
+      channel_ids: string[] | null;
+      /** Format: date-time */
+      created_at: string;
+      enabled: boolean;
+      /** @description expr expression over event and watch; empty matches every event */
+      filter: string;
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** Format: date-time */
+      updated_at: string;
+      /**
+       * Format: uuid
+       * @description Null: every watch the owner can read, owned or shared
+       */
+      watch_id: string | null;
+      /** @description Null with a watch_id: the owner can no longer read that watch */
+      watch_name: string | null;
+    };
+    RuleRef: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+    };
     SecretBody: {
       /** @description Write-only, never returned */
       secret: string;
@@ -499,6 +1097,29 @@ export interface components {
       observed_at: string;
       /** @description Normalized upstream state; its shape depends on the watch kind */
       state: unknown;
+    };
+    TestResultBody: {
+      /** @description Why the test message was not sent */
+      error?: string;
+      ok: boolean;
+    };
+    UpdateChannelInputBody: {
+      /** @description Replaces the whole config */
+      config?: {
+        [key: string]: unknown;
+      };
+      name?: string;
+      /** @description Write-only; replaces the secret */
+      secret?: string;
+    };
+    UpdateRuleInputBody: {
+      /** @description Replaces the list; [] keeps the inbox only */
+      channel_ids?: string[] | null;
+      enabled?: boolean;
+      filter?: string;
+      name?: string;
+      /** @description Empty string: all readable watches */
+      watch_id?: string;
     };
     UpdateShareInputBody: {
       /** @enum {string} */
@@ -567,6 +1188,13 @@ export interface components {
       /** Format: date-time */
       updated_at: string;
     };
+    WatchRef: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      kind: "github_release" | "github_pr" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+      name: string;
+    };
   };
   responses: never;
   parameters: never;
@@ -633,6 +1261,223 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ActorsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-channel-types": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ChannelTypesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-channels": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListChannelsOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateChannelInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreatedChannel"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Channel"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "update-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateChannelInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Channel"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-channel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TestResultBody"];
         };
       };
       /** @description Error */
@@ -806,6 +1651,298 @@ export interface operations {
       };
     };
   };
+  "list-deliveries": {
+    parameters: {
+      query?: {
+        /** @description Only deliveries to this channel */
+        channel_id?: string;
+        status?: "pending" | "sent" | "failed" | "dead";
+        /** @description next_cursor of the previous page */
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListDeliveriesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "retry-delivery": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Delivery"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-filter-reference": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Ref"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-inbox": {
+    parameters: {
+      query?: {
+        /** @description unread: not read, not archived; all: not archived */
+        state?: "unread" | "all" | "archived";
+        /** @description next_cursor of the previous page */
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListInboxOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "archive-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BulkInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BulkOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "count-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CountOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "read-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BulkInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BulkOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "unarchive-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BulkInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BulkOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "unread-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["BulkInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BulkOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "get-me": {
     parameters: {
       query?: never;
@@ -822,6 +1959,196 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MeOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-rules": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListRulesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Rule"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "preview-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PreviewInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PreviewOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Rule"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "update-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpdateRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Rule"];
         };
       };
       /** @description Error */

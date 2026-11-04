@@ -102,6 +102,8 @@ type Options struct {
 	HTTPHosts []string
 	// StripOnCrossHost lists request headers dropped when a redirect leaves the original host.
 	StripOnCrossHost []string
+	// NoRedirects hands a 3xx back to the caller instead of following it.
+	NoRedirects bool
 }
 
 // Client returns an HTTP client whose every connection goes through the guard.
@@ -122,6 +124,9 @@ func (g *Guard) Client(o Options) *http.Client {
 		Transport: tr,
 		Timeout:   o.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if o.NoRedirects {
+				return http.ErrUseLastResponse
+			}
 			if len(via) > o.MaxRedirects {
 				return fmt.Errorf("stopped after %d redirects", o.MaxRedirects)
 			}

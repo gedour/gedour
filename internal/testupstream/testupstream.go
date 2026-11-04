@@ -1,5 +1,6 @@
 // Package testupstream is a fake GitHub, GitLab and OCI registry serving recorded fixtures, for the
 // collector tests and the e2e run. Fixture set "a" is the first observation, "b" the changed one.
+// For the e2e channels it also stands in for the Telegram Bot API and webhook receivers.
 package testupstream
 
 import (
@@ -8,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -56,11 +58,23 @@ type Server struct {
 	// RegistryBasic challenges with Basic instead of the Bearer token dance.
 	RegistryBasic bool
 
-	mu   sync.Mutex
-	set  string
-	hits map[string]int
-	mux  *http.ServeMux
+	mu       sync.Mutex
+	set      string
+	hits     map[string]int
+	mux      *http.ServeMux
+	received []Received
 }
+
+// Received is one request a fake channel endpoint got.
+type Received struct {
+	// Endpoint is "telegram" or the webhook's name (POST /_hooks/{name}).
+	Endpoint string            `json:"endpoint"`
+	Header   map[string]string `json:"header"`
+	Body     string            `json:"body"`
+}
+
+// maxReceived bounds what the fake keeps: the oldest requests go first.
+const maxReceived = 200
 
 // New returns a server on fixture set "a".
 func New() *Server {
@@ -75,11 +89,55 @@ func New() *Server {
 	s.mux.HandleFunc("GET /api/v4/projects/{p}/merge_requests/{iid}/approvals", s.static("gitlab_mr", "approvals"))
 	s.mux.HandleFunc("GET /v2/{rest...}", s.tags)
 	s.mux.HandleFunc("GET /token", s.token)
+	// Bot API under /tg (GEDOUR_TELEGRAM_API_URL=<fake>/tg): /tg/bot<token>/sendMessage. A mux wildcard
+	// must span a whole segment, hence the prefix check.
+	s.mux.HandleFunc("POST /tg/{bot}/sendMessage", s.receive(func(r *http.Request) string {
+		if !strings.HasPrefix(r.PathValue("bot"), "bot") {
+			return "fail-not-telegram"
+		}
+		return "telegram"
+	}))
+	// Names starting with "fail" answer 500, to drive retries.
+	s.mux.HandleFunc("POST /_hooks/{name}", s.receive(func(r *http.Request) string { return r.PathValue("name") }))
+	s.mux.HandleFunc("GET /_received", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(append([]Received{}, s.received...))
+	})
 	s.mux.HandleFunc("POST /_fixture/{set}", func(w http.ResponseWriter, r *http.Request) {
 		s.SetFixture(r.PathValue("set"))
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return s
+}
+
+func (s *Server) receive(endpoint func(*http.Request) string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		name := endpoint(r)
+		hdr := map[string]string{}
+		for k := range r.Header {
+			hdr[k] = r.Header.Get(k)
+		}
+		s.mu.Lock()
+		s.received = append(s.received, Received{Endpoint: name, Header: hdr, Body: string(body)})
+		if len(s.received) > maxReceived {
+			s.received = s.received[1:]
+		}
+		s.mu.Unlock()
+		if strings.HasPrefix(name, "fail") {
+			http.Error(w, "receiver down", http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}
+}
+
+// Received lists what the fake channel endpoints got, oldest first.
+func (s *Server) Received() []Received {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Received(nil), s.received...)
 }
 
 // SetFixture switches every route to fixture set ("a" or "b").

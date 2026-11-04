@@ -14,6 +14,9 @@ readonly KC_PORT="${E2E_KC_PORT:-18081}"
 readonly OIDC_APP_PORT="${E2E_OIDC_APP_PORT:-18082}"
 # Fake GitHub/GitLab/registry serving the collector fixtures (cmd/fakeupstream).
 readonly UPSTREAM_PORT="${E2E_UPSTREAM_PORT:-18091}"
+# Mailpit (compose service): SMTP for email channels, its API for the specs.
+readonly SMTP_PORT="${E2E_SMTP_PORT:-18025}"
+readonly MAILPIT_PORT="${E2E_MAILPIT_PORT:-18026}"
 readonly BIN="${ROOT}/bin/gedour"
 readonly UPSTREAM_BIN="${ROOT}/bin/fakeupstream"
 readonly LOG="${ROOT}/bin/e2e-server.log"
@@ -23,6 +26,7 @@ readonly BASE_URL="http://localhost:${HTTP_PORT}"
 
 compose() {
   GEDOUR_DB_PORT="${DB_PORT}" GEDOUR_KC_PORT="${KC_PORT}" GEDOUR_OIDC_PORT="${OIDC_APP_PORT}" \
+    GEDOUR_MAILPIT_SMTP_PORT="${SMTP_PORT}" GEDOUR_MAILPIT_PORT="${MAILPIT_PORT}" \
     docker compose -f "${ROOT}/compose.yaml" -p "${PROJECT}" --profile oidc "$@"
 }
 
@@ -45,9 +49,9 @@ if [[ ! -x "${BIN}" ]]; then
   echo "missing ${BIN}: run 'make build' first" >&2
   exit 1
 fi
-for port in "${HTTP_PORT}" "${METRICS_PORT}" "${DB_PORT}" "${KC_PORT}" "${OIDC_APP_PORT}" "${UPSTREAM_PORT}"; do
+for port in "${HTTP_PORT}" "${METRICS_PORT}" "${DB_PORT}" "${KC_PORT}" "${OIDC_APP_PORT}" "${UPSTREAM_PORT}" "${SMTP_PORT}" "${MAILPIT_PORT}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
-    echo "port ${port} in use: set E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT / E2E_UPSTREAM_PORT" >&2
+    echo "port ${port} in use: set E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT / E2E_UPSTREAM_PORT / E2E_SMTP_PORT / E2E_MAILPIT_PORT" >&2
     exit 1
   fi
 done
@@ -60,8 +64,8 @@ fi
 upstream=$!
 
 # Keycloak's healthcheck bounds the wait (60 x 3 s); --wait-timeout caps the whole start.
-if ! compose up -d --wait --wait-timeout 300 db keycloak; then
-  echo "db or keycloak did not become healthy:" >&2
+if ! compose up -d --wait --wait-timeout 300 db keycloak mailpit; then
+  echo "db, keycloak or mailpit did not become healthy:" >&2
   compose logs --tail 80 keycloak >&2 || true
   exit 1
 fi
@@ -80,6 +84,10 @@ env -u GEDOUR_DEV_USER \
   GEDOUR_ALLOW_PRIVATE_NETS=127.0.0.0/8 \
   GEDOUR_ALLOW_HTTP_HOSTS=127.0.0.1 \
   GEDOUR_WORKER_POLL=500ms \
+  GEDOUR_SMTP_ADDR="127.0.0.1:${SMTP_PORT}" \
+  GEDOUR_SMTP_FROM="gedour <gedour@e2e.test>" \
+  GEDOUR_SMTP_TLS=none \
+  GEDOUR_TELEGRAM_API_URL="http://127.0.0.1:${UPSTREAM_PORT}/tg" \
   GEDOUR_LOG_LEVEL=debug \
   "${BIN}" >"${LOG}" 2>&1 &
 srv=$!
@@ -104,7 +112,7 @@ if [[ "${healthy}" -ne 1 ]]; then
 fi
 
 status=0
-E2E_BASE_URL="${BASE_URL}" E2E_UPSTREAM_URL="http://127.0.0.1:${UPSTREAM_PORT}" pnpm --dir "${ROOT}/web" exec playwright test "$@" || status=$?
+E2E_BASE_URL="${BASE_URL}" E2E_UPSTREAM_URL="http://127.0.0.1:${UPSTREAM_PORT}" E2E_MAILPIT_URL="http://127.0.0.1:${MAILPIT_PORT}" pnpm --dir "${ROOT}/web" exec playwright test "$@" || status=$?
 
 # Stop the server first: the log is complete (in-flight runs drained) once it has exited.
 if ! kill -TERM "${srv}" 2>/dev/null; then

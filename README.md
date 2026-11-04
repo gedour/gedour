@@ -3,7 +3,7 @@
 Self-hosted watch service: follows upstream releases, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
-Status: phase 4 (scheduler, collectors, events). Spec: `specs/001-gedour-v0.md`.
+Status: phase 5 (filters, rules, channels, inbox). Spec: `specs/001-gedour-v0.md`.
 
 ## Quickstart
 
@@ -12,7 +12,7 @@ make dev   # PostgreSQL + gedour via docker compose
 ```
 
 UI on <http://localhost:8080> in dev single-user mode (signed in as `dev@local`), metrics on
-<http://localhost:9090/metrics>.
+<http://localhost:9090/metrics>. Email channels go to Mailpit: <http://localhost:8025>.
 
 ```sh
 docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour with OIDC on :8082
@@ -26,6 +26,7 @@ docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour w
 | `GEDOUR_KC_PORT` | `8081` | Keycloak port, the same inside and outside the container (it is in the issuer URL) |
 | `GEDOUR_OIDC_PORT` | `8082` | Host port of the OIDC-mode gedour |
 | `GEDOUR_DB_PORT` | `55432` | Host port of PostgreSQL |
+| `GEDOUR_MAILPIT_SMTP_PORT` / `GEDOUR_MAILPIT_PORT` | `1025` / `8025` | Host ports of Mailpit's SMTP and UI |
 
 The realm's redirect and post-logout URIs pin the app ports: `localhost:8082` for compose, `localhost:18080`
 for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same change in `realm.json`.
@@ -52,7 +53,13 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`) may reach over plain http; others need https |
 | `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry |
 | `GEDOUR_WORKER_POLL` | `2s` | How often an idle worker looks for due watches |
-| `GEDOUR_WORKER_CONCURRENCY` | `8` | Runs one worker process executes at once |
+| `GEDOUR_WORKER_CONCURRENCY` | `8` | Runs (and deliveries) one worker process executes at once |
+| `GEDOUR_TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram Bot API base URL |
+| `GEDOUR_SMTP_ADDR` | | `host:port` of the SMTP server; email channels are disabled without it |
+| `GEDOUR_SMTP_FROM` | (required with SMTP) | Sender, e.g. `gedour <gedour@example.com>` |
+| `GEDOUR_SMTP_USERNAME` / `GEDOUR_SMTP_PASSWORD` | | SMTP login (PLAIN), set both or neither |
+| `GEDOUR_SMTP_TLS` | `starttls` | `starttls`, `tls` (implicit) or `none`; `none` only reaches loopback or `GEDOUR_SMTP_PLAIN_NETS`, and refuses a login |
+| `GEDOUR_SMTP_PLAIN_NETS` | | Comma-separated CIDRs `GEDOUR_SMTP_TLS=none` may reach besides loopback (a sink on a container network) |
 
 The web role needs either the three `OIDC_*` variables plus `GEDOUR_PUBLIC_URL`, or `GEDOUR_DEV_USER`;
 both or neither refuse to start. The session cookie is `__Host-gedour_session` (`Secure`) with OIDC, plain
@@ -89,6 +96,47 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
 - Metrics: `gedour_collector_runs_total{kind,status}`, `gedour_collector_run_duration_seconds{kind}`,
   `gedour_events_total{kind,type}`, `gedour_watches_due`.
 
+## Routing and channels
+
+- Filters are [expr](https://expr-lang.org) expressions over `event` (`type`, `payload`, `occurred_at`) and
+  `watch` (`id`, `name`, `kind`), plus `semver_gt(a, b)`; they must return a boolean. They compile on save:
+  an error is a 400 on `body.filter` with its line and column. Empty matches every event. Only an
+  allowlist compiles: literals (arrays of up to 50), `event`/`watch` fields, comparisons, `and or not`,
+  `in`, `contains`, `startsWith`, `endsWith`, up to 3 `matches` outside predicates with a string-literal
+  pattern of at most 64 regexp instructions and repetitions up to 32, `+`/`-` on numbers, times
+  and durations, `?:`, constant ranges up to 100, `len lower upper trim trimPrefix trimSuffix int float
+  abs now duration date string semver_gt`, and `any all none one filter count` with a predicate that
+  holds no other predicate and reads only its item (`#`, `#.field`; compare `event`/`watch` fields outside
+  it), in 200 expression nodes at most. On top, a static cost model prices every filter before it is saved
+  (each operation 32 units, times 200 inside a predicate; string work a unit per byte, 3 for
+  `lower`/`upper`, 12 for `semver_gt`; a field counts 4 KiB, `#` 64 KiB over all items) and refuses one
+  above 1,000,000 units, about 5 ms on the worst payloads; the error gives the computed cost; `date()` takes no time zone argument; the second argument of `trim`, `trimPrefix` and `trimSuffix` is a
+  string literal, for `trim` ASCII and at most 16 bytes. `GET /api/v1/filters/reference`
+  serves this list and its limits, as the rule editor shows them. Filters see payload strings cut to 4 KiB (64 KiB in all) and arrays/maps to
+  200 entries. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
+  rules and 50 channels.
+- The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule whose owner can
+  read the watch now (own or shared) is evaluated; a match adds one inbox item per user and one delivery
+  per channel. A filter failing on an event counts as no match (`gedour_rule_eval_errors_total`).
+  Events stored before this version are not routed.
+- Deliveries retry after 30 s, 2 min, 10 min and 30 min; the 5th failure is final (`dead`). A failed or
+  dead delivery can be retried by hand. Lease and backoff use the database clock. A delivery whose
+  channel owner can no longer read the watch is not sent (`dead`). On SIGTERM, sends in flight get
+  `GEDOUR_SHUTDOWN_TIMEOUT`; past it they are cancelled and released, not counted as attempts.
+- Webhooks: `POST` JSON `{delivery_id, event, watch, rule, sent_at}` with `X-Gedour-Signature:
+  sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
+  redirects are not followed; 10 s timeout. Same SSRF guard as collectors; a literal private IP is refused
+  on save. A signing secret left empty is generated and returned once, in the create response.
+- Telegram: `sendMessage` in HTML mode with the bot token as secret. Email: multipart text + HTML through
+  the instance's SMTP server, at most 10 recipients per channel.
+- Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
+  replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
+  25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing
+  it: an open tab does not defeat the idle timeout). At most 10 streams per user and 2000 per replica.
+- Metrics: `gedour_events_routed_total`, `gedour_rule_eval_errors_total`,
+  `gedour_deliveries_total{channel_type,status}`, `gedour_delivery_duration_seconds{channel_type}`,
+  `gedour_sse_subscribers`.
+
 ## Endpoints
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
@@ -117,6 +165,19 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
   it), `PUT /api/v1/credentials/{id}/secret`. Secrets are write-only; responses carry `last4` (empty for
   secrets under 16 characters). Credentials are private to their owner.
+
+- `/api/v1/channels` (`GET`, `POST`), `/api/v1/channels/{id}` (`GET`, `PATCH`, `DELETE`, 409 while a rule
+  uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.
+  Secrets are write-only (`last4` only).
+- `/api/v1/rules` (`GET`, `POST`), `/api/v1/rules/{id}` (`GET`, `PATCH`, `DELETE`),
+  `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 readable events in scope.
+  `GET /api/v1/filters/reference`: what a filter may use, and its limits.
+- `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
+- `GET /api/v1/inbox?state=unread|all|archived&cursor=`, `GET /api/v1/inbox/count`,
+  `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only), `GET /api/v1/inbox/stream`.
+- Channels, rules and deliveries are private to their owner (404 for others); their changes, channel
+  tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer
+  read are hidden, and a rule's `watch_name` is null then.
 
 The full contract is `api/openapi.json` (also served at `/api/openapi.json`).
 

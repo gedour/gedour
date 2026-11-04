@@ -140,4 +140,14 @@ func TestClientRedirects(t *testing.T) {
 	if _, err := get(t, g.Client(opts), loop.URL, nil); err == nil {
 		t.Fatal("redirect loop not stopped")
 	}
+	// 001-AC16: a webhook client hands the 3xx back instead of following it.
+	hits := 0
+	counted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer counted.Close()
+	toCounted := redirect(counted.URL)
+	defer toCounted.Close()
+	resp, err := get(t, g.Client(Options{Timeout: 5 * time.Second, NoRedirects: true}), toCounted.URL, nil)
+	if err != nil || resp.StatusCode != http.StatusFound || hits != 0 {
+		t.Fatalf("no-redirect client: %v %v, target hit %d times", resp, err, hits)
+	}
 }

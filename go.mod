@@ -7,6 +7,7 @@ ignore ./web/node_modules
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/danielgtaylor/huma/v2 v2.40.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.12.0

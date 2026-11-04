@@ -1,9 +1,15 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import type { Page } from "@playwright/test";
 
 import { expect, test } from "./fixtures";
 
+// Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
+test.describe.configure({ mode: "serial" });
+
 // scripts/e2e.sh starts cmd/fakeupstream there, allowlisted for the worker.
 const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
+const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:18026";
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
 async function api(page: Page) {
@@ -92,4 +98,164 @@ test("the worker turns upstream changes into timeline events", async ({ page }) 
   await page.getByLabel("Search").fill(t);
   await expect(page.getByRole("list", { name: "Watches" }).getByRole("listitem")).toHaveCount(2);
   await expect(page.getByRole("list", { name: "Watches" })).not.toContainText("Pending first run");
+});
+
+interface Received {
+  endpoint: string;
+  header: Record<string, string>;
+  body: string;
+}
+
+// 001-AC13, 001-AC14, 001-AC15, 001-AC16, 001-AC19, 001-AC20: a rule with a filter sends a watch's
+// new release to the inbox (live), a signed webhook, an email and a failing webhook that retries.
+test("a rule routes upstream changes to the inbox and the channels", async ({ page }) => {
+  const t = tag();
+  await setFixture(page, "a");
+  await page.goto("/inbox");
+  const call = await api(page);
+  const res = await call("POST", "/api/v1/watches", {
+    name: `Routed CLI ${t}`,
+    kind: "github_release",
+    schedule: "1h",
+    config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+  });
+  expect(res.status()).toBe(201);
+  const watch = (await res.json()) as { id: string; name: string };
+  await expect
+    .poll(
+      async () => (await (await call("GET", `/api/v1/watches/${watch.id}`)).json()).last_status,
+      {
+        timeout: 15_000,
+      },
+    )
+    .toBe("ok");
+
+  // The webhook through the UI: its signing secret shows once.
+  await page.goto("/channels");
+  await page.getByRole("button", { name: "New channel" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  await dialog.getByLabel("Name").fill(`Hook ${t}`);
+  await dialog.getByLabel("URL").fill(`${UPSTREAM}/_hooks/ok-${t}`);
+  await dialog.getByRole("button", { name: "Create channel" }).click();
+  const signing = await dialog
+    .getByTestId("signing-secret")
+    .getByLabel("Signing secret")
+    .inputValue();
+  expect(signing.length).toBeGreaterThan(40);
+  await dialog.getByRole("button", { name: "I have copied it" }).click();
+  await expect(page.getByText(signing)).toHaveCount(0);
+
+  const mailTo = `ops-${t}@e2e.test`;
+  for (const body of [
+    { name: `Mail ${t}`, type: "email", config: { to: [mailTo] } },
+    { name: `Broken ${t}`, type: "webhook", config: { url: `${UPSTREAM}/_hooks/fail-${t}` } },
+  ]) {
+    expect((await call("POST", "/api/v1/channels", body)).status()).toBe(201);
+  }
+
+  // 001-AC13: a syntax error is shown with its position before anything is saved.
+  await page.goto("/rules/new");
+  await page.getByLabel("Name").fill(`Releases ${t}`);
+  await page.getByLabel("Watches").selectOption({ label: watch.name });
+  const expression = page.getByLabel("Expression");
+  await expression.fill('event.type == "release.published" &&');
+  await expect(page.getByRole("alert")).toContainText("(line 1, column");
+  await expect(page.getByTestId("filter-marker")).toBeVisible();
+  await expression.fill('event.type == "release.published"');
+  await expect(page.getByText("Valid filter")).toBeVisible();
+  for (const name of [`Hook ${t}`, `Mail ${t}`, `Broken ${t}`]) {
+    await page.getByRole("checkbox", { name: new RegExp(name) }).check();
+  }
+  await page.getByRole("button", { name: "Create rule" }).click();
+  await expect(page).toHaveURL(/\/rules$/);
+  await expect(page.getByRole("list", { name: "Rules" })).toContainText(`Releases ${t}`);
+
+  // 001-AC19: the inbox stays open (no reload) while the worker finds the change.
+  await page.getByRole("link", { name: /^Inbox/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+  await setFixture(page, "b");
+  expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
+  // Routed (the worker and router polls take their time), then visible on the open page within 2 s.
+  await expect
+    .poll(
+      async () => (await (await call("GET", "/api/v1/inbox?state=unread")).json()).items.length,
+      {
+        timeout: 15_000,
+      },
+    )
+    .toBe(2);
+  const today = page.getByRole("list", { name: "Inbox, Today" });
+  await expect(today).toBeVisible({ timeout: 2000 });
+  // Filtered: the promotion of the rc is not a release.published event.
+  await expect(today.getByRole("listitem")).toHaveText(
+    [/v2\.105\.0 published/, /v2\.103\.3 published/],
+    { timeout: 2000 },
+  );
+  await expect(page.getByRole("link", { name: "Inbox, 2 unread" })).toBeVisible();
+
+  // 001-AC16: the receiver verifies the signature over the raw body.
+  let hooks: Received[] = [];
+  await expect
+    .poll(
+      async () => {
+        const all = (await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[];
+        hooks = all.filter((r) => r.endpoint === `ok-${t}`);
+        return hooks.length;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(2);
+  for (const h of hooks) {
+    const want = Buffer.from(
+      "sha256=" + createHmac("sha256", signing).update(h.body).digest("hex"),
+    );
+    expect(timingSafeEqual(Buffer.from(h.header["X-Gedour-Signature"] ?? ""), want)).toBe(true);
+    expect(h.header["X-Gedour-Event"]).toBe("release.published");
+    expect(JSON.parse(h.body).rule.name).toBe(`Releases ${t}`);
+  }
+
+  // The email reached mailpit.
+  await expect
+    .poll(
+      async () => {
+        const { messages } = (await (
+          await page.request.get(`${MAILPIT}/api/v1/messages?limit=200`)
+        ).json()) as {
+          messages: { Subject: string; To: { Address: string }[] }[];
+        };
+        return messages
+          .filter((m) => m.To.some((a) => a.Address === mailTo))
+          .map((m) => m.Subject)
+          .sort();
+      },
+      { timeout: 15_000 },
+    )
+    .toEqual([`${watch.name}: v2.103.3 published`, `${watch.name}: v2.105.0 published`]);
+
+  // 001-AC20: bulk read, then bulk archive.
+  await page.getByRole("checkbox", { name: "Select all" }).check();
+  await page.getByRole("button", { name: "Mark read" }).click();
+  await expect(page.getByRole("link", { name: /^Inbox, \d+ unread$/ })).toHaveCount(0);
+  await expect(page.getByTestId("unread-badge")).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "Select all" }).check();
+  await page.getByRole("button", { name: "Archive", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Nothing to read yet" })).toBeVisible();
+  await page.getByRole("button", { name: "Archived" }).click();
+  await expect(page.getByRole("list", { name: "Inbox, Today" })).toContainText(
+    "v2.105.0 published",
+  );
+
+  // 001-AC15: the failing webhook's deliveries show the failure and the scheduled retry.
+  await page.goto("/channels");
+  await page.getByLabel("Channel", { exact: true }).selectOption({ label: `Broken ${t}` });
+  const table = page.getByRole("table", { name: "Deliveries" });
+  await expect(async () => {
+    await expect(table.getByRole("row").filter({ hasText: "Retrying" })).toHaveCount(2, {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 15_000 });
+  const row = table.getByRole("row").filter({ hasText: "v2.105.0 published" });
+  await expect(row).toContainText("1 / 5");
+  await expect(row).toContainText("HTTP 500");
+  await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
 });

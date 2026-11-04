@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/gedour/gedour/pkg/config"
+	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/server"
 	"github.com/gedour/gedour/pkg/testpg"
 )
@@ -88,7 +89,8 @@ func TestRunServesAndShutsDown(t *testing.T) {
 
 	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
 	if code, body := getStatus("http://" + cfg.MetricsAddr + "/metrics"); code != http.StatusOK || !strings.Contains(body, `gedour_build_info{commit="c0ffee0",version="v9.9.9"} 1`) ||
-		!strings.Contains(body, "gedour_watches_due 0") {
+		!strings.Contains(body, "gedour_watches_due 0") || !strings.Contains(body, "gedour_sse_subscribers 0") ||
+		!strings.Contains(body, "gedour_events_routed_total 0") {
 		t.Fatalf("metrics: %d", code)
 	}
 	if code, body := getStatus("http://" + cfg.HTTPAddr + "/"); code != http.StatusOK || body != "SPA" {
@@ -129,6 +131,28 @@ func TestRunWorkerOnly(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewSender(t *testing.T) {
+	cfg := config.Config{TelegramAPIURL: "https://api.telegram.org", SMTPPlainNets: []string{"10.9.2.3/16"}}
+	guard, _ := netguard.New(nil)
+	s, err := newSender(cfg, guard, server.BuildInfo{Version: "v1"})
+	if err != nil || s.Mailer != nil || s.UserAgent != "gedour/v1" {
+		t.Fatalf("without SMTP: %+v %v", s, err)
+	}
+	cfg.SMTPAddr, cfg.SMTPFrom, cfg.SMTPTLS = "mail:25", "gedour <g@x.test>", "none"
+	if s, err = newSender(cfg, guard, server.BuildInfo{}); err != nil || s.Mailer == nil || s.Mailer.From.Address != "g@x.test" ||
+		len(s.Mailer.PlainNets) != 1 || s.Mailer.PlainNets[0].String() != "10.9.0.0/16" {
+		t.Fatalf("with SMTP: %+v %v", s.Mailer, err)
+	}
+	cfg.SMTPFrom = "bad"
+	if _, err := newSender(cfg, guard, server.BuildInfo{}); err == nil {
+		t.Fatal("want a from error")
+	}
+	cfg.SMTPFrom, cfg.SMTPPlainNets = "g@x.test", []string{"x"}
+	if _, err := newSender(cfg, guard, server.BuildInfo{}); err == nil {
+		t.Fatal("want a network error")
 	}
 }
 

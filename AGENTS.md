@@ -22,7 +22,14 @@
 - Go DB tests fail when Docker is down; `GEDOUR_SKIP_DB_TESTS=1` turns that into skips (never in CI).
 - `make e2e` signs in through Keycloak (compose `oidc` profile, `deploy/keycloak/realm.json`) as `alice`;
   ports `E2E_PORT` (18080, a realm redirect URI: change both), `E2E_METRICS_PORT`, `E2E_DB_PORT`,
-  `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`, `E2E_UPSTREAM_PORT` (`cmd/fakeupstream`, `POST /_fixture/a|b` switches it). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
+  `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`, `E2E_UPSTREAM_PORT` (`cmd/fakeupstream`, `POST /_fixture/a|b` switches it),
+  `E2E_SMTP_PORT`/`E2E_MAILPIT_PORT` (Mailpit). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
+- The fake upstream also serves Telegram (`/tg/bot<token>/sendMessage`) and webhook receivers
+  (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got.
+- The fixture set is global: specs that switch it live in `activity.spec.ts`, which runs serially.
+- Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
+- Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
+  `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook targets).
 - Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project stores alice's
   and bob's sessions in `web/playwright/.auth/`.
 

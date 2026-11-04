@@ -69,3 +69,23 @@
     outline-offset: 2px;
   }
 }
+
+/* A new inbox item slides in and glows once; nothing moves for reduced-motion users. */
+@keyframes inbox-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+    background-color: var(--beacon-soft);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility animate-arrive {
+  animation: inbox-arrive 600ms ease-out;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

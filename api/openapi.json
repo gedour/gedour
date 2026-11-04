@@ -93,6 +93,294 @@
         ],
         "type": "object"
       },
+      "BulkInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "description": "Inbox item IDs; others' items are ignored",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "type": "object"
+      },
+      "BulkOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "unread": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated": {
+            "description": "Items whose state changed",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated",
+          "unread"
+        ],
+        "type": "object"
+      },
+      "Channel": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "description": "telegram: chat_id; email: to; webhook: url",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last4": {
+            "description": "Last 4 characters of the secret (bot token, signing key); empty for short ones or none",
+            "type": "string"
+          },
+          "last_delivery_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_delivery_status": {
+            "description": "Status of the newest delivery",
+            "enum": [
+              "pending",
+              "sent",
+              "failed",
+              "dead"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "telegram",
+              "email",
+              "webhook"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "config",
+          "last4",
+          "created_at",
+          "updated_at",
+          "last_delivery_status",
+          "last_delivery_at"
+        ],
+        "type": "object"
+      },
+      "ChannelRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "telegram",
+              "email",
+              "webhook"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ChannelType": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "hint": {
+            "description": "Why it is unavailable",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "telegram",
+              "email",
+              "webhook"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "available"
+        ],
+        "type": "object"
+      },
+      "ChannelTypesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelType"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "CostRef": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "description": "Most units one filter may cost",
+            "format": "int64",
+            "type": "integer"
+          },
+          "case_mapping": {
+            "description": "Per byte of lower() and upper()",
+            "format": "int64",
+            "type": "integer"
+          },
+          "date": {
+            "description": "Each date() parse",
+            "format": "int64",
+            "type": "integer"
+          },
+          "deep_value": {
+            "description": "Per value of a map or array compared with == or in",
+            "format": "int64",
+            "type": "integer"
+          },
+          "field_bytes": {
+            "description": "Bytes assumed for an event or watch field",
+            "format": "int64",
+            "type": "integer"
+          },
+          "item_bytes": {
+            "description": "Bytes assumed for # summed over all items, paid once per use",
+            "format": "int64",
+            "type": "integer"
+          },
+          "node": {
+            "description": "Each operation; per item inside a predicate",
+            "format": "int64",
+            "type": "integer"
+          },
+          "predicate_items": {
+            "description": "Items a predicate is assumed to run over",
+            "format": "int64",
+            "type": "integer"
+          },
+          "semver": {
+            "description": "Per byte of semver_gt()",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "budget",
+          "node",
+          "case_mapping",
+          "semver",
+          "date",
+          "deep_value",
+          "field_bytes",
+          "item_bytes",
+          "predicate_items"
+        ],
+        "type": "object"
+      },
+      "CountOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "unread": {
+            "description": "Unread items not archived",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unread"
+        ],
+        "type": "object"
+      },
+      "CreateChannelInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "secret": {
+            "description": "Write-only. telegram: bot token (required); webhook: HMAC key, generated when empty; email: none",
+            "maxLength": 512,
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "telegram",
+              "email",
+              "webhook"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "config"
+        ],
+        "type": "object"
+      },
       "CreateCredentialInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -125,6 +413,43 @@
           "name",
           "kind",
           "secret"
+        ],
+        "type": "object"
+      },
+      "CreateRuleInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_ids": {
+            "description": "The caller's channels",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "Defaults to true",
+            "type": "boolean"
+          },
+          "filter": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "watch_id": {
+            "description": "A watch the caller can read; empty for all of them",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -168,6 +493,79 @@
           "name",
           "kind",
           "config"
+        ],
+        "type": "object"
+      },
+      "CreatedChannel": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "description": "telegram: chat_id; email: to; webhook: url",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last4": {
+            "description": "Last 4 characters of the secret (bot token, signing key); empty for short ones or none",
+            "type": "string"
+          },
+          "last_delivery_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_delivery_status": {
+            "description": "Status of the newest delivery",
+            "enum": [
+              "pending",
+              "sent",
+              "failed",
+              "dead"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "signing_secret": {
+            "description": "Webhook only, generated when none was given: shown in this response only",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "telegram",
+              "email",
+              "webhook"
+            ],
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "config",
+          "last4",
+          "created_at",
+          "updated_at",
+          "last_delivery_status",
+          "last_delivery_at"
         ],
         "type": "object"
       },
@@ -223,6 +621,80 @@
           "created_at",
           "updated_at",
           "used_by_count"
+        ],
+        "type": "object"
+      },
+      "Delivery": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel": {
+            "$ref": "#/components/schemas/ChannelRef"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_attempt_at": {
+            "description": "Set while pending or failed",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule": {
+            "$ref": "#/components/schemas/RuleRef",
+            "description": "Absent once the rule is deleted"
+          },
+          "sent_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "failed: a retry is scheduled; dead: no retry left",
+            "enum": [
+              "pending",
+              "sent",
+              "failed",
+              "dead"
+            ],
+            "type": "string"
+          },
+          "watch": {
+            "$ref": "#/components/schemas/WatchRef"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "attempts",
+          "next_attempt_at",
+          "last_error",
+          "sent_at",
+          "created_at",
+          "channel",
+          "event",
+          "watch"
         ],
         "type": "object"
       },
@@ -337,6 +809,48 @@
         ],
         "type": "object"
       },
+      "InboxItem": {
+        "additionalProperties": false,
+        "properties": {
+          "archived_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "read_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "watch": {
+            "$ref": "#/components/schemas/WatchRef"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "read_at",
+          "archived_at",
+          "event",
+          "watch"
+        ],
+        "type": "object"
+      },
       "Item": {
         "additionalProperties": false,
         "properties": {
@@ -392,6 +906,93 @@
         ],
         "type": "object"
       },
+      "Limits": {
+        "additionalProperties": false,
+        "properties": {
+          "max_array": {
+            "description": "Items of an array literal",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_items": {
+            "description": "Entries of one payload array or map a filter sees",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_length": {
+            "description": "Characters of source",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_matches": {
+            "description": "matches operators per filter, none inside a predicate",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_nodes": {
+            "description": "Expression nodes",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_range": {
+            "description": "Span of a constant range a..b",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_regex_instructions": {
+            "description": "Compiled size of a matches pattern",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_regex_repeat": {
+            "description": "Largest {n,m} bound in a pattern",
+            "format": "int64",
+            "type": "integer"
+          },
+          "max_string": {
+            "description": "Bytes of one payload string a filter sees",
+            "format": "int64",
+            "type": "integer"
+          },
+          "predicate_depth": {
+            "description": "Predicates cannot hold another predicate",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_length",
+          "max_nodes",
+          "max_matches",
+          "max_regex_instructions",
+          "max_regex_repeat",
+          "max_range",
+          "max_array",
+          "predicate_depth",
+          "max_string",
+          "max_items"
+        ],
+        "type": "object"
+      },
+      "ListChannelsOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListCredentialsOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -411,6 +1012,29 @@
         ],
         "type": "object"
       },
+      "ListDeliveriesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/Delivery"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "description": "Absent on the last page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListEventsOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -418,6 +1042,29 @@
             "description": "Newest first",
             "items": {
               "$ref": "#/components/schemas/Event"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next_cursor": {
+            "description": "Absent on the last page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListInboxOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
             },
             "type": [
               "array",
@@ -449,6 +1096,25 @@
           "next_cursor": {
             "description": "Absent on the last page",
             "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListRulesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -544,6 +1210,212 @@
         ],
         "type": "object"
       },
+      "PreviewInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "filter": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "watch_id": {
+            "description": "Scope like a rule's; empty for every readable watch",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filter"
+        ],
+        "type": "object"
+      },
+      "PreviewItem": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Evaluation error; the rule would treat the event as not matching",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/Event"
+          },
+          "matched": {
+            "type": "boolean"
+          },
+          "watch": {
+            "$ref": "#/components/schemas/WatchRef"
+          }
+        },
+        "required": [
+          "event",
+          "watch",
+          "matched"
+        ],
+        "type": "object"
+      },
+      "PreviewOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The last 20 events in scope, newest first",
+            "items": {
+              "$ref": "#/components/schemas/PreviewItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "Ref": {
+        "additionalProperties": false,
+        "properties": {
+          "builtins": {
+            "description": "Functions; date() takes at most 2 arguments",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "cost": {
+            "$ref": "#/components/schemas/CostRef"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "operators": {
+            "description": "Binary and unary operators",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "predicates": {
+            "description": "Take an array and a predicate {...} over its items (#)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "rules": {
+            "description": "What the limits mean, one sentence each",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "The one-line form repeated in compile errors",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operators",
+          "builtins",
+          "predicates",
+          "limits",
+          "cost",
+          "rules",
+          "summary"
+        ],
+        "type": "object"
+      },
+      "Rule": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_ids": {
+            "description": "Channels besides the inbox, which is always on",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter": {
+            "description": "expr expression over event and watch; empty matches every event",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "watch_id": {
+            "description": "Null: every watch the owner can read, owned or shared",
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "watch_name": {
+            "description": "Null with a watch_id: the owner can no longer read that watch",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "watch_id",
+          "watch_name",
+          "filter",
+          "enabled",
+          "channel_ids",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RuleRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "SecretBody": {
         "additionalProperties": false,
         "properties": {
@@ -613,6 +1485,76 @@
           "observed_at",
           "state"
         ],
+        "type": "object"
+      },
+      "TestResultBody": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Why the test message was not sent",
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "UpdateChannelInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "additionalProperties": {},
+            "description": "Replaces the whole config",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "secret": {
+            "description": "Write-only; replaces the secret",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UpdateRuleInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_ids": {
+            "description": "Replaces the list; [] keeps the inbox only",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "watch_id": {
+            "description": "Empty string: all readable watches",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UpdateShareInputBody": {
@@ -783,6 +1725,34 @@
           "consecutive_failures"
         ],
         "type": "object"
+      },
+      "WatchRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "github_release",
+              "github_pr",
+              "gitlab_release",
+              "gitlab_mr",
+              "oci_tags"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "type": "object"
       }
     }
   },
@@ -920,6 +1890,274 @@
         "summary": "Users who appear as actor in the audit entries visible to the caller",
         "tags": [
           "audit"
+        ]
+      }
+    },
+    "/api/v1/channel-types": {
+      "get": {
+        "operationId": "list-channel-types",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelTypesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Channel types and whether this instance can send to them",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels": {
+      "get": {
+        "operationId": "list-channels",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListChannelsOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's channels; secrets are never returned",
+        "tags": [
+          "channels"
+        ]
+      },
+      "post": {
+        "operationId": "create-channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedChannel"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a channel; a webhook's generated signing secret is returned once",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{id}": {
+      "delete": {
+        "operationId": "delete-channel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a channel no rule uses",
+        "tags": [
+          "channels"
+        ]
+      },
+      "get": {
+        "operationId": "get-channel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One of the caller's channels",
+        "tags": [
+          "channels"
+        ]
+      },
+      "patch": {
+        "operationId": "update-channel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateChannelInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a channel's name, config or secret",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{id}/test": {
+      "post": {
+        "operationId": "test-channel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResultBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Send a test message through the channel now (one test per 10 s per user)",
+        "tags": [
+          "channels"
         ]
       }
     },
@@ -1137,6 +2375,426 @@
         ]
       }
     },
+    "/api/v1/deliveries": {
+      "get": {
+        "operationId": "list-deliveries",
+        "parameters": [
+          {
+            "description": "Only deliveries to this channel",
+            "explode": false,
+            "in": "query",
+            "name": "channel_id",
+            "schema": {
+              "description": "Only deliveries to this channel",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "enum": [
+                "pending",
+                "sent",
+                "failed",
+                "dead"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "next_cursor of the previous page",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "next_cursor of the previous page",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListDeliveriesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Deliveries to the caller's channels, newest first",
+        "tags": [
+          "deliveries"
+        ]
+      }
+    },
+    "/api/v1/deliveries/{id}/retry": {
+      "post": {
+        "operationId": "retry-delivery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delivery"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Send a failed or dead delivery again now",
+        "tags": [
+          "deliveries"
+        ]
+      }
+    },
+    "/api/v1/filters/reference": {
+      "get": {
+        "operationId": "get-filter-reference",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ref"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What a filter may use, and its limits",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/inbox": {
+      "get": {
+        "operationId": "list-inbox",
+        "parameters": [
+          {
+            "description": "unread: not read, not archived; all: not archived",
+            "explode": false,
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "default": "all",
+              "description": "unread: not read, not archived; all: not archived",
+              "enum": [
+                "unread",
+                "all",
+                "archived"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "next_cursor of the previous page",
+            "explode": false,
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "description": "next_cursor of the previous page",
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "format": "int64",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListInboxOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's inbox, newest first",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/api/v1/inbox/archive": {
+      "post": {
+        "operationId": "archive-inbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark the caller's items archive",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/api/v1/inbox/count": {
+      "get": {
+        "operationId": "count-inbox",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CountOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Unread items in the caller's inbox",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/api/v1/inbox/read": {
+      "post": {
+        "operationId": "read-inbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark the caller's items read",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/api/v1/inbox/unarchive": {
+      "post": {
+        "operationId": "unarchive-inbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark the caller's items unarchive",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
+    "/api/v1/inbox/unread": {
+      "post": {
+        "operationId": "unread-inbox",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark the caller's items unread",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "get-me",
@@ -1165,6 +2823,242 @@
         "summary": "The signed-in user and the session's CSRF token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "operationId": "list-rules",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRulesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's routing rules",
+        "tags": [
+          "rules"
+        ]
+      },
+      "post": {
+        "operationId": "create-rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRuleInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a rule; its filter is compiled first",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/rules/preview": {
+      "post": {
+        "operationId": "preview-rule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Evaluate a filter against the last 20 events in scope, without saving",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/rules/{id}": {
+      "delete": {
+        "operationId": "delete-rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a rule",
+        "tags": [
+          "rules"
+        ]
+      },
+      "get": {
+        "operationId": "get-rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "One of the caller's rules",
+        "tags": [
+          "rules"
+        ]
+      },
+      "patch": {
+        "operationId": "update-rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRuleInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rule"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change a rule",
+        "tags": [
+          "rules"
         ]
       }
     },

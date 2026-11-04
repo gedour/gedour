@@ -24,14 +24,14 @@ describe("AppShell", () => {
         .getAllByRole("link")
         .map((l) => l.textContent),
     ).toEqual(["Inbox", "Watches", "Channels", "Rules", "Scripts", "Audit", "Settings"]);
-    expect(screen.getByText("Nothing to read yet")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing to read yet")).toBeInTheDocument();
   });
 
   it("navigates and shows the section's empty state", async () => {
     renderApp();
     await userEvent.click(screen.getByRole("link", { name: "Rules" }));
     expect(screen.getByRole("heading", { level: 1, name: "Rules" })).toBeInTheDocument();
-    expect(screen.getByText("No rules yet")).toBeInTheDocument();
+    expect(await screen.findByText("No rules yet")).toBeInTheDocument();
   });
 
   it("navigates to the watches list", async () => {

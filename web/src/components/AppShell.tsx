@@ -9,6 +9,7 @@ import { UserMenu } from "@/components/UserMenu";
 import { Wordmark } from "@/components/Wordmark";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useInboxStream } from "@/hooks/useInbox";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useSidebar } from "@/hooks/useSidebar";
 
@@ -28,6 +29,7 @@ export function AppShell() {
   const mobile = useMediaQuery(MOBILE_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { pathname } = useLocation();
+  useInboxStream();
 
   // Close the drawer on route or breakpoint change, during render rather than in an effect.
   const drawerKey = `${pathname}|${mobile}`;

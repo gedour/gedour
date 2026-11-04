@@ -77,3 +77,38 @@ export interface WatchFilters {
   q?: string;
   shared?: SharedFilter;
 }
+
+// Phase 5 resources.
+export type Channel = Schemas["Channel"];
+export type ChannelKind = Channel["type"];
+export type CreatedChannel = Schemas["CreatedChannel"];
+export type ChannelType = Schemas["ChannelType"];
+export type CreateChannelBody = Schemas["CreateChannelInputBody"];
+export type UpdateChannelBody = Schemas["UpdateChannelInputBody"];
+export type Rule = Schemas["Rule"];
+export type CreateRuleBody = Schemas["CreateRuleInputBody"];
+export type UpdateRuleBody = Schemas["UpdateRuleInputBody"];
+export type PreviewItem = Schemas["PreviewItem"];
+export type Delivery = Schemas["Delivery"];
+export type DeliveryStatus = Delivery["status"];
+export type InboxItem = Schemas["InboxItem"];
+export type InboxState = NonNullable<
+  NonNullable<operations["list-inbox"]["parameters"]["query"]>["state"]
+>;
+export type InboxAction = "read" | "unread" | "archive" | "unarchive";
+
+export interface InboxPage {
+  items: InboxItem[];
+  next_cursor?: string;
+}
+
+export interface DeliveriesPage {
+  items: Delivery[];
+  next_cursor?: string;
+}
+
+export interface DeliveryFilters {
+  channel_id?: string;
+  status?: DeliveryStatus;
+}
+export type FilterReference = Schemas["Ref"];

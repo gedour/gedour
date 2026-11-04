@@ -1,6 +1,22 @@
 import { readStorage, writeStorage } from "@/lib/utils";
 import type {
   AuditActor,
+  Channel,
+  ChannelType,
+  CreateChannelBody,
+  CreatedChannel,
+  CreateRuleBody,
+  DeliveriesPage,
+  Delivery,
+  DeliveryFilters,
+  FilterReference,
+  InboxAction,
+  InboxPage,
+  InboxState,
+  PreviewItem,
+  Rule,
+  UpdateChannelBody,
+  UpdateRuleBody,
   AuditFilters,
   AuditPage,
   CreateCredentialBody,
@@ -227,3 +243,55 @@ export const createCredential = (body: CreateCredentialBody) =>
 export const rotateCredentialSecret = (id: string, secret: string) =>
   sendJSON<Credential>("PUT", `${credentialPath(id)}/secret`, { secret });
 export const deleteCredential = (id: string) => sendJSON<undefined>("DELETE", credentialPath(id));
+
+export function listInbox(state: InboxState, cursor: string, limit = 50): Promise<InboxPage> {
+  const q = new URLSearchParams({ state, limit: String(limit) });
+  if (cursor) q.set("cursor", cursor);
+  return getJSON<InboxPage>(`/api/v1/inbox?${q}`);
+}
+export async function inboxCount(): Promise<number> {
+  return (await getJSON<{ unread: number }>("/api/v1/inbox/count")).unread;
+}
+export const inboxAction = (action: InboxAction, ids: number[]) =>
+  sendJSON<{ updated: number; unread: number }>("POST", `/api/v1/inbox/${action}`, { ids });
+
+const channelPath = (id: string) => `/api/v1/channels/${encodeURIComponent(id)}`;
+
+export async function listChannels(): Promise<Channel[]> {
+  return (await getJSON<{ items: Channel[] }>("/api/v1/channels")).items;
+}
+export async function listChannelTypes(): Promise<ChannelType[]> {
+  return (await getJSON<{ items: ChannelType[] }>("/api/v1/channel-types")).items;
+}
+export const createChannel = (body: CreateChannelBody) =>
+  sendJSON<CreatedChannel>("POST", "/api/v1/channels", body);
+export const updateChannel = (id: string, body: UpdateChannelBody) =>
+  sendJSON<Channel>("PATCH", channelPath(id), body);
+export const deleteChannel = (id: string) => sendJSON<undefined>("DELETE", channelPath(id));
+export const testChannel = (id: string) =>
+  sendJSON<{ ok: boolean; error?: string }>("POST", `${channelPath(id)}/test`);
+
+export function listDeliveries(filters: DeliveryFilters, cursor: string): Promise<DeliveriesPage> {
+  const q = new URLSearchParams({ limit: "25" });
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  if (cursor) q.set("cursor", cursor);
+  return getJSON<DeliveriesPage>(`/api/v1/deliveries?${q}`);
+}
+export const retryDelivery = (id: number) =>
+  sendJSON<Delivery>("POST", `/api/v1/deliveries/${id}/retry`);
+
+const rulePath = (id: string) => `/api/v1/rules/${encodeURIComponent(id)}`;
+
+export async function listRules(): Promise<Rule[]> {
+  return (await getJSON<{ items: Rule[] }>("/api/v1/rules")).items;
+}
+export const getRule = (id: string) => getJSON<Rule>(rulePath(id));
+export const createRule = (body: CreateRuleBody) => sendJSON<Rule>("POST", "/api/v1/rules", body);
+export const updateRule = (id: string, body: UpdateRuleBody) =>
+  sendJSON<Rule>("PATCH", rulePath(id), body);
+export const deleteRule = (id: string) => sendJSON<undefined>("DELETE", rulePath(id));
+export async function previewRule(filter: string, watchId: string): Promise<PreviewItem[]> {
+  const body = { filter, watch_id: watchId || undefined };
+  return (await sendJSON<{ items: PreviewItem[] }>("POST", "/api/v1/rules/preview", body)).items;
+}
+export const getFilterReference = () => getJSON<FilterReference>("/api/v1/filters/reference");

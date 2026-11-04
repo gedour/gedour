@@ -4,6 +4,7 @@ import { NavLink } from "react-router";
 
 import { getVersion } from "@/api/client";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useInboxCount } from "@/hooks/useInbox";
 import { SIDEBAR_MAX, SIDEBAR_MIN } from "@/hooks/useSidebar";
 import { cn } from "@/lib/utils";
 import { NAV } from "@/nav";
@@ -31,6 +32,7 @@ export function Sidebar({
   onNavigate,
 }: SidebarProps) {
   const iconOnly = collapsed && !mobile;
+  const unread = useInboxCount().data ?? 0;
   const drag = useRef<{ x: number; width: number } | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -81,28 +83,44 @@ export function Sidebar({
     >
       <nav aria-label="Main" className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3">
         <ul className="flex flex-col gap-0.5">
-          {NAV.map(({ path, label, icon: Icon }) => (
-            <li key={path}>
-              <Tooltip label={label} disabled={!iconOnly}>
-                <NavLink
-                  to={path}
-                  onClick={onNavigate}
-                  aria-label={iconOnly ? label : undefined}
-                  className={({ isActive }) =>
-                    cn(
-                      "relative flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-harbor-muted transition-colors hover:bg-harbor-hover hover:text-harbor-ink",
-                      iconOnly && "justify-center px-0",
-                      isActive &&
-                        "bg-harbor-hover text-white before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-r before:bg-harbor-beacon",
-                    )
-                  }
-                >
-                  <Icon className="size-[18px] shrink-0" aria-hidden />
-                  {!iconOnly && <span className="truncate">{label}</span>}
-                </NavLink>
-              </Tooltip>
-            </li>
-          ))}
+          {NAV.map(({ path, label, icon: Icon }) => {
+            const count = path === "/inbox" ? unread : 0;
+            const name = count ? `${label}, ${count} unread` : label;
+            return (
+              <li key={path}>
+                <Tooltip label={name} disabled={!iconOnly}>
+                  <NavLink
+                    to={path}
+                    onClick={onNavigate}
+                    aria-label={iconOnly || count ? name : undefined}
+                    className={({ isActive }) =>
+                      cn(
+                        "relative flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-harbor-muted transition-colors hover:bg-harbor-hover hover:text-harbor-ink",
+                        iconOnly && "justify-center px-0",
+                        isActive &&
+                          "bg-harbor-hover text-white before:absolute before:inset-y-2 before:left-0 before:w-1 before:rounded-r before:bg-harbor-beacon",
+                      )
+                    }
+                  >
+                    <Icon className="size-[18px] shrink-0" aria-hidden />
+                    {!iconOnly && <span className="truncate">{label}</span>}
+                    {count > 0 && (
+                      <span
+                        aria-hidden
+                        data-testid="unread-badge"
+                        className={cn(
+                          "rounded-full bg-harbor-beacon px-1.5 text-[11px] leading-[18px] font-semibold text-harbor tabular-nums",
+                          iconOnly ? "absolute top-1 right-1 min-w-[18px] text-center" : "ml-auto",
+                        )}
+                      >
+                        {count > 99 ? "99+" : count}
+                      </span>
+                    )}
+                  </NavLink>
+                </Tooltip>
+              </li>
+            );
+          })}
         </ul>
       </nav>
       {!iconOnly && <VersionFooter />}

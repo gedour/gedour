@@ -11,11 +11,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
+	"github.com/gedour/gedour/pkg/netguard"
+	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/watch"
 )
@@ -36,6 +40,23 @@ func testWatches(t *testing.T, pool *pgxpool.Pool) *watch.Service {
 	return watch.New(pool, zaptest.NewLogger(t), box, []string{"127.0.0.1"})
 }
 
+// testSender reaches httptest servers (127.0.0.1) only; tests point TelegramURL and Mailer at their stubs.
+func testSender() *notify.Sender {
+	g, _ := netguard.New([]string{"127.0.0.0/8"})
+	return &notify.Sender{Client: g.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: []string{"127.0.0.1"}, NoRedirects: true}),
+		UserAgent: "gedour/test", TelegramURL: "http://127.0.0.1:1"}
+}
+
+func testRoutes(t *testing.T, pool *pgxpool.Pool, sender *notify.Sender) *route.Service {
+	t.Helper()
+	box, err := secret.New(testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, _ := netguard.New([]string{"127.0.0.0/8"})
+	return route.New(pool, zaptest.NewLogger(t), box, sender, g, []string{"127.0.0.1"}, route.NewMetrics(prometheus.NewRegistry()))
+}
+
 // renderOpenAPI is the document the handlers serve, pretty printed, with a fixed version so the
 // committed file does not change on every release.
 func renderOpenAPI(t *testing.T) []byte {
@@ -45,7 +66,7 @@ func renderOpenAPI(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(zap.NewNop(), BuildInfo{Version: "v0.0.0"}, pingOK, fstest.MapFS{}, authn, nil, testWatches(t, nil))
+	h := New(zap.NewNop(), BuildInfo{Version: "v0.0.0"}, pingOK, fstest.MapFS{}, authn, nil, testWatches(t, nil), testRoutes(t, nil, testSender()))
 	rec := get(t, h, "/api/openapi.json")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("openapi: %d", rec.Code)

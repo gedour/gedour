@@ -84,3 +84,14 @@ func compareTags(a, b string) int {
 	}
 	return strings.Compare(a, b)
 }
+
+// SemverGreater reports whether a has a higher semver precedence than b; ok is false when either
+// does not parse.
+func SemverGreater(a, b string) (greater, ok bool) {
+	va, okA := parseSemver(a)
+	vb, okB := parseSemver(b)
+	if !okA || !okB {
+		return false, false
+	}
+	return compareSemver(va, vb) > 0, true
+}

@@ -17,11 +17,25 @@ services:
       timeout: 3s
       retries: 30
 
+  # Dev SMTP sink for email channels: UI and API on :8025.
+  mailpit:
+    image: axllent/mailpit:v1.33.0
+    ports:
+      - "127.0.0.1:${GEDOUR_MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${GEDOUR_MAILPIT_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   # Dev single-user mode: no login, every request runs as dev@local.
   gedour:
     build: .
     depends_on:
       db:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     environment:
       GEDOUR_DATABASE_URL: postgres://gedour:gedour@db:5432/gedour?sslmode=disable
@@ -29,6 +43,11 @@ services:
       GEDOUR_DEV_USER: dev@local
       # Dev-only key, public in this file: never reuse it where real credentials are stored.
       GEDOUR_ENCRYPTION_KEY: ZGV2LW9ubHktZ2Vkb3VyLWtleS0zMi1ieXRlcy0hISE=
+      GEDOUR_SMTP_ADDR: mailpit:1025
+      GEDOUR_SMTP_FROM: gedour <gedour@localhost>
+      GEDOUR_SMTP_TLS: none
+      # Plain SMTP to the sink only: Docker's default address pools.
+      GEDOUR_SMTP_PLAIN_NETS: 172.16.0.0/12,192.168.0.0/16
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:9090:9090"

@@ -4,6 +4,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"os"
@@ -55,6 +57,18 @@ type Config struct {
 	WorkerPoll time.Duration
 	// WorkerConcurrency caps the runs one worker process executes at once.
 	WorkerConcurrency int
+
+	// TelegramAPIURL is the Bot API base URL (a stub in tests).
+	TelegramAPIURL string
+	// SMTPAddr (host:port) enables email channels; the other SMTP fields configure that server.
+	SMTPAddr     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+	// SMTPTLS is starttls, tls or none (loopback or SMTPPlainNets only).
+	SMTPTLS string
+	// SMTPPlainNets are the CIDRs TLS "none" may reach besides loopback.
+	SMTPPlainNets []string
 }
 
 func getEnv(key, fallback string) string {
@@ -115,6 +129,13 @@ func Load() (Config, error) {
 		AllowPrivateNets:   splitList(os.Getenv("GEDOUR_ALLOW_PRIVATE_NETS")),
 		WorkerPoll:         poll,
 		WorkerConcurrency:  concurrency,
+		TelegramAPIURL:     getEnv("GEDOUR_TELEGRAM_API_URL", "https://api.telegram.org"),
+		SMTPAddr:           os.Getenv("GEDOUR_SMTP_ADDR"),
+		SMTPUsername:       os.Getenv("GEDOUR_SMTP_USERNAME"),
+		SMTPPassword:       os.Getenv("GEDOUR_SMTP_PASSWORD"),
+		SMTPFrom:           os.Getenv("GEDOUR_SMTP_FROM"),
+		SMTPTLS:            getEnv("GEDOUR_SMTP_TLS", "starttls"),
+		SMTPPlainNets:      splitList(os.Getenv("GEDOUR_SMTP_PLAIN_NETS")),
 	}, nil
 }
 
@@ -147,16 +168,19 @@ func (c Config) Validate() error {
 	if c.ShutdownTimeout <= 0 {
 		errs = append(errs, errors.New("GEDOUR_SHUTDOWN_TIMEOUT must be positive"))
 	}
-	if c.RunsWorker() {
-		if c.WorkerPoll <= 0 || c.WorkerConcurrency < 1 {
-			errs = append(errs, errors.New("GEDOUR_WORKER_POLL must be positive and GEDOUR_WORKER_CONCURRENCY at least 1"))
-		}
-		for _, n := range c.AllowPrivateNets {
-			if _, err := netip.ParsePrefix(n); err != nil {
-				errs = append(errs, fmt.Errorf("GEDOUR_ALLOW_PRIVATE_NETS: %w", err))
-			}
+	if c.RunsWorker() && (c.WorkerPoll <= 0 || c.WorkerConcurrency < 1) {
+		errs = append(errs, errors.New("GEDOUR_WORKER_POLL must be positive and GEDOUR_WORKER_CONCURRENCY at least 1"))
+	}
+	// Both roles send: the worker deliveries, web the channel tests.
+	for _, n := range c.AllowPrivateNets {
+		if _, err := netip.ParsePrefix(n); err != nil {
+			errs = append(errs, fmt.Errorf("GEDOUR_ALLOW_PRIVATE_NETS: %w", err))
 		}
 	}
+	if err := absoluteURL(c.TelegramAPIURL); err != nil {
+		errs = append(errs, fmt.Errorf("GEDOUR_TELEGRAM_API_URL: %w", err))
+	}
+	errs = append(errs, c.validateSMTP()...)
 	// Both roles read credentials: web seals them, the worker opens them.
 	if _, err := secret.ParseKey(c.EncryptionKey); err != nil {
 		errs = append(errs, fmt.Errorf("GEDOUR_ENCRYPTION_KEY: %w", err))
@@ -201,6 +225,39 @@ func (c Config) validateAuth() []error {
 	}
 	return errs
 }
+
+func (c Config) validateSMTP() []error {
+	var errs []error
+	switch c.SMTPTLS {
+	case "starttls", "tls", "none":
+	default:
+		errs = append(errs, fmt.Errorf("GEDOUR_SMTP_TLS %q: must be starttls, tls or none", c.SMTPTLS))
+	}
+	if c.SMTPAddr == "" {
+		return errs
+	}
+	if _, port, err := net.SplitHostPort(c.SMTPAddr); err != nil || port == "" {
+		errs = append(errs, fmt.Errorf("GEDOUR_SMTP_ADDR %q: must be host:port", c.SMTPAddr))
+	}
+	if a, err := mail.ParseAddress(c.SMTPFrom); err != nil || !strings.Contains(a.Address, "@") {
+		errs = append(errs, fmt.Errorf("GEDOUR_SMTP_FROM %q: must be an email address, e.g. gedour <gedour@example.com>", c.SMTPFrom))
+	}
+	if (c.SMTPUsername == "") != (c.SMTPPassword == "") {
+		errs = append(errs, errors.New("GEDOUR_SMTP_USERNAME and GEDOUR_SMTP_PASSWORD must be set together"))
+	}
+	if c.SMTPTLS == "none" && c.SMTPUsername != "" {
+		errs = append(errs, errors.New("GEDOUR_SMTP_TLS=none would send GEDOUR_SMTP_PASSWORD in clear: use starttls or tls"))
+	}
+	for _, n := range c.SMTPPlainNets {
+		if _, err := netip.ParsePrefix(n); err != nil {
+			errs = append(errs, fmt.Errorf("GEDOUR_SMTP_PLAIN_NETS: %w", err))
+		}
+	}
+	return errs
+}
+
+// SMTP reports whether email channels can be used.
+func (c Config) SMTP() bool { return c.SMTPAddr != "" }
 
 func splitList(s string) []string {
 	var out []string

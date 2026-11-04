@@ -10,12 +10,15 @@ export function Dialog({
   onClose,
   children,
   className,
+  dismissible = true,
 }: {
   open: boolean;
   title: string;
   onClose: () => void;
   children: ReactNode;
   className?: string;
+  /** False: Escape does nothing; only the content's own buttons close it. */
+  dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -29,7 +32,14 @@ export function Dialog({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
-      onClose={onClose}
+      onCancel={(e) => {
+        if (!dismissible) e.preventDefault();
+      }}
+      onClose={() => {
+        // A browser may close it despite the cancelled Escape: put it back while it must stay.
+        if (!dismissible && open) ref.current?.showModal();
+        else onClose();
+      }}
       className={cn(
         "m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-0 text-ink shadow-2xl backdrop:bg-black/50",
         className,

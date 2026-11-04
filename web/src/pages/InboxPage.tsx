@@ -1,0 +1,651 @@
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Archive,
+  ArchiveRestore,
+  ExternalLink,
+  Mail,
+  MailOpen,
+  Telescope,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router";
+
+import { inboxAction, listInbox } from "@/api/client";
+import { EmptyState } from "@/components/EmptyState";
+import { ErrorState } from "@/components/ErrorState";
+import { Timestamp } from "@/components/Timestamp";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogActions } from "@/components/ui/dialog";
+import { KindIcon } from "@/components/WatchBits";
+import { useToast } from "@/hooks/toast";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { COUNT_KEY, LIST_KEY, useInboxCount } from "@/hooks/useInbox";
+import { summarizeEvent, TONE_CLASS } from "@/lib/events";
+import { groupByDay } from "@/lib/inbox";
+import { problemText } from "@/lib/problems";
+import { formatAbsolute, formatRelative } from "@/lib/time";
+import { cn } from "@/lib/utils";
+import type { NavItem } from "@/nav";
+import type { InboxAction, InboxItem, InboxState } from "@/types/api";
+
+const TABS: { state: InboxState; label: string }[] = [
+  { state: "unread", label: "Unread" },
+  { state: "all", label: "All" },
+  { state: "archived", label: "Archived" },
+];
+
+const EMPTY: Record<InboxState, { title: string; body: string } | null> = {
+  unread: {
+    title: "You are all caught up",
+    body: "New changes land here as your watches see them.",
+  },
+  all: null,
+  archived: { title: "Nothing archived", body: "Archive items (e) to keep this list short." },
+};
+
+// Shortcuts must not fire while typing in a field (a checkbox or radio takes no text), nor inside a
+// menu, an open dialog or the navigation drawer, which own their keys.
+function ignoresShortcuts(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const typing =
+    (target instanceof HTMLInputElement && !["checkbox", "radio"].includes(target.type)) ||
+    ["TEXTAREA", "SELECT"].includes(target.tagName) ||
+    target.isContentEditable;
+  return typing || target.closest("[role=menu], dialog[open], #app-sidebar") !== null;
+}
+
+const rowId = (id: number) => `inbox-item-${id}`;
+
+// The side panel needs the lg layout's room; below it the detail is a dialog.
+const WIDE_QUERY = "(min-width: 1024px)";
+
+export function InboxPage({ item: nav }: { item: NavItem }) {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get("state");
+  const state: InboxState = raw === "unread" || raw === "archived" ? raw : "all";
+  const query = useInfiniteQuery({
+    queryKey: [...LIST_KEY, state],
+    queryFn: ({ pageParam }) => listInbox(state, pageParam),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor,
+  });
+  const items = query.data?.pages.flatMap((p) => p.items) ?? [];
+  const unread = useInboxCount().data;
+  const client = useQueryClient();
+  const toast = useToast();
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [focus, setFocus] = useState(0);
+  // The opened item itself, not its id: in the Unread tab, reading it drops it from the list, and the
+  // panel must stay.
+  const [opened, setOpened] = useState<InboxItem | null>(null);
+  const wide = useMediaQuery(WIDE_QUERY);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogOpen = Boolean(opened) && !wide;
+  // After the dialog's own effect opened it: a closed dialog's content cannot take focus.
+  useEffect(() => {
+    if (dialogOpen) closeRef.current?.focus();
+  }, [dialogOpen]);
+
+  // Items new since the last render of this tab play the arrival animation.
+  const ids = items.map((i) => i.id).join(",");
+  const [seen, setSeen] = useState<{ state: InboxState; ids: string } | null>(null);
+  const [arrived, setArrived] = useState<Set<number>>(new Set());
+  if (query.isSuccess && (seen?.state !== state || seen.ids !== ids)) {
+    const before = seen?.state === state ? new Set(seen.ids.split(",").map(Number)) : null;
+    setArrived(
+      before ? new Set(items.filter((i) => !before.has(i.id)).map((i) => i.id)) : new Set(),
+    );
+    setSeen({ state, ids });
+    // Selection and focus follow the list: gone items drop out.
+    setSelected((s) => new Set([...s].filter((id) => items.some((i) => i.id === id))));
+    setFocus((f) => Math.min(f, Math.max(items.length - 1, 0)));
+  }
+
+  const act = useMutation({
+    mutationFn: ({ action, ids }: { action: InboxAction; ids: number[] }) =>
+      inboxAction(action, ids),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: COUNT_KEY });
+      void client.invalidateQueries({ queryKey: LIST_KEY });
+    },
+    onError: (err) => toast(`Could not update the inbox: ${problemText(err)}`, "error"),
+  });
+  const busy = act.isPending;
+  const run = (action: InboxAction, ids: number[]) => {
+    if (ids.length > 0 && !busy) act.mutate({ action, ids });
+  };
+  const now = () => new Date().toISOString();
+  const PATCH: Record<InboxAction, Partial<InboxItem>> = {
+    read: { read_at: now() },
+    unread: { read_at: null },
+    archive: { archived_at: now() },
+    unarchive: { archived_at: null },
+  };
+  const actOnOpened = (a: InboxAction) => {
+    if (!opened || busy) return;
+    run(a, [opened.id]);
+    setOpened({ ...opened, ...PATCH[a] });
+  };
+  const open = (it: InboxItem) => {
+    setOpened(it.read_at ? it : { ...it, read_at: now() });
+    if (!it.read_at) run("read", [it.id]);
+  };
+  const close = () => {
+    const id = opened?.id;
+    setOpened(null);
+    if (id !== undefined) document.getElementById(rowId(id))?.focus();
+  };
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const moveTo = (i: number) => {
+    const it = items[i];
+    if (!it) return;
+    setFocus(i);
+    document.getElementById(rowId(it.id))?.focus();
+  };
+
+  const onKey = useEffectEvent((e: KeyboardEvent) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || ignoresShortcuts(e.target)) {
+      return;
+    }
+    const it = items[focus];
+    switch (e.key) {
+      case "j":
+        moveTo(Math.min(focus + 1, items.length - 1));
+        break;
+      case "k":
+        moveTo(Math.max(focus - 1, 0));
+        break;
+      case "e":
+        if (it) run(it.archived_at ? "unarchive" : "archive", [it.id]);
+        break;
+      case "u":
+        if (it) run(it.read_at ? "unread" : "read", [it.id]);
+        break;
+      case "x":
+        if (it) toggle(it.id);
+        break;
+      case "Enter":
+        if (it && e.target === document.body) open(it);
+        return;
+      case "Escape":
+        if (opened) close();
+        return;
+      default:
+        return;
+    }
+    e.preventDefault();
+  });
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => onKey(e);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const chosen = [...selected];
+  const empty = EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody };
+  const allSelected = items.length > 0 && selected.size === items.length;
+  const tabsId = useId();
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-8 md:px-10 md:py-12">
+      <title>{unread ? `(${unread}) ${nav.label} – gedour` : `${nav.label} – gedour`}</title>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-2">
+          <h1 className="font-display text-3xl font-semibold tracking-tight">{nav.label}</h1>
+          <p className="max-w-prose text-muted">
+            Changes your rules let through, newest first.{" "}
+            <span className="hidden text-xs md:inline">
+              <kbd className="font-mono">j</kbd>/<kbd className="font-mono">k</kbd> move,{" "}
+              <kbd className="font-mono">x</kbd> select, <kbd className="font-mono">u</kbd>{" "}
+              read/unread, <kbd className="font-mono">e</kbd> archive.
+            </span>
+          </p>
+        </div>
+        <div
+          role="group"
+          aria-label="Show"
+          id={tabsId}
+          className="inline-flex h-9 rounded-md border border-line bg-surface p-0.5 shadow-xs"
+        >
+          {TABS.map((t) => (
+            <button
+              key={t.state}
+              type="button"
+              aria-pressed={state === t.state}
+              onClick={() => {
+                setParams(t.state === "all" ? {} : { state: t.state });
+                setSelected(new Set());
+                setOpened(null);
+                setFocus(0);
+              }}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-3 text-sm font-medium whitespace-nowrap text-muted transition-colors hover:text-ink",
+                state === t.state && "bg-beacon-soft text-ink",
+              )}
+            >
+              {t.label}
+              {t.state === "unread" && unread ? (
+                <span className="rounded-full bg-beacon px-1.5 text-[11px] text-surface tabular-nums">
+                  {unread}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {query.isError && !query.data ? (
+        <ErrorState
+          title="The inbox could not be loaded."
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      ) : query.isPending ? (
+        <ul aria-busy aria-label="Loading inbox" className="flex flex-col gap-2">
+          {Array.from({ length: 5 }, (_, i) => (
+            <li
+              key={i}
+              data-testid="inbox-skeleton"
+              className="flex items-center gap-4 rounded-xl border border-line bg-surface px-4 py-3.5"
+            >
+              <span aria-hidden className="size-9 animate-pulse rounded-lg bg-line" />
+              <span className="flex flex-1 flex-col gap-2">
+                <span aria-hidden className="h-3.5 w-56 animate-pulse rounded bg-line" />
+                <span aria-hidden className="h-3 w-32 animate-pulse rounded bg-line" />
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : items.length === 0 ? (
+        <EmptyState
+          title={empty.title}
+          body={empty.body}
+          action={
+            state === "all" ? (
+              <Button variant="outline" asChild>
+                <Link to="/rules">
+                  <Telescope aria-hidden />
+                  Set up a rule
+                </Link>
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <div
+          className={cn(
+            "grid items-start gap-4",
+            opened && wide && "grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]",
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex min-h-9 flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5">
+              <input
+                type="checkbox"
+                aria-label="Select all"
+                checked={allSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = selected.size > 0 && !allSelected;
+                }}
+                onChange={() =>
+                  setSelected(allSelected ? new Set() : new Set(items.map((i) => i.id)))
+                }
+                className="size-4 accent-beacon"
+              />
+              {selected.size === 0 ? (
+                <span className="text-sm text-muted">
+                  {items.length} item{items.length === 1 ? "" : "s"}
+                </span>
+              ) : (
+                <div
+                  role="toolbar"
+                  aria-label="Bulk actions"
+                  className="flex flex-wrap items-center gap-1"
+                >
+                  <span className="mr-2 text-sm font-medium">{selected.size} selected</span>
+                  <BulkButton
+                    disabled={busy}
+                    icon={MailOpen}
+                    label="Mark read"
+                    onClick={() => run("read", chosen)}
+                  />
+                  <BulkButton
+                    disabled={busy}
+                    icon={Mail}
+                    label="Mark unread"
+                    onClick={() => run("unread", chosen)}
+                  />
+                  {state === "archived" ? (
+                    <BulkButton
+                      disabled={busy}
+                      icon={ArchiveRestore}
+                      label="Unarchive"
+                      onClick={() => run("unarchive", chosen)}
+                    />
+                  ) : (
+                    <BulkButton
+                      disabled={busy}
+                      icon={Archive}
+                      label="Archive"
+                      onClick={() => run("archive", chosen)}
+                    />
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                    Clear
+                  </Button>
+                </div>
+              )}
+            </div>
+            {groupByDay(items).map((g) => (
+              <section key={g.label} aria-label={g.label} className="flex flex-col gap-1.5">
+                <h2 className="px-1 text-xs font-semibold tracking-wide text-muted uppercase">
+                  {g.label}
+                </h2>
+                <ul
+                  aria-label={`Inbox, ${g.label}`}
+                  className="overflow-hidden rounded-xl border border-line bg-surface"
+                >
+                  {g.items.map((it) => {
+                    const idx = items.indexOf(it);
+                    return (
+                      <InboxRow
+                        key={it.id}
+                        item={it}
+                        focused={idx === focus}
+                        selected={selected.has(it.id)}
+                        active={it.id === opened?.id}
+                        arrived={arrived.has(it.id)}
+                        onToggle={() => toggle(it.id)}
+                        onOpen={() => open(it)}
+                        onFocus={() => setFocus(idx)}
+                      />
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+            {query.hasNextPage && (
+              <Button
+                variant="outline"
+                className="self-center"
+                disabled={query.isFetchingNextPage}
+                onClick={() => void query.fetchNextPage()}
+              >
+                {query.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            )}
+          </div>
+          {opened && wide && (
+            <InboxPanel item={opened} busy={busy} onClose={close} onAction={actOnOpened} />
+          )}
+        </div>
+      )}
+      {/* Narrow screens: a modal dialog, which traps focus and gives it back on close. */}
+      <Dialog
+        open={dialogOpen}
+        title={opened ? summarizeEvent(opened.event).text : ""}
+        onClose={close}
+        className="w-[calc(100vw-1.5rem)]"
+      >
+        {opened && !wide && (
+          <>
+            <DetailBody item={opened} busy={busy} onAction={actOnOpened} />
+            <DialogActions>
+              <Button variant="ghost" ref={closeRef} onClick={close}>
+                Close
+              </Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
+    </div>
+  );
+}
+
+function BulkButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <Button variant="ghost" size="sm" disabled={disabled} onClick={onClick}>
+      <Icon aria-hidden />
+      {label}
+    </Button>
+  );
+}
+
+function InboxRow({
+  item,
+  focused,
+  selected,
+  active,
+  arrived,
+  onToggle,
+  onOpen,
+  onFocus,
+}: {
+  item: InboxItem;
+  focused: boolean;
+  selected: boolean;
+  active: boolean;
+  arrived: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  onFocus: () => void;
+}) {
+  const s = summarizeEvent(item.event);
+  const unread = !item.read_at;
+  const at = new Date(item.created_at);
+  return (
+    <li
+      data-unread={unread}
+      data-focused={focused}
+      className={cn(
+        "flex items-center gap-3 border-b border-line px-3 py-2.5 last:border-0",
+        unread ? "bg-surface" : "bg-bg/40",
+        selected && "bg-beacon-soft/50",
+        active && "bg-beacon-soft",
+        focused && "shadow-[inset_3px_0_0_var(--beacon)]",
+        arrived && "animate-arrive",
+      )}
+    >
+      <input
+        type="checkbox"
+        aria-label={`Select: ${s.text}`}
+        checked={selected}
+        onChange={onToggle}
+        className="size-4 shrink-0 accent-beacon"
+      />
+      <button
+        id={rowId(item.id)}
+        type="button"
+        onClick={onOpen}
+        onFocus={onFocus}
+        aria-current={active || undefined}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-offset-4"
+      >
+        <KindIcon kind={item.watch.kind} className="size-9" />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={cn(
+              "line-clamp-2 break-words sm:line-clamp-1",
+              unread ? "font-semibold text-ink" : "text-muted",
+            )}
+          >
+            {unread && <span className="sr-only">Unread: </span>}
+            {s.text}
+          </span>
+          <span className="flex min-w-0 items-center gap-2 text-xs text-muted">
+            <span className={cn("rounded px-1.5 py-px ring-1 ring-inset", TONE_CLASS[s.tone])}>
+              {s.badge}
+            </span>
+            <span className="truncate">{item.watch.name}</span>
+          </span>
+        </span>
+        <time
+          dateTime={item.created_at}
+          title={formatAbsolute(at)}
+          className="shrink-0 text-xs text-muted tabular-nums"
+        >
+          {formatRelative(at)}
+        </time>
+        <span
+          aria-hidden
+          className={cn("size-2 shrink-0 rounded-full", unread ? "bg-beacon" : "bg-transparent")}
+        />
+      </button>
+    </li>
+  );
+}
+
+function payloadRows(payload: Record<string, unknown>): [string, string][] {
+  return Object.entries(payload)
+    .filter(([k]) => k !== "url")
+    .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]);
+}
+
+function InboxPanel({
+  item,
+  busy,
+  onClose,
+  onAction,
+}: {
+  item: InboxItem;
+  busy: boolean;
+  onClose: () => void;
+  onAction: (a: InboxAction) => void;
+}) {
+  const titleId = useId();
+  return (
+    <aside
+      aria-labelledby={titleId}
+      className="sticky top-4 flex max-h-[calc(100dvh-8rem)] flex-col gap-4 overflow-y-auto rounded-xl border border-line bg-surface p-5"
+    >
+      <div className="flex items-start gap-3">
+        <h2 id={titleId} className="sr-only">
+          {summarizeEvent(item.event).text}
+        </h2>
+        <div className="flex-1">
+          <DetailHeader item={item} />
+        </div>
+        <Button variant="ghost" size="icon" aria-label="Close details" onClick={onClose}>
+          <X aria-hidden />
+        </Button>
+      </div>
+      <DetailBody item={item} busy={busy} onAction={onAction} />
+    </aside>
+  );
+}
+
+function DetailHeader({ item }: { item: InboxItem }) {
+  const s = summarizeEvent(item.event);
+  return (
+    <div className="flex items-start gap-3">
+      <KindIcon kind={item.watch.kind} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span
+          className={cn("w-fit rounded px-1.5 py-px text-xs ring-1 ring-inset", TONE_CLASS[s.tone])}
+        >
+          {s.badge}
+        </span>
+        <p aria-hidden className="font-display text-lg leading-snug font-semibold break-words">
+          {s.text}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function DetailBody({
+  item,
+  busy,
+  onAction,
+}: {
+  item: InboxItem;
+  busy: boolean;
+  onAction: (a: InboxAction) => void;
+}) {
+  const s = summarizeEvent(item.event);
+  const rows = payloadRows(item.event.payload);
+  return (
+    <div className="flex flex-col gap-4">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+        <dt className="text-muted">Watch</dt>
+        <dd className="min-w-0 truncate">
+          <Link
+            to={`/watches/${item.watch.id}`}
+            className="font-medium underline-offset-4 hover:underline"
+          >
+            {item.watch.name}
+          </Link>
+        </dd>
+        <dt className="text-muted">Event</dt>
+        <dd className="font-mono text-xs">{item.event.type}</dd>
+        <dt className="text-muted">Arrived</dt>
+        <dd>
+          <Timestamp at={item.created_at} />
+        </dd>
+        {item.event.occurred_at && (
+          <>
+            <dt className="text-muted">Upstream</dt>
+            <dd>
+              <Timestamp at={item.event.occurred_at} />
+            </dd>
+          </>
+        )}
+      </dl>
+      {rows.length > 0 && (
+        <section aria-label="Details" className="rounded-lg bg-bg p-3">
+          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs">
+            {rows.map(([k, v]) => (
+              <div key={k} className="contents">
+                <dt className="font-mono text-muted">{k}</dt>
+                <dd className="min-w-0 font-mono break-words">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {s.url && (
+          <Button variant="primary" asChild>
+            <a href={s.url} target="_blank" rel="noreferrer noopener">
+              <ExternalLink aria-hidden />
+              Open upstream
+            </a>
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => onAction(item.read_at ? "unread" : "read")}
+        >
+          {item.read_at ? <Mail aria-hidden /> : <MailOpen aria-hidden />}
+          {item.read_at ? "Mark unread" : "Mark read"}
+        </Button>
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => onAction(item.archived_at ? "unarchive" : "archive")}
+        >
+          {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+          {item.archived_at ? "Unarchive" : "Archive"}
+        </Button>
+      </div>
+    </div>
+  );
+}

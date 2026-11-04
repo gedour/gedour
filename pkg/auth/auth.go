@@ -143,6 +143,17 @@ func UserID(ctx context.Context) (string, bool) {
 	return u.ID, ok
 }
 
+// SessionAlive reports whether r's session still holds, for long-lived requests (SSE) that outlive
+// Guard's check: a sign-out or an expiry ends them. Read-only: an open tab is not activity, so the idle
+// timeout still applies. Dev mode has no session to lose. Fails closed.
+func (s *Service) SessionAlive(r *http.Request) bool {
+	if s.DevMode() {
+		return true
+	}
+	sess, err := s.lookup(r, false)
+	return err == nil && sess != nil
+}
+
 // loopbackHost reports whether a Host header names this machine (port ignored).
 func loopbackHost(host string) bool {
 	if h, _, err := net.SplitHostPort(host); err == nil {

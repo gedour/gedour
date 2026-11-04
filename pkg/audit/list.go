@@ -39,7 +39,7 @@ type Query struct {
 }
 
 // visible is the one visibility rule (001-AC22): entries the viewer made, or on a watch they can read
-// now, or on a credential they own. Share entries (target "<watch>:<user>") go to the watch owner, and
+// now, or on a credential, channel, rule or delivery (via its channel) they own. Share entries (target "<watch>:<user>") go to the watch owner, and
 // to a sharee only for their own current share. Losing access to a watch hides its history.
 const visible = `(a.actor_user_id = @viewer
 	OR (a.target_type = 'watch' AND a.target_id IN (
@@ -49,7 +49,11 @@ const visible = `(a.actor_user_id = @viewer
 		split_part(a.target_id, ':', 1) IN (SELECT id::text FROM watches WHERE owner_id = @viewer)
 		OR EXISTS (SELECT 1 FROM watch_shares s WHERE s.user_id = @viewer
 			AND a.target_id = s.watch_id::text || ':' || s.user_id::text)))
-	OR (a.target_type = 'credential' AND a.target_id IN (SELECT id::text FROM credentials WHERE owner_id = @viewer)))`
+	OR (a.target_type = 'credential' AND a.target_id IN (SELECT id::text FROM credentials WHERE owner_id = @viewer))
+	OR (a.target_type = 'channel' AND a.target_id IN (SELECT id::text FROM channels WHERE owner_id = @viewer))
+	OR (a.target_type = 'rule' AND a.target_id IN (SELECT id::text FROM rules WHERE owner_id = @viewer))
+	OR (a.target_type = 'delivery' AND a.target_id IN (SELECT d.id::text FROM deliveries d JOIN channels c ON c.id = d.channel_id
+		WHERE c.owner_id = @viewer)))`
 
 // Actor is a user who appears as actor in entries visible to the viewer.
 type Actor struct {

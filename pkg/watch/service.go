@@ -80,6 +80,13 @@ type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
+// ReadableSQL is the read access rule of watchSelect as a predicate on the watch aliased w, for the
+// user given as a SQL expression: owner or sharee. The router and rule checks use it (001-AC14).
+func ReadableSQL(w, user string) string {
+	return "(" + w + ".owner_id = " + user + " OR EXISTS (SELECT 1 FROM watch_shares rs WHERE rs.watch_id = " + w +
+		".id AND rs.user_id = " + user + "))"
+}
+
 // watchSelect returns watches the viewer can read, with the viewer's permission on each.
 const watchSelect = `SELECT w.id::text, w.name, w.kind, w.config, w.credential_id::text, w.schedule, w.paused,
 		w.owner_id::text, COALESCE(NULLIF(u.display_name, ''), u.email, ''),

@@ -1,0 +1,33 @@
+import { Mail, Send, Webhook, type LucideIcon } from "lucide-react";
+
+import type { Channel, ChannelKind } from "@/types/api";
+
+export const CHANNEL_KINDS: { type: ChannelKind; label: string; icon: LucideIcon }[] = [
+  { type: "telegram", label: "Telegram", icon: Send },
+  { type: "email", label: "Email", icon: Mail },
+  { type: "webhook", label: "Webhook", icon: Webhook },
+];
+
+export function channelKind(type: ChannelKind) {
+  return (
+    CHANNEL_KINDS.find((k) => k.type === type) ??
+    (CHANNEL_KINDS[2] as (typeof CHANNEL_KINDS)[number])
+  );
+}
+
+/** Where a channel sends: the chat, the recipients, or the webhook's host. */
+export function channelTarget(c: Pick<Channel, "type" | "config">): string {
+  const cfg = c.config;
+  switch (c.type) {
+    case "telegram":
+      return `chat ${String(cfg.chat_id ?? "")}`;
+    case "email":
+      return Array.isArray(cfg.to) ? cfg.to.join(", ") : "";
+    default:
+      try {
+        return new URL(String(cfg.url)).host;
+      } catch {
+        return String(cfg.url ?? "");
+      }
+  }
+}

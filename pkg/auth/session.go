@@ -156,8 +156,14 @@ func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
 	}
 }
 
-// current returns the request's live session, or nil when there is none or it expired.
+// current returns the request's live session, or nil when there is none or it expired; it moves the
+// idle clock.
 func (s *Service) current(r *http.Request) (*session, error) {
+	return s.lookup(r, true)
+}
+
+// lookup is current, with touch false for checks that must not count as activity.
+func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	c, err := r.Cookie(s.sessionCookieName())
 	if err != nil || c.Value == "" {
 		return nil, nil //nolint:nilerr // no cookie is "signed out", not an error
@@ -177,7 +183,7 @@ func (s *Service) current(r *http.Request) (*session, error) {
 		return nil, fmt.Errorf("lookup session: %w", err)
 	}
 	// Idle clock moves at most once a minute: no write on every request.
-	if stale {
+	if stale && touch {
 		if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = now() WHERE id = $1`, sess.id); err != nil {
 			return nil, fmt.Errorf("touch session: %w", err)
 		}

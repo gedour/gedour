@@ -1,4 +1,4 @@
-// Package notify formats events into messages and sends them to Telegram, SMTP and webhooks.
+// Package notify formats events into messages and sends them to Telegram, Nextcloud Talk, SMTP and webhooks.
 package notify
 
 import (

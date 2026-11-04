@@ -2,12 +2,15 @@ package db
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"sync"
 	"testing"
 	"testing/fstest"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 
 	"github.com/gedour/gedour/pkg/testpg"
 )
@@ -33,6 +36,56 @@ func TestMigrateIdempotent(t *testing.T) {
 	n, err = Migrate(ctx, pool)
 	if err != nil || n != 0 {
 		t.Fatalf("second run must be a no-op: applied=%d err=%v", n, err)
+	}
+}
+
+// 003-AC1: the migration lets nextcloud_talk channels in; its down removes them, even one a rule uses.
+func TestTalkMigration(t *testing.T) {
+	ctx := context.Background()
+	pool, err := Connect(ctx, testpg.NewDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	insert := `INSERT INTO channels (owner_id, name, type, config) VALUES ((SELECT id FROM users), $1, $2, '{}') RETURNING id`
+	if _, err := pool.Exec(ctx, `INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`); err != nil {
+		t.Fatal(err)
+	}
+	var channel, rule string
+	if err := pool.QueryRow(ctx, insert, "talk", "nextcloud_talk").Scan(&channel); err != nil {
+		t.Fatalf("nextcloud_talk refused: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "pager", "pager"); err == nil {
+		t.Fatal("an unknown type must stay refused")
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, filter) VALUES ((SELECT id FROM users), 'r', '') RETURNING id`).Scan(&rule); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, rule, channel); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := fs.Sub(migrations, "migrations")
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = sqlDB.Close() }()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 6); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if _, err := pool.Exec(ctx, insert, "talk", "nextcloud_talk"); err == nil {
+		t.Fatal("after the down, nextcloud_talk must be refused")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM channels`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("after the down: %d channels, %v", n, err)
+	}
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
 	}
 }
 

@@ -95,7 +95,7 @@ export function ChannelsPage({ item }: { item: NavItem }) {
         ) : query.data.length === 0 ? (
           <EmptyState title={item.emptyTitle} body={item.emptyBody} action={newButton} />
         ) : (
-          <ul aria-label="Channels" className="grid gap-3 md:grid-cols-2">
+          <ul aria-label="Channels" className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {query.data.map((c) => (
               <ChannelCard
                 key={c.id}
@@ -282,6 +282,8 @@ function ChannelForm({
   const [chatId, setChatId] = useState(String(cfg.chat_id ?? ""));
   const [to, setTo] = useState(Array.isArray(cfg.to) ? cfg.to.join("\n") : "");
   const [url, setUrl] = useState(String(cfg.url ?? ""));
+  const [conversation, setConversation] = useState(String(cfg.conversation ?? ""));
+  const [silent, setSilent] = useState(cfg.silent === true);
   const [scriptId, setScriptId] = useState(String(cfg.script_id ?? ""));
   const scripts = useQuery({ queryKey: ["scripts"], queryFn: listScripts });
   const [secret, setSecret] = useState("");
@@ -292,7 +294,8 @@ function ChannelForm({
   const available = types.data?.find((t) => t.type === type);
 
   const config = () => {
-    if (type === "telegram") return { chat_id: chatId };
+    if (type === "telegram") return { chat_id: chatId, silent };
+    if (type === "nextcloud_talk") return { url, conversation, silent };
     if (type === "email") return { to: splitRecipients(to) };
     if (type === "script") return { script_id: scriptId };
     return { url };
@@ -335,7 +338,7 @@ function ChannelForm({
     : type === "webhook"
       ? "Write-only. Leave empty to have a strong one generated and shown once."
       : "Write-only: gedour never shows it again.";
-  const shown = ["name", "type", "secret", "chat_id", "url", "to", "script_id"];
+  const shown = ["name", "type", "secret", "chat_id", "url", "conversation", "to", "script_id"];
   return (
     <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
       {unplaced(errors, [...shown, ...Object.keys(errors).filter((k) => k.startsWith("to["))]).map(
@@ -348,7 +351,7 @@ function ChannelForm({
       {!channel && (
         <fieldset className="flex flex-col gap-1.5">
           <legend className="mb-1.5 text-sm font-medium">Type</legend>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {CHANNEL_KINDS.map((k) => {
               const t = types.data?.find((x) => x.type === k.type);
               const off = t ? !t.available : false;
@@ -357,7 +360,7 @@ function ChannelForm({
                   key={k.type}
                   title={t?.hint}
                   className={cn(
-                    "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-line px-2 py-3 text-sm has-checked:border-beacon has-checked:bg-beacon-soft/50",
+                    "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-line px-2 py-3 text-center text-sm has-checked:border-beacon has-checked:bg-beacon-soft/50",
                     off && "cursor-not-allowed opacity-50",
                   )}
                 >
@@ -413,6 +416,56 @@ function ChannelForm({
             />
           )}
         </Field>
+      )}
+      {type === "nextcloud_talk" && (
+        <>
+          <p className="text-xs text-muted">
+            On the Nextcloud server, create the bot:{" "}
+            <code className="font-mono break-all">
+              occ talk:bot:create -s &lt;secret&gt; gedour
+            </code>{" "}
+            (Talk 22.0.1 and later) or{" "}
+            <code className="font-mono break-all">
+              occ talk:bot:install --feature response &lt;name&gt; &lt;secret&gt; &lt;url&gt;
+            </code>{" "}
+            (older servers). Then enable it in the conversation:{" "}
+            <code className="font-mono break-all">
+              occ talk:bot:setup &lt;bot-id&gt; &lt;token&gt;
+            </code>
+            .
+          </p>
+          <Field
+            label="Nextcloud URL"
+            error={errors.url}
+            hint="The base URL of the Nextcloud server. Redirects are not followed."
+          >
+            {(p) => (
+              <input
+                {...p}
+                type="url"
+                placeholder="https://cloud.example.com"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                className={cn(inputClass, "font-mono")}
+              />
+            )}
+          </Field>
+          <Field
+            label="Conversation token"
+            error={errors.conversation}
+            hint="The end of the conversation's link: /call/<token>."
+          >
+            {(p) => (
+              <input
+                {...p}
+                value={conversation}
+                spellCheck={false}
+                onChange={(e) => setConversation(e.target.value)}
+                className={cn(inputClass, "font-mono")}
+              />
+            )}
+          </Field>
+        </>
       )}
       {type === "email" && (
         <Field
@@ -482,9 +535,15 @@ function ChannelForm({
           }
         </Field>
       )}
-      {(type === "telegram" || type === "webhook") && (
+      {type !== "email" && type !== "script" && (
         <Field
-          label={type === "telegram" ? "Bot token" : "Signing secret"}
+          label={
+            type === "telegram"
+              ? "Bot token"
+              : type === "nextcloud_talk"
+                ? "Bot secret"
+                : "Signing secret"
+          }
           error={errors.secret}
           hint={secretHint}
         >
@@ -498,6 +557,34 @@ function ChannelForm({
               onChange={(e) => setSecret(e.target.value)}
               className={cn(inputClass, "font-mono")}
             />
+          )}
+        </Field>
+      )}
+      {(type === "telegram" || type === "nextcloud_talk") && (
+        <Field
+          label="Silent"
+          hint={type === "telegram" ? "Notifies without sound." : "Posts without a notification."}
+        >
+          {(p) => (
+            <button
+              {...p}
+              type="button"
+              role="switch"
+              aria-checked={silent}
+              onClick={() => setSilent(!silent)}
+              className={cn(
+                "relative h-6 w-11 shrink-0 self-start rounded-full transition-colors",
+                silent ? "bg-beacon" : "bg-muted",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute top-0.5 left-0.5 size-5 rounded-full bg-surface shadow transition-transform motion-reduce:transition-none",
+                  silent && "translate-x-5",
+                )}
+              />
+            </button>
           )}
         </Field>
       )}
@@ -661,10 +748,13 @@ function DeliveriesSection({ channels }: { channels: Channel[] }) {
           <h2 id="deliveries-title" className="font-display text-xl font-semibold tracking-tight">
             Deliveries
           </h2>
-          <p className="text-sm text-muted">Failed sends retry 5 times with growing delays.</p>
+          <p className="text-sm text-muted">
+            Failed sends are tried up to 5 times with growing delays. A refusal that cannot succeed
+            is not retried, but you can retry it by hand.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-3">
-          <div className="flex flex-col gap-1">
+        <div className="flex max-w-full flex-wrap gap-3">
+          <div className="flex max-w-full min-w-0 flex-col gap-1">
             <label htmlFor={ids.channel} className="text-xs font-medium text-muted">
               Channel
             </label>
@@ -672,7 +762,7 @@ function DeliveriesSection({ channels }: { channels: Channel[] }) {
               id={ids.channel}
               value={channelId}
               onChange={(e) => setChannelId(e.target.value)}
-              className={cn(inputClass, "w-auto pr-8")}
+              className={cn(inputClass, "w-auto max-w-full pr-8")}
             >
               <option value="">All channels</option>
               {channels.map((c) => (

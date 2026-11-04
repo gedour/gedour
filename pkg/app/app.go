@@ -167,7 +167,7 @@ func waitForDB(ctx context.Context, pool *pgxpool.Pool, log *zap.Logger) bool {
 	}
 }
 
-// newSender builds the channel sender; webhooks and Telegram go through the guard and follow no redirect.
+// newSender builds the channel sender; webhooks, Telegram and Nextcloud Talk go through the guard and follow no redirect.
 func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo) (*notify.Sender, error) {
 	s := &notify.Sender{
 		Client:      guard.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: cfg.AllowHTTPHosts, NoRedirects: true}),

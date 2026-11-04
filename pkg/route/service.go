@@ -40,7 +40,7 @@ type Service struct {
 }
 
 // New builds the service; sender and runner also serve channel tests (runner the script dry runs),
-// guard the save-time webhook URL check.
+// guard the save-time webhook and Nextcloud Talk URL checks.
 func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, guard *netguard.Guard, httpHosts []string, m *Metrics) *Service {
 	return &Service{pool: pool, log: log, box: box, sender: sender, runner: runner, guard: guard, httpHosts: httpHosts, metrics: m,
 		hub: newHub(pool, log, m), Heartbeat: 25 * time.Second, previews: newLimiter(previewRate, previewBurst),

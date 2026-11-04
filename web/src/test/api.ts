@@ -51,6 +51,7 @@ export const FILTER_REFERENCE = {
 
 export const CHANNEL_TYPES = [
   { type: "telegram", available: true },
+  { type: "nextcloud_talk", available: true },
   { type: "email", available: true },
   { type: "webhook", available: true },
 ];

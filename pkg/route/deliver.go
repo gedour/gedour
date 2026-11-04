@@ -256,7 +256,7 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *
 		lastErr = &msg
 		status = "failed"
 		delay = retryDelay(attempt)
-		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) {
+		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, notify.ErrPermanent) {
 			status = "dead"
 		}
 	}

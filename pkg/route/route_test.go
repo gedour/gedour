@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -442,6 +443,51 @@ func TestDeliveryBadSecret(t *testing.T) {
 	e.scalar(t, &id, `SELECT id FROM deliveries`)
 	if got := e.delivery(t, id); got.status != "failed" || got.lastErr == nil || *got.lastErr != "channel secret: open secret: bad nonce size" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// 003-AC3: Talk's permanent answers end the delivery with the reason; any other answer but 201 follows
+// the retry policy.
+func TestTalkDeliveryOutcome(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	for _, tt := range []struct {
+		code   int
+		status string
+	}{{201, "sent"}, {200, "failed"}, {204, "failed"}, {400, "failed"}, {401, "dead"}, {404, "dead"}, {413, "dead"}, {429, "failed"}, {500, "failed"}, {503, "failed"}} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tt.code) }))
+		defer srv.Close()
+		cfg, _ := json.Marshal(notify.NextcloudTalkConfig{URL: srv.URL, Conversation: "abcd"})
+		var ch string
+		e.scalar(t, &ch, `INSERT INTO channels (owner_id, name, type, config) VALUES ($1, gen_random_uuid()::text, 'nextcloud_talk', $2) RETURNING id::text`, alice, cfg)
+		rule := e.rule(t, alice, nil, "", ch)
+		event := e.event(t, w, "release.published", fmt.Sprintf("v%d", tt.code))
+		routeAll(t, e.router())
+		if _, err := e.pool.Exec(context.Background(), `DELETE FROM rule_channels WHERE rule_id = $1`, rule); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := e.deliverer(t).DeliverOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		e.scalar(t, &id, `SELECT id FROM deliveries WHERE channel_id = $1 AND event_id = $2`, ch, event)
+		got := e.delivery(t, id)
+		if got.status != tt.status || got.attempts != 1 {
+			t.Errorf("%d: %+v", tt.code, got)
+		}
+		if tt.status == "sent" {
+			continue
+		}
+		if want := fmt.Sprintf("POST %s: HTTP %d", srv.Listener.Addr(), tt.code); got.lastErr == nil || *got.lastErr != want {
+			t.Errorf("%d: reason %v", tt.code, got.lastErr)
+		}
+		if tt.status == "failed" && got.wait < retryDelay(1).Seconds()-5 {
+			t.Errorf("%d: retried in %.0f s", tt.code, got.wait)
+		}
+	}
+	if n, err := e.deliverer(t).DeliverOnce(context.Background()); err != nil || n != 0 {
+		t.Fatalf("a dead or backing-off delivery was claimed: %d, %v", n, err)
 	}
 }
 

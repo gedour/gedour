@@ -323,10 +323,10 @@ function RuleForm({ initial }: { initial?: Rule }) {
               <Link to="/channels" className="font-medium underline underline-offset-4">
                 Add one
               </Link>{" "}
-              to also get Telegram, email or webhook messages.
+              to also get Telegram, Nextcloud Talk, email or webhook messages.
             </p>
           ) : (
-            <fieldset className="flex flex-col gap-2">
+            <fieldset className="flex min-w-0 flex-col gap-2">
               <legend className="sr-only">Channels</legend>
               {(channels.data ?? []).map((c) => (
                 <label
@@ -341,11 +341,11 @@ function RuleForm({ initial }: { initial?: Rule }) {
                         e.target.checked ? [...cur, c.id] : cur.filter((x) => x !== c.id),
                       )
                     }
-                    className="size-4 accent-beacon"
+                    className="size-4 shrink-0 accent-beacon"
                   />
-                  <ChannelIcon type={c.type} className="text-muted" />
-                  <span className="font-medium">{c.name}</span>
-                  <span className="truncate text-xs text-muted">{channelTarget(c)}</span>
+                  <ChannelIcon type={c.type} className="shrink-0 text-muted" />
+                  <span className="min-w-0 truncate font-medium">{c.name}</span>
+                  <span className="min-w-0 truncate text-xs text-muted">{channelTarget(c)}</span>
                 </label>
               ))}
             </fieldset>

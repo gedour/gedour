@@ -67,6 +67,9 @@ export async function signInFromGate(page: Page, user: { username: string; passw
 // Watches target the fake upstream that scripts/e2e.sh starts; e2e never polls the real forges.
 export const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091";
 
+/** The shared secret of the fake upstream's Talk bot (testupstream.TalkSecret). */
+export const TALK_SECRET = "fake-talk-bot-shared-secret-0123456789abcdef";
+
 /** Bob's seeded watch and rule (seed.setup.ts); their 3 events are in his inbox. */
 export const SEED = { watch: "Seeded CLI releases", rule: "Seeded inbox rule" };
 

@@ -38,7 +38,8 @@ export const NAV: NavItem[] = [
     label: "Channels",
     icon: Send,
     emptyTitle: "No channels yet",
-    emptyBody: "Channels are where matching changes go: Telegram, email, a webhook or a script.",
+    emptyBody:
+      "Channels are where matching changes go: Telegram, Nextcloud Talk, email, a webhook or a script.",
   },
   {
     path: "/rules",

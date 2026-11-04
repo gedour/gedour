@@ -1,6 +1,6 @@
 # 003 — Nextcloud Talk channel and silent notifications
 
-**Status**: approved
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-04
 
@@ -16,7 +16,8 @@ muted at the chat level or not routed at all.
 A new channel type, Nextcloud Talk, posts each delivery into a Talk conversation as a bot. The
 Nextcloud admin installs the bot once and enables it in the conversation; the gedour channel only needs
 the Nextcloud URL, the conversation token and the bot's shared secret. Telegram and Talk channels get a
-"Silent" switch: their messages arrive in the chat without a push notification or sound.
+"Silent" switch: their messages arrive in the chat quietly (Telegram notifies without sound, Talk creates
+no notification).
 
 ## Scope
 
@@ -27,12 +28,13 @@ the Nextcloud URL, the conversation token and the bot's shared secret. Telegram 
   (HMAC-SHA256 with the secret over the random value followed by the message, hex). Body `message`,
   `referenceId` (derived from the delivery id), `silent`.
 - Message text in Markdown: title, summary, upstream link; capped below Talk's 32000-character limit.
-- Response mapping into the existing delivery retry policy: 201 success; 400, 401, 404, 413 permanent;
-  429 and 5xx retried with backoff.
+- Response mapping into the existing delivery retry policy: 201 success; 401, 404, 413 permanent;
+  everything else, 400, 429 and 5xx included, retried with backoff.
 - `silent` boolean on Telegram (`disable_notification`) and Nextcloud Talk channel configs, default
   false; a switch on their channel forms only.
 - Channel test button, channel form, channel list icon and label for the new type; README section with
-  the Nextcloud setup (`occ talk:bot:install --feature response …`, `occ talk:bot:setup`).
+  the Nextcloud setup (`occ talk:bot:create -s …` from Talk 22.0.1, `occ talk:bot:install --feature response …`
+  before it, then `occ talk:bot:setup`).
 - HTTP goes through the netguard client: a LAN-only Nextcloud needs `GEDOUR_ALLOW_PRIVATE_NETS`, as for
   webhooks.
 
@@ -45,19 +47,20 @@ the Nextcloud URL, the conversation token and the bot's shared secret. Telegram 
 
 ## Acceptance criteria
 
-- [ ] **AC1** A user can create, edit, test and delete a Nextcloud Talk channel from the UI and the API;
+- [x] **AC1** A user can create, edit, test and delete a Nextcloud Talk channel from the UI and the API;
   the bot secret is write-only (never returned, never in the audit log).
-- [ ] **AC2** A delivery to a Talk channel sends one signed request whose signature a Talk server
+- [x] **AC2** A delivery to a Talk channel sends one signed request whose signature a Talk server
   validates, with the message text, `referenceId` and the channel's `silent` value.
-- [ ] **AC3** Talk answers 201 → delivery `sent`; 400/401/404/413 → `failed` without retry, the reason
-  recorded; 429/5xx/timeout → retried per the existing policy.
-- [ ] **AC4** A Telegram channel with Silent on sends `disable_notification: true`; off (or unset on an
+- [x] **AC3** Talk answers 201 → delivery `sent`; 401/404/413 → `dead` (shown as Failed) without
+  retry, the reason recorded; any other answer, 400/429/5xx/timeout included → retried per the existing policy.
+- [x] **AC4** A Telegram channel with Silent on sends `disable_notification: true`; off (or unset on an
   existing channel) sends `false`.
-- [ ] **AC5** The Silent switch appears on Telegram and Talk channel forms only, is keyboard and
+- [x] **AC5** The Silent switch appears on Telegram and Talk channel forms only, is keyboard and
   screen-reader operable, and passes the a11y, 375 px and CSP checks.
-- [ ] **AC6** A Talk URL resolving to a private address is refused at send time unless allowlisted by
+- [x] **AC6** A Talk URL resolving to a private address is refused at send time unless allowlisted by
   `GEDOUR_ALLOW_PRIVATE_NETS`, with the same error as webhooks.
-- [ ] **AC7** A message longer than the cap is shortened to its title and link, never rejected.
+- [x] **AC7** A message longer than the cap is shortened to its title and link, never rejected; a URL
+  over 30000 characters once encoded is always left out.
 
 ## Phases
 
@@ -95,3 +98,8 @@ the Nextcloud URL, the conversation token and the bot's shared secret. Telegram 
   docs leave the exact bytes ambiguous; a live post to a real room was waived by babs (2026-11-04), so the
   fake server's check follows the Talk server source, cited in the test.
 - `referenceId` = SHA-256 of the delivery id, so a retried delivery is recognisable in the room.
+- AC3 corrected during review: `failed` means a retry is scheduled, so a refusal that cannot succeed is `dead`,
+  which the UI labels Failed; a manual retry stays possible.
+- Upstream text cannot mention: `@` is escaped in titles, details and links.
+- A Talk 400 is retried: gedour's request shape cannot trigger Talk's validation 400s, so the one left is a
+  caught server exception (BotController::sendMessage), and it does not count for the throttler.

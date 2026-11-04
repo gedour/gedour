@@ -19,7 +19,7 @@ import (
 type ChannelRef struct {
 	ID   string `json:"id" format:"uuid"`
 	Name string `json:"name"`
-	Type string `json:"type" enum:"telegram,email,webhook,script"`
+	Type string `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
 }
 
 // RuleRef names a rule inside another resource.

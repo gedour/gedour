@@ -16,6 +16,9 @@ readonly CLUSTER="${K8S_SMOKE_CLUSTER:-gedour-smoke}"
 readonly NS="gedour-smoke"
 readonly IMAGE="gedour:local"
 readonly FAKE_IMAGE="gedour-fakeupstream:smoke"
+# Read from the manifest so the two never drift.
+PG_IMAGE="$(sed -n 's/^ *image: *\(postgres:[^ ]*\)$/\1/p' "${ROOT}/deploy/k8s/test/postgres.yaml")"
+readonly PG_IMAGE
 readonly WEB_PORT="${K8S_SMOKE_PORT:-18480}"
 readonly FAKE_PORT="${K8S_SMOKE_FAKE_PORT:-18481}"
 readonly COMPOSE_PROJECT="gedour-compose-smoke"
@@ -88,11 +91,16 @@ COPY fakeupstream /fakeupstream
 ENTRYPOINT ["/fakeupstream"]
 EOF
 
+[[ -n "${PG_IMAGE}" ]] || fail "no postgres image in deploy/k8s/test/postgres.yaml"
+
 echo "== kind cluster ${CLUSTER}"
 export KUBECONFIG="${tmpdir}/kubeconfig"
 cluster_created=1
 "${KIND}" create cluster --name "${CLUSTER}" --kubeconfig "${KUBECONFIG}" --wait 180s || fail "kind create cluster failed"
 "${KIND}" load docker-image --name "${CLUSTER}" "${IMAGE}" "${FAKE_IMAGE}" || fail "kind load failed"
+# Pulled by the node up front: left to the scale-up, the registry pull ran past the rollout timeout. Not kind-loaded:
+# a runner's partial multi-platform index fails `ctr import --all-platforms`.
+docker exec "${CLUSTER}-control-plane" crictl pull "${PG_IMAGE}" >/dev/null || fail "node could not pull ${PG_IMAGE}"
 
 echo "== deploy"
 kubectl kustomize "${ROOT}/deploy/k8s" >/dev/null || fail "deploy/k8s does not render"
@@ -112,7 +120,11 @@ done
 db_wait || fail "gedour-web never logged db_unreachable with postgres stopped"
 echo "gedour waits for postgres: db_unreachable logged after $((SECONDS - start)) s"
 kubectl scale deployment/postgres --replicas 1 >/dev/null || fail "could not start postgres"
-kubectl rollout status deployment/postgres --timeout 180s >/dev/null || fail "postgres not ready"
+if ! kubectl rollout status deployment/postgres --timeout 180s >/dev/null; then
+  kubectl get pods -o wide >&2
+  kubectl get events --field-selector involvedObject.kind=Pod --sort-by=.lastTimestamp >&2 || true
+  fail "postgres not ready"
+fi
 for d in fakeupstream gedour-web gedour-worker; do
   if ! kubectl rollout status "deployment/${d}" --timeout 300s >/dev/null; then
     kubectl get pods -o wide >&2

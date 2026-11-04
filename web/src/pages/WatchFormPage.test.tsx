@@ -1,15 +1,10 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { credential, lastCall, pending, problem, watch } from "@/test/watches";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 const kindCard = (name: string) => screen.getByRole("radio", { name: new RegExp(name) });
 

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import { inboxCount } from "@/api/client";
+import { auth, inboxCount } from "@/api/client";
 import { connectInbox } from "@/lib/inbox";
 
 export const COUNT_KEY = ["inbox", "count"] as const;
@@ -40,8 +40,9 @@ export function useInboxStream() {
         fresh = true;
         void client.invalidateQueries({ queryKey: ["inbox"] });
       },
-      // The refetch gets a 401, which sends the browser to the login.
-      onSignedOut: () => void client.invalidateQueries({ queryKey: COUNT_KEY }),
+      // 002-AC4: a 401 on this check signs the app out.
+      onSessionCheck: () => void client.invalidateQueries({ queryKey: ["me"] }),
+      onSignedOut: () => auth.set(true),
     });
   }, [client]);
 }

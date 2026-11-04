@@ -2,7 +2,6 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { setMedia } from "@/test/media";
 import { renderApp } from "@/test/render";
@@ -13,7 +12,6 @@ import type { InboxItem } from "@/types/api";
 const WIDE = "(min-width: 1024px)";
 
 beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
   setMedia(WIDE, true);
 });
 afterEach(() => {
@@ -269,10 +267,10 @@ describe("InboxPage", () => {
     act(() => es.fail(false));
     expect(await screen.findByText("v3.0.0 published")).toBeInTheDocument();
 
-    // Signed out: the count refetch meets the 401 that sends the browser to the login.
-    mockApi({ "/api/v1/inbox/count": () => new Response("", { status: 401 }) });
+    // 002-AC4: the stream's signed_out swaps the whole app for the sign-in gate.
     act(() => es.emit("signed_out", {}));
-    await waitFor(() => expect(navigation.toLogin).toHaveBeenCalled());
+    expect(screen.getByRole("heading", { level: 1, name: "Sign in to continue" })).toBeVisible();
+    expect(screen.queryByRole("complementary", { name: "Sidebar" })).not.toBeInTheDocument();
   });
 
   // In the Unread tab, opening an item reads it and the refetch drops it: the panel must stay.

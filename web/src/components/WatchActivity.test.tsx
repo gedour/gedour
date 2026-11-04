@@ -1,16 +1,11 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { lastCall, pending, problem, watch } from "@/test/watches";
 import type { StateSnapshot, Watch, WatchEvent } from "@/types/api";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 const event = (id: number, type: string, payload: Record<string, unknown>): WatchEvent => ({
   id,

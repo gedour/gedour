@@ -70,6 +70,8 @@ type Service struct {
 	oauth    oauth2.Config
 	stateKey []byte
 	client   *http.Client
+	// exchangeTimeout bounds the callback's calls to the provider (token, JWKS); a field for tests.
+	exchangeTimeout time.Duration
 
 	publicURL string
 
@@ -95,8 +97,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 		ttl:     cfg.SessionTTL,
 		idle:    cfg.SessionIdleTimeout,
 		// 001-AC3: Secure everywhere but dev mode, which runs on plain http://localhost.
-		secure: cfg.OIDC(),
-		client: &http.Client{Timeout: 10 * time.Second},
+		secure:          cfg.OIDC(),
+		client:          &http.Client{Timeout: 10 * time.Second},
+		exchangeTimeout: 10 * time.Second,
 	}
 	if cfg.OIDC() {
 		key, err := deriveStateKey(cfg.OIDCClientSecret)

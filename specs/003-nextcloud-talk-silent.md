@@ -1,6 +1,6 @@
 # 003 — Nextcloud Talk channel and silent notifications
 
-**Status**: draft
+**Status**: approved
 **Requested by**: babs
 **Date**: 2026-11-04
 
@@ -75,8 +75,7 @@ the Nextcloud URL, the conversation token and the bot's shared secret. Telegram 
 - **Covers**: AC1, AC2, AC3, AC5 (Talk form), AC6, AC7
 - **Data model impact**: new migration widening `channels_type_check` to add `nextcloud_talk`.
 - **DoD**: `make coverage` and `make e2e` green, including a Talk delivery accepted by the fake's
-  signature check and a 401 recorded as permanent; one message posted to a real Talk room (bot set up by
-  the Nextcloud admin) from the lab deployment.
+  signature check and a 401 recorded as permanent.
 
 ## Data model impact (summary)
 
@@ -92,6 +91,7 @@ the Nextcloud URL, the conversation token and the bot's shared secret. Telegram 
 - Bot only, posting with the `response` feature: no Nextcloud user account involved — chosen by babs.
 - Silent is a channel setting — chosen by babs; a loud and a silent channel on the same chat is the way
   to mix both.
-- The signed string is the random value plus the `message` text, per the Talk bot docs' example; the
-  real-room post in the Phase 2 DoD is the check, since the docs leave the exact bytes ambiguous.
+- The signed string is the random value plus the `message` text, per the Talk bot docs' example. The
+  docs leave the exact bytes ambiguous; a live post to a real room was waived by babs (2026-11-04), so the
+  fake server's check follows the Talk server source, cited in the test.
 - `referenceId` = SHA-256 of the delivery id, so a retried delivery is recognisable in the room.

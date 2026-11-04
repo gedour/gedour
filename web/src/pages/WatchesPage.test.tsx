@@ -1,15 +1,10 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { navigation } from "@/api/client";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { lastCall, pending, watch } from "@/test/watches";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 describe("WatchesPage", () => {
   it("shows each watch's run status and next run", async () => {

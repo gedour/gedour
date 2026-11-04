@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ func TestMain(m *testing.M) {
 }
 
 type env struct {
+	svc    *Service
 	app    *httptest.Server
 	stub   *stubProvider
 	pool   *pgxpool.Pool
@@ -70,6 +72,7 @@ func setup(t *testing.T, dev bool) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.svc = svc
 	mux := http.NewServeMux()
 	hcfg := huma.DefaultConfig("t", "v")
 	hcfg.OpenAPIPath = "/api/openapi"
@@ -236,48 +239,58 @@ func TestLoginFlow(t *testing.T) {
 }
 
 // 001-AC1: the callback rejects every forged or broken round trip and opens no session.
+// 002-AC6: each rejection lands on the sign-in gate with the fixed "failed" reason, back on the
+// requested page when the login state could be read.
 func TestCallbackRejects(t *testing.T) {
+	const failed = "/?auth=failed"
 	tests := []struct {
 		name string
-		code int
+		want string
 		// build returns the callback URL to hit after a fresh login start.
 		build func(t *testing.T, e *env) string
 	}{
-		{"bad state", http.StatusBadRequest, func(t *testing.T, e *env) string {
-			cb := e.approve(t, e.startLogin(t, "/"))
+		{"bad state", "/audit?from=x&auth=failed#top", func(t *testing.T, e *env) string {
+			cb := e.approve(t, e.startLogin(t, "/audit?from=x#top"))
 			q := cb.Query()
 			q.Set("state", "forged")
 			cb.RawQuery = q.Encode()
 			return cb.String()
 		}},
-		{"missing code", http.StatusBadRequest, func(t *testing.T, e *env) string {
+		{"missing code", failed, func(t *testing.T, e *env) string {
 			cb := e.approve(t, e.startLogin(t, "/"))
 			q := cb.Query()
 			q.Del("code")
 			cb.RawQuery = q.Encode()
 			return cb.String()
 		}},
-		{"bad nonce", http.StatusUnauthorized, func(t *testing.T, e *env) string {
+		{"bad nonce", failed, func(t *testing.T, e *env) string {
 			e.stub.nonceFn = func(string) string { return "replayed" }
 			return e.approve(t, e.startLogin(t, "/")).String()
 		}},
-		{"provider error", http.StatusUnauthorized, func(t *testing.T, e *env) string {
-			st := e.startLogin(t, "/").Query().Get("state")
-			return "/auth/callback?error=access_denied&state=" + st
+		{"provider error", "/watches?auth=failed", func(t *testing.T, e *env) string {
+			st := e.startLogin(t, "/watches").Query().Get("state")
+			return "/auth/callback?error=access_denied&error_description=%3Cb%3Eno%3C%2Fb%3E&state=" + st
 		}},
-		{"no login cookie", http.StatusBadRequest, func(t *testing.T, e *env) string {
-			cb := e.approve(t, e.startLogin(t, "/"))
+		{"no login cookie", failed, func(t *testing.T, e *env) string {
+			cb := e.approve(t, e.startLogin(t, "/watches"))
 			e.client.Jar, _ = cookiejar.New(nil)
 			return cb.String()
 		}},
-		{"tampered login cookie", http.StatusBadRequest, func(t *testing.T, e *env) string {
+		{"tampered login cookie", failed, func(t *testing.T, e *env) string {
 			cb := e.approve(t, e.startLogin(t, "/"))
-			u, _ := url.Parse(e.app.URL + "/auth/")
-			e.client.Jar.SetCookies(u, []*http.Cookie{{Name: "__Secure-" + loginCookie, Value: "AAAA" + randomToken(), Path: "/auth/"}}) //nolint:gosec // client-side fixture cookie
+			e.setLoginCookie(t, "AAAA"+randomToken())
 			return cb.String()
 		}},
+		{"expired login cookie", failed, func(t *testing.T, e *env) string {
+			cb := e.approve(t, e.startLogin(t, "/watches"))
+			s := &Service{}
+			s.stateKey, _ = deriveStateKey("s3cret")
+			e.setLoginCookie(t, s.seal(loginState{State: cb.Query().Get("state"), ReturnTo: "/watches", Expires: time.Now().Add(-time.Second).Unix()}))
+			return cb.String()
+		}},
+		// 002-AC6: the token endpoint refusing the code (4xx) is a failed sign-in, not an outage.
 		// PKCE: a code minted for another login (other challenge) fails with this login's verifier.
-		{"code from another login", http.StatusUnauthorized, func(t *testing.T, e *env) string {
+		{"code from another login", failed, func(t *testing.T, e *env) string {
 			first := e.approve(t, e.startLogin(t, "/"))
 			second := e.approve(t, e.startLogin(t, "/"))
 			q := second.Query()
@@ -290,15 +303,21 @@ func TestCallbackRejects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := setup(t, false)
 			resp := e.do(t, http.MethodGet, tt.build(t, e), nil)
-			if resp.StatusCode != tt.code {
+			if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != tt.want {
 				b, _ := io.ReadAll(resp.Body)
-				t.Fatalf("want %d got %d: %s", tt.code, resp.StatusCode, b)
+				t.Fatalf("want 303 to %q, got %d to %q: %s", tt.want, resp.StatusCode, resp.Header.Get("Location"), b)
 			}
 			if cookieNamed(resp, SecureSessionCookie) != nil || e.count(t, `SELECT count(*) FROM sessions`) != 0 {
 				t.Fatal("a rejected callback opened a session")
 			}
 		})
 	}
+}
+
+func (e *env) setLoginCookie(t *testing.T, value string) {
+	t.Helper()
+	u, _ := url.Parse(e.app.URL + "/auth/")
+	e.client.Jar.SetCookies(u, []*http.Cookie{{Name: "__Secure-" + loginCookie, Value: value, Path: "/auth/"}}) //nolint:gosec // client-side fixture cookie
 }
 
 // 001-AC1: without a session every guarded /api route is 401 problem+json; the OpenAPI document stays public.
@@ -608,16 +627,36 @@ func TestLoginState(t *testing.T) {
 	}
 }
 
+// 002-AC5: an unreachable provider sends /auth/login and /auth/callback back to the gate, on the
+// requested page, with the fixed "unavailable" reason instead of a plain-text error.
 func TestProviderUnavailable(t *testing.T) {
 	cfg := config.Config{OIDCIssuer: "http://127.0.0.1:1", OIDCClientID: "c", OIDCClientSecret: "s", PublicURL: "https://app.test", SessionTTL: time.Hour, SessionIdleTimeout: time.Hour}
 	svc, err := New(cfg, nil, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
+	for target, want := range map[string]string{
+		"/auth/login": "/?auth=unavailable",
+		"/auth/login?return_to=" + url.QueryEscape("/watches/1?tab=x&auth=failed#h"): "/watches/1?tab=x&auth=unavailable#h",
+		"/auth/login?return_to=https://evil.test/":                                   "/?auth=unavailable",
+	} {
+		rec := httptest.NewRecorder()
+		svc.handleLogin(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, nil))
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != want {
+			t.Errorf("%s: want 303 to %q, got %d to %q", target, want, rec.Code, rec.Header().Get("Location"))
+		}
+		if strings.Contains(rec.Body.String(), "127.0.0.1") {
+			t.Errorf("%s: provider details leaked: %s", target, rec.Body.String())
+		}
+	}
+
+	// The callback's own discovery fails too (another replica started the login).
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/callback?state=a&code=x", nil)
+	req.AddCookie(svc.loginCookie(svc.seal(loginState{State: "a", ReturnTo: "/audit", Expires: time.Now().Add(time.Minute).Unix()}), 60))
 	rec := httptest.NewRecorder()
-	svc.handleLogin(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/login", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("want 503, got %d", rec.Code)
+	svc.handleCallback(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/audit?auth=unavailable" {
+		t.Errorf("callback: want 303 to the gate, got %d to %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 
@@ -629,15 +668,19 @@ func TestDatabaseDown(t *testing.T) {
 	cb := e.approve(t, e.startLogin(t, "/"))
 	e.pool.Close()
 	for name, resp := range map[string]*http.Response{
-		"guard":    e.do(t, http.MethodGet, "/api/v1/me", nil),
-		"logout":   e.do(t, http.MethodPost, "/auth/logout", map[string]string{CSRFHeader: m.CSRFToken}),
-		"callback": e.do(t, http.MethodGet, cb.String(), nil),
+		"guard":  e.do(t, http.MethodGet, "/api/v1/me", nil),
+		"logout": e.do(t, http.MethodPost, "/auth/logout", map[string]string{CSRFHeader: m.CSRFToken}),
 	} {
 		if resp.StatusCode != http.StatusInternalServerError {
 			t.Errorf("%s: want 500, got %d", name, resp.StatusCode)
 		}
 	}
+	// 002-AC6: a session that cannot be written is a failed sign-in on the gate, not a text page.
+	if resp := e.do(t, http.MethodGet, cb.String(), nil); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/?auth=failed" || cookieNamed(resp, SecureSessionCookie) != nil {
+		t.Errorf("callback: want 303 to /?auth=failed, got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
 
+	// 002-AC7: dev mode never shows the gate, so its failed sign-in stays a plain 500.
 	dev := setup(t, true)
 	dev.pool.Close()
 	for _, path := range []string{"/auth/login", "/api/v1/me"} {
@@ -847,4 +890,199 @@ func problemTitle(t *testing.T, resp *http.Response) string {
 		t.Fatalf("problem body: %v", err)
 	}
 	return p.Title
+}
+
+// 002-AC5: discovery is cached for good; every login probes the authorization endpoint first, so a
+// provider gone down since is caught before the browser is sent to it.
+func TestProviderDownAfterDiscovery(t *testing.T) {
+	for name, breakIt := range map[string]func(e *env){
+		"closed":        func(e *env) { e.stub.Close() },
+		"authorize 503": func(e *env) { e.stub.authorizeStatus = http.StatusServiceUnavailable },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := setup(t, false)
+			e.startLogin(t, "/")
+			breakIt(e)
+			resp := e.do(t, http.MethodGet, "/auth/login?return_to="+url.QueryEscape("/watches/w1?tab=events#section/../details"), nil)
+			if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/watches/w1?tab=events&auth=unavailable#section/../details" {
+				t.Fatalf("want 303 to the gate, got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+			}
+			if cookieNamed(resp, "__Secure-"+loginCookie) != nil {
+				t.Error("a login that never left set a login cookie")
+			}
+		})
+	}
+}
+
+// The probe's 400 (no parameters) means up; a burst of logins shares one probe, a later login probes again.
+func TestProbe(t *testing.T) {
+	e := setup(t, false)
+	e.startLogin(t, "/")
+	if n := e.stub.probes.Load(); n != 1 {
+		t.Fatalf("want 1 probe answered 400 for the first login, got %d", n)
+	}
+	e.stub.probeDelay = 300 * time.Millisecond
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Go(func() {
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, e.app.URL+"/auth/login", nil)
+			if resp, err := e.client.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		})
+	}
+	wg.Wait()
+	if n := e.stub.probes.Load(); n != 2 {
+		t.Errorf("want 1 probe for a burst of 5 logins, got %d", n-1)
+	}
+	e.stub.probeDelay = 0
+	e.startLogin(t, "/")
+	if n := e.stub.probes.Load(); n != 3 {
+		t.Errorf("want a fresh probe for a later login, got %d probes", n)
+	}
+}
+
+// 002-AC5 / 002-AC6: only a token endpoint that cannot answer (5xx, unreachable) is an outage; a
+// refused code or a malformed answer is a failed sign-in.
+func TestTokenEndpointAnswers(t *testing.T) {
+	for name, tc := range map[string]struct {
+		breakIt func(e *env)
+		reason  string
+	}{
+		"503":         {func(e *env) { e.stub.tokenStatus = http.StatusServiceUnavailable }, authUnavailable},
+		"unreachable": {func(e *env) { e.stub.Close() }, authUnavailable},
+		"400": {func(e *env) {
+			e.stub.tokenStatus, e.stub.tokenBody = http.StatusBadRequest, `{"error":"invalid_grant"}`
+		}, authFailed},
+		"200 not JSON":       {func(e *env) { e.stub.tokenStatus, e.stub.tokenBody = http.StatusOK, "not-json" }, authFailed},
+		"200 without tokens": {func(e *env) { e.stub.tokenStatus, e.stub.tokenBody = http.StatusOK, `{"token_type":"Bearer"}` }, authFailed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := setup(t, false)
+			cb := e.approve(t, e.startLogin(t, "/rules"))
+			tc.breakIt(e)
+			resp := e.do(t, http.MethodGet, cb.String(), nil)
+			if want := "/rules?auth=" + tc.reason; resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+				t.Fatalf("want 303 to %q, got %d to %q", want, resp.StatusCode, resp.Header.Get("Location"))
+			}
+		})
+	}
+}
+
+// 002-AC2: the requested URL, fragment included, survives the provider round trip byte for byte.
+func TestReturnToFragment(t *testing.T) {
+	for _, target := range []string{
+		"/watches/w1?tab=events#details",
+		"/watches/w1#section/../details",
+		"/watches/w1?tab=x#section/../details",
+		"/a#a//b",
+		"/a?x=1#a//b",
+	} {
+		e := setup(t, false)
+		resp := e.fullLogin(t, target)
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != target {
+			t.Errorf("want 303 to %q, got %d to %q", target, resp.StatusCode, resp.Header.Get("Location"))
+		}
+	}
+}
+
+// 002-AC5 / 002-AC6: the reason is added without touching the rest of the URL, even pairs Go's
+// query parser refuses.
+func TestGateURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"/":                              "/?auth=failed",
+		"/watches":                       "/watches?auth=failed",
+		"/audit?from=a;b&to=x":           "/audit?from=a;b&to=x&auth=failed",
+		"/audit?from=%zz":                "/audit?from=%zz&auth=failed",
+		"/watches/w1?tab=events#details": "/watches/w1?tab=events&auth=failed#details",
+		"/x?auth=unavailable&y=1&auth":   "/x?y=1&auth=failed",
+		"/x?#top":                        "/x?auth=failed#top",
+		"/x?a=1&&b=2":                    "/x?a=1&b=2&auth=failed",
+		"/inbox?%61uth=failed":           "/inbox?auth=failed",
+		"/inbox?a%75th=nope&x=%zz":       "/inbox?x=%zz&auth=failed",
+		"/inbox?%61uth=a&x=1&auth=b&a%75th&AUTH=c": "/inbox?x=1&AUTH=c&auth=failed",
+		"/w#section/../details":                    "/w?auth=failed#section/../details",
+		"/audit?from=x&?auth=customer-data":        "/audit?from=x&?auth=customer-data&auth=failed",
+	} {
+		if got := gateURL(in, authFailed); got != want {
+			t.Errorf("gateURL(%q) = %q, want %q", in, got, want)
+		}
+		if got := gateURL(in, authFailed); safeReturnTo(got) != got {
+			t.Errorf("gateURL(%q) = %q is not a safe return target", in, got)
+		}
+	}
+}
+
+// 002-AC5: a token endpoint that sends headers then stalls is an outage, cut short by the deadline.
+func TestTokenEndpointStalls(t *testing.T) {
+	e := setup(t, false)
+	e.svc.exchangeTimeout = 200 * time.Millisecond
+	cb := e.approve(t, e.startLogin(t, "/rules"))
+	e.stub.tokenStall = 5 * time.Second
+	start := time.Now()
+	resp := e.do(t, http.MethodGet, cb.String(), nil)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/rules?auth=unavailable" {
+		t.Fatalf("want 303 to /rules?auth=unavailable, got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("the stall was not cut short: %s", d)
+	}
+}
+
+// 002-AC5: a key set that stalls the ID token check is an outage too, not a failed sign-in.
+func TestJWKSStalls(t *testing.T) {
+	e := setup(t, false)
+	e.svc.exchangeTimeout = 200 * time.Millisecond
+	e.stub.jwksStall = time.Second
+	resp := e.do(t, http.MethodGet, e.approve(t, e.startLogin(t, "/rules")).String(), nil)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/rules?auth=unavailable" {
+		t.Fatalf("want 303 to /rules?auth=unavailable, got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// 002-AC5: oauth2 retries a refused Basic auth attempt with the client in the params; that retry
+// stalling past the deadline is an outage, though the error it surfaces carries no timeout type.
+func TestTokenEndpointRetryStalls(t *testing.T) {
+	e := setup(t, false)
+	e.svc.exchangeTimeout = 200 * time.Millisecond
+	cb := e.approve(t, e.startLogin(t, "/rules"))
+	e.stub.tokenStallParams = time.Second
+	resp := e.do(t, http.MethodGet, cb.String(), nil)
+	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/rules?auth=unavailable" {
+		t.Fatalf("want 303 to /rules?auth=unavailable, got %d to %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// The probe takes a redirect (to a login page, maybe unreachable from here) as the answer it is.
+func TestProbeDoesNotFollowRedirects(t *testing.T) {
+	e := setup(t, false)
+	e.stub.probeRedirect = "http://127.0.0.1:1/login"
+	loc := e.startLogin(t, "/")
+	if !strings.HasPrefix(loc.String(), e.stub.URL+"/authorize?") || e.stub.probes.Load() != 1 {
+		t.Fatalf("want a 302 to the provider after one probe, got %q (%d probes)", loc, e.stub.probes.Load())
+	}
+}
+
+// Probes reuse their keep-alive connection, a login-page-sized answer included.
+func TestProbeReusesConnection(t *testing.T) {
+	e := setup(t, false)
+	e.startLogin(t, "/")
+	before := e.stub.conns.Load()
+	for range 3 {
+		e.startLogin(t, "/")
+	}
+	if n := e.stub.conns.Load() - before; n != 0 || e.stub.probes.Load() != 4 {
+		t.Errorf("want 4 probes on reused connections, got %d probes and %d new connections", e.stub.probes.Load(), n)
+	}
+}
+
+// An authorization endpoint on another host than the issuer is not probed: the server may not reach
+// what browsers do.
+func TestProbeOtherHost(t *testing.T) {
+	e := setup(t, false)
+	e.stub.authorizeURL = "http://127.0.0.1:1/authorize"
+	loc := e.startLogin(t, "/")
+	if !strings.HasPrefix(loc.String(), "http://127.0.0.1:1/authorize?") || e.stub.probes.Load() != 0 {
+		t.Fatalf("want a 302 to the other host without a probe, got %q (%d probes)", loc, e.stub.probes.Load())
+	}
 }

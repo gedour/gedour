@@ -1,14 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  auth,
   CSRF_PROBLEM_TITLE,
   getMe,
   getVersion,
   listAudit,
-  LOGIN_REDIRECT_KEY,
   logout,
-  navigation,
   request,
   retryQuery,
 } from "@/api/client";
@@ -18,11 +17,6 @@ const sentHeaders = (fn: ReturnType<typeof mockApi>, call = 0) =>
   new Headers(fn.mock.calls[call]?.[1]?.headers);
 
 describe("api client", () => {
-  let toLogin: ReturnType<typeof vi.spyOn>;
-  beforeEach(() => {
-    toLogin = vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-  });
-
   it("returns the decoded body", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ version: "v1" })));
     await expect(getVersion()).resolves.toEqual({ version: "v1" });
@@ -83,8 +77,7 @@ describe("api client", () => {
   it.each([
     ["fails", 500, false],
     ["is a 401", 401, true],
-  ])("reports the original call when the token refresh %s", async (_, status, redirects) => {
-    const toLogin = vi.mocked(navigation.toLogin);
+  ])("reports the original call when the token refresh %s", async (_, status, signsOut) => {
     mockApi({
       "/api/v1/me": () => Response.json({}, { status }),
       "/auth/logout": csrf403,
@@ -96,7 +89,7 @@ describe("api client", () => {
       /^\/auth\/logout: HTTP 403: CSRF token refresh failed/,
     );
     expect((err as ApiError).message).toContain(`HTTP ${status}`);
-    expect(toLogin).toHaveBeenCalledTimes(redirects ? 1 : 0);
+    expect(auth.signedOut()).toBe(signsOut);
   });
 
   it("surfaces a second CSRF 403 instead of retrying again", async () => {
@@ -136,12 +129,32 @@ describe("api client", () => {
     expect(fn.mock.calls.filter(([u]) => u === "/api/v1/thing")).toHaveLength(attempts);
   });
 
-  // 001-AC1: a 401 sends the browser to the login page with the current location.
-  it("redirects to login on 401", async () => {
-    window.history.replaceState(null, "", "/audit?x=1");
-    mockApi({ "/api/v1/me": () => Response.json({}, { status: 401 }) });
-    await expect(getMe()).rejects.toThrow("HTTP 401");
-    expect(toLogin).toHaveBeenCalledWith("/audit?x=1");
+  // 002-AC3: a 401 from any call flips the one auth state, before the caller sees the error; it never
+  // navigates by itself (the gate asks for the click).
+  it.each([
+    ["the session check", () => getMe()],
+    ["a read", () => listAudit({}, "")],
+    ["a mutation", () => logout()],
+  ])("signs the app out on a 401 from %s without navigating", async (_, call) => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign, replace: assign });
+    mockApi({
+      "/api/v1/me": () => Response.json({}, { status: 401 }),
+      "/api/v1/audit": () => Response.json({}, { status: 401 }),
+      "/auth/logout": () => Response.json({}, { status: 401 }),
+    });
+    const seen: boolean[] = [];
+    const unsubscribe = auth.subscribe(() => seen.push(auth.signedOut()));
+    await expect(call()).rejects.toThrow("HTTP 401");
+    unsubscribe();
+    expect(seen).toEqual([true]);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404, 500])("keeps the app signed in on a %i", async (status) => {
+    mockApi({ "/api/v1/audit": () => Response.json({}, { status }) });
+    await expect(listAudit({}, "")).rejects.toThrow(`HTTP ${status}`);
+    expect(auth.signedOut()).toBe(false);
   });
 
   it("builds the audit query from set filters only", async () => {
@@ -157,28 +170,20 @@ describe("api client", () => {
   });
 });
 
-describe("navigation.toLogin", () => {
-  it("redirects once, then holds off to avoid a login loop", () => {
-    const assign = vi.fn();
-    vi.stubGlobal("location", { ...window.location, assign });
-    navigation.toLogin("/inbox");
-    expect(assign).toHaveBeenCalledWith("/auth/login?return_to=%2Finbox");
-    navigation.toLogin("/inbox");
-    expect(assign).toHaveBeenCalledTimes(1);
+// 002-AC3: the loop guard and its storage key are gone (scripted navigation: see src/lint.test.ts).
+describe("login loop guard", () => {
+  const sources = Object.entries(
+    import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }),
+  );
 
-    localStorage.setItem(LOGIN_REDIRECT_KEY, String(Date.now() - 60_000));
-    navigation.toLogin("/a b");
-    expect(assign).toHaveBeenLastCalledWith("/auth/login?return_to=%2Fa%20b");
-  });
-
-  it("re-arms after a successful sign-in", async () => {
-    const assign = vi.fn();
-    vi.stubGlobal("location", { ...window.location, assign });
-    navigation.toLogin("/");
-    mockApi();
-    await getMe();
-    navigation.toLogin("/");
-    expect(assign).toHaveBeenCalledTimes(2);
+  it("is gone from every app source", () => {
+    expect(sources.map(([f]) => f)).toContain("/src/api/client.ts");
+    const key = ["redirected", "At"].join("");
+    expect(sources.filter(([, src]) => src.includes(key)).map(([f]) => f)).toEqual([]);
   });
 });
 

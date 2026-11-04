@@ -177,7 +177,8 @@ func TestRouting(t *testing.T) {
 		{http.MethodGet, "/inbox", http.StatusOK, "text/html", ""},
 		{http.MethodGet, "/auth/logout", http.StatusOK, "text/html", ""},
 		{http.MethodGet, "/auth/signed-out", http.StatusOK, "text/html", ""},
-		{http.MethodGet, "/auth/login", http.StatusServiceUnavailable, "text/plain", ""},
+		// 002-AC5: the provider is unreachable here: back to the sign-in gate, not a text error.
+		{http.MethodGet, "/auth/login", http.StatusSeeOther, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {

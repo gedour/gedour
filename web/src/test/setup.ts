@@ -3,9 +3,13 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach } from "vitest";
 
+import { auth } from "@/api/client";
+
 import { resetMedia } from "./media";
 
 beforeEach(() => {
+  // The auth state is module-level: one test's 401 must not sign the next one out.
+  auth.set(false);
   localStorage.clear();
   resetMedia();
   document.documentElement.className = "";

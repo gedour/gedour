@@ -1,4 +1,3 @@
-import { readStorage, writeStorage } from "@/lib/utils";
 import type {
   AuditActor,
   Channel,
@@ -63,18 +62,26 @@ export function retryQuery(failures: number, err: unknown): boolean {
 // Set by getMe; every mutation echoes it so the server can tell our pages from a forged form.
 let csrfToken = "";
 
-export const LOGIN_REDIRECT_KEY = "gedour.login.redirectedAt";
-const LOGIN_LOOP_MS = 15_000;
-
-// An object, not a bare function, so tests can spy on the redirect.
-export const navigation = {
-  toLogin(returnTo: string) {
-    // A cookie the browser refuses (Secure over plain http) would bounce us off the provider forever.
-    const last = Number(readStorage(LOGIN_REDIRECT_KEY) ?? 0);
-    if (Date.now() - last < LOGIN_LOOP_MS) return;
-    writeStorage(LOGIN_REDIRECT_KEY, String(Date.now()));
-    window.location.assign(`/auth/login?return_to=${encodeURIComponent(returnTo)}`);
+// One auth state for the whole app: a 401 from any call swaps the app for the sign-in gate (002-AC3).
+let signedOut = false;
+const authListeners = new Set<() => void>();
+export const auth = {
+  signedOut: () => signedOut,
+  subscribe(fn: () => void) {
+    authListeners.add(fn);
+    return () => {
+      authListeners.delete(fn);
+    };
   },
+  set(value: boolean) {
+    if (signedOut === value) return;
+    signedOut = value;
+    for (const fn of authListeners) fn();
+  },
+};
+
+// Test seam only (an object, so tests can spy on it); app code calls signOut, lint forbids importing it.
+export const navigation = {
   go(url: string) {
     window.location.assign(url);
   },
@@ -126,7 +133,7 @@ export async function request(
     try {
       await getMe();
     } catch (err) {
-      // getMe already sent a 401 to the login page; the caller still learns which call failed.
+      // A 401 here already signed the app out; the caller still learns which call failed.
       const why = err instanceof Error ? err.message : String(err);
       throw new ApiError(
         res.status,
@@ -135,10 +142,8 @@ export async function request(
     }
     return request(path, init, true);
   }
-  if (res.status === 401) {
-    // 001-AC1: a lost session sends the browser to the provider, then back here.
-    navigation.toLogin(window.location.pathname + window.location.search);
-  }
+  // Before the throw: the gate must replace the app before any caller renders this error.
+  if (res.status === 401) auth.set(true);
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     let body: { detail?: string; errors?: ProblemDetail[] } = {};
@@ -173,8 +178,6 @@ export function getVersion(): Promise<VersionInfo> {
 export async function getMe(): Promise<Me> {
   const me = await getJSON<Me>("/api/v1/me");
   csrfToken = me.csrf_token;
-  // Signed in: the next 401 is a fresh expiry, not a loop.
-  writeStorage(LOGIN_REDIRECT_KEY, "0");
   return me;
 }
 
@@ -184,6 +187,11 @@ export async function logout(): Promise<string> {
     redirect: string;
   };
   return redirect;
+}
+
+/** Ends the session and leaves for the provider's logout, or the signed-out page. */
+export async function signOut(): Promise<void> {
+  navigation.go(await logout());
 }
 
 export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Promise<AuditPage> {

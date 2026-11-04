@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -103,6 +104,39 @@ func safeReturnTo(raw string) string {
 	return raw
 }
 
+// Reasons the sign-in gate shows after a failed sign-in; fixed values, never provider text.
+const (
+	authUnavailable = "unavailable"
+	authFailed      = "failed"
+)
+
+// gateURL is returnTo (already safe) with the gate's reason in its query. Path, other query pairs and
+// fragment are kept byte for byte: re-encoding would drop pairs url.ParseQuery refuses (";", "%zz").
+func gateURL(returnTo, reason string) string {
+	rest, fragment, hasFragment := strings.Cut(returnTo, "#")
+	path, rawQuery, _ := strings.Cut(rest, "?")
+	var pairs []string
+	for _, p := range strings.Split(rawQuery, "&") {
+		if p != "" && pairKey(p) != "auth" {
+			pairs = append(pairs, p)
+		}
+	}
+	out := path + "?" + strings.Join(append(pairs, "auth="+reason), "&")
+	if hasFragment {
+		out += "#" + fragment
+	}
+	return out
+}
+
+// pairKey decodes a raw query pair's key the way the browser reads it, so "%61uth" is the reason too.
+func pairKey(pair string) string {
+	key, _, _ := strings.Cut(pair, "=")
+	if k, err := url.QueryUnescape(key); err == nil {
+		return k
+	}
+	return key
+}
+
 // discoveryRetry is how long a failed discovery is answered from cache, so a down IdP is not hammered.
 const discoveryRetry = 5 * time.Second
 
@@ -142,6 +176,63 @@ func (s *Service) endpoints() (*discovery, error) {
 	return v.(*discovery), nil
 }
 
+// probeTimeout keeps a login from hanging on a provider that accepts connections but never answers.
+const probeTimeout = 3 * time.Second
+
+// reachable reports whether the provider's authorization endpoint answers now. Discovery is cached for
+// good, so without this a provider gone down later would get the browser sent to a dead page (002-AC5).
+// Concurrent logins share one probe; every later login probes afresh.
+// ponytail: the server's view, not the browser's (a split network passes), and a provider slower than
+// probeTimeout counts as down. An authorization endpoint on another host or port than the issuer is not probed
+// (the server may not reach what browsers do), so its outage still reaches the browser; a browser-side
+// check would be needed to close these gaps.
+func (s *Service) reachable(ctx context.Context, d *discovery) error {
+	if !sameHost(d.endpoint.AuthURL, s.issuer) {
+		return nil
+	}
+	_, err, _ := s.discoverOnce.Do("probe", func() (any, error) {
+		return nil, s.probe(context.WithoutCancel(ctx), d.endpoint.AuthURL)
+	})
+	return err
+}
+
+// probe calls the authorization endpoint without parameters: any answer below 500 (typically 400 for
+// the missing parameters) proves it serves.
+func (s *Service) probe(ctx context.Context, authURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, nil)
+	if err != nil {
+		return fmt.Errorf("oidc probe: %w", err)
+	}
+	// A redirect (to a login page) is already an answer; following it would probe another host.
+	c := *s.client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := c.Do(req)
+	if err != nil {
+		return fmt.Errorf("oidc probe: %w", err)
+	}
+	// Close alone keeps the connection reusable: the transport drains up to 256 KiB within 50 ms itself.
+	_ = resp.Body.Close()
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return fmt.Errorf("oidc probe: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func sameHost(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	return errA == nil && errB == nil && ua.Host != "" && strings.EqualFold(ua.Host, ub.Host)
+}
+
+// seeOther redirects to a target safeReturnTo already checked. Not http.Redirect: it path.Cleans the
+// target, fragment included when there is no query ("/w#a/../b" would become "/b").
+func seeOther(w http.ResponseWriter, target string) {
+	w.Header().Set("Location", target)
+	w.WriteHeader(http.StatusSeeOther)
+}
+
 func (s *Service) discover() (*discovery, error) {
 	// Background, not the request ctx: the provider keeps it for later JWKS refreshes; s.client bounds the call.
 	p, err := oidc.NewProvider(oidc.ClientContext(context.Background(), s.client), s.issuer)
@@ -176,13 +267,16 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "sign-in failed", http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, r, returnTo, http.StatusSeeOther) //nolint:gosec // returnTo went through safeReturnTo
+		seeOther(w, returnTo)
 		return
 	}
 	d, err := s.endpoints()
+	if err == nil {
+		err = s.reachable(r.Context(), d)
+	}
 	if err != nil {
 		s.log.Error("oidc_unavailable", zap.Error(err))
-		http.Error(w, "identity provider unavailable, try again later", http.StatusServiceUnavailable)
+		seeOther(w, gateURL(returnTo, authUnavailable))
 		return
 	}
 	st := loginState{State: randomToken(), Nonce: randomToken(), Verifier: oauth2.GenerateVerifier(),
@@ -200,54 +294,66 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// One-shot: the state cookie is cleared whatever the outcome.
 	http.SetCookie(w, s.loginCookie("", -1))
-	fail := func(code int, msg string, err error) {
+	// Until the login state is read, the page the user asked for is unknown.
+	returnTo := "/"
+	fail := func(reason, msg string, err error) {
 		s.log.Warn("login_rejected", zap.String("reason", msg), zap.Error(err))
-		http.Error(w, msg+": start again from the sign-in page", code)
+		seeOther(w, gateURL(returnTo, reason))
 	}
 	c, err := r.Cookie(s.loginCookieName())
 	if err != nil {
-		fail(http.StatusBadRequest, "login state missing", err)
+		fail(authFailed, "login state missing", err)
 		return
 	}
 	st, err := s.open(c.Value)
 	if err != nil {
-		fail(http.StatusBadRequest, "login state invalid", err)
+		fail(authFailed, "login state invalid", err)
 		return
 	}
+	returnTo = safeReturnTo(st.ReturnTo)
 	q := r.URL.Query()
 	if e := q.Get("error"); e != "" {
-		fail(http.StatusUnauthorized, "provider refused the sign-in", errors.New(e))
+		fail(authFailed, "provider refused the sign-in", errors.New(e))
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(st.State)) != 1 {
-		fail(http.StatusBadRequest, "state mismatch", nil)
+		fail(authFailed, "state mismatch", nil)
 		return
 	}
 	code := q.Get("code")
 	if code == "" {
-		fail(http.StatusBadRequest, "authorization code missing", nil)
+		fail(authFailed, "authorization code missing", nil)
 		return
 	}
 	d, err := s.endpoints()
 	if err != nil {
-		fail(http.StatusServiceUnavailable, "identity provider unavailable", err)
+		fail(authUnavailable, "identity provider unavailable", err)
 		return
 	}
-	ctx := oidc.ClientContext(r.Context(), s.client)
+	// A stall ends at the deadline. oauth2 may then retry the token call (params after Basic auth) with
+	// the expired ctx, or lose the timeout's type while reading a body: read the deadline, not the error.
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(r.Context(), s.client), s.exchangeTimeout)
+	defer cancel()
+	timedOut := func(reason string) string {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return authUnavailable
+		}
+		return reason
+	}
 	cfg := s.oauthConfig(d)
 	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(st.Verifier))
 	if err != nil {
-		fail(http.StatusUnauthorized, "code exchange failed", err)
+		fail(timedOut(exchangeReason(err)), "code exchange failed", err)
 		return
 	}
 	rawID, _ := tok.Extra("id_token").(string)
 	idt, err := d.verifier.Verify(ctx, rawID)
 	if err != nil {
-		fail(http.StatusUnauthorized, "invalid ID token", err)
+		fail(timedOut(authFailed), "invalid ID token", err)
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(idt.Nonce), []byte(st.Nonce)) != 1 {
-		fail(http.StatusUnauthorized, "nonce mismatch", nil)
+		fail(authFailed, "nonce mismatch", nil)
 		return
 	}
 	var claims struct {
@@ -256,7 +362,7 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 		PreferredUsername string `json:"preferred_username"`
 	}
 	if err := idt.Claims(&claims); err != nil {
-		fail(http.StatusUnauthorized, "invalid ID token claims", err)
+		fail(authFailed, "invalid ID token claims", err)
 		return
 	}
 	who := identity{Sub: idt.Subject, Email: claims.Email, DisplayName: claims.Name, IDToken: rawID}
@@ -265,10 +371,27 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.login(r.Context(), w, r, who); err != nil {
 		s.log.Error("login_failed", zap.Error(err))
-		http.Error(w, "sign-in failed", http.StatusInternalServerError)
+		seeOther(w, gateURL(returnTo, authFailed))
 		return
 	}
-	http.Redirect(w, r, safeReturnTo(st.ReturnTo), http.StatusSeeOther)
+	seeOther(w, returnTo)
+}
+
+// exchangeReason calls the exchange an outage only when the token endpoint could not answer (transport
+// error, timeout, 5xx); anything else (refused code, malformed answer) is a failed sign-in.
+func exchangeReason(err error) string {
+	var re *oauth2.RetrieveError
+	if errors.As(err, &re) {
+		if re.Response != nil && re.Response.StatusCode >= http.StatusInternalServerError {
+			return authUnavailable
+		}
+		return authFailed
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return authUnavailable
+	}
+	return authFailed
 }
 
 // logoutRedirect is where the browser goes after sign-out: the provider's end-session endpoint

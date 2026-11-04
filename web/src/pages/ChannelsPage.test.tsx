@@ -1,17 +1,12 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { navigation } from "@/api/client";
 import { CHANNEL_TYPES, mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { channel, delivery, script } from "@/test/routing";
 import { lastCall, pending, problem } from "@/test/watches";
 import type { Channel } from "@/types/api";
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 const GENERATED = "FmI9sOssGHJCLR406IiNSNAHPEVSeOeWkKpz6yUZ3fA";
 

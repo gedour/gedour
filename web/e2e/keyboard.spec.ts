@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { expect, test, UPSTREAM } from "./fixtures";
+import { expect, gate, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE });
 
@@ -114,4 +114,33 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(item).toHaveAttribute("data-unread", "false");
   await page.reload();
   await expect(item).toHaveAttribute("data-unread", "false");
+});
+
+test.describe("without a session", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  // 002-AC8: the gate's only action is the first Tab stop, visibly focused, and Enter follows it.
+  test("sign in from the gate by keyboard", async ({ page }) => {
+    await page.goto("/rules");
+    await expect(gate(page)).toBeVisible();
+    const signIn = page.getByRole("link", { name: "Sign in" });
+    await page.keyboard.press("Tab");
+    await expect(signIn).toBeFocused();
+    await expectFocusVisible(signIn);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/realms\/gedour-test\/protocol\/openid-connect\/auth/);
+  });
+});
+
+// 002-AC8: the gate replacing the app takes the focus, which would otherwise fall to <body>.
+test("focus moves to the gate when the session ends", async ({ page, context }) => {
+  await page.goto("/inbox");
+  await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+  const rules = nav(page, "Rules");
+  await tabTo(page, rules);
+  await context.clearCookies();
+  await page.keyboard.press("Enter");
+  await expect(gate(page)).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("link", { name: "Sign in" })).toBeFocused();
 });

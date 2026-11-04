@@ -1,8 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { navigation } from "@/api/client";
 import { actionTone } from "@/lib/audit";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
@@ -23,10 +22,6 @@ const entry = (id: number, over: Partial<AuditItem> = {}): AuditItem => ({
 });
 
 const pending = () => new Promise<Response>(() => {});
-
-beforeEach(() => {
-  vi.spyOn(navigation, "toLogin").mockImplementation(() => {});
-});
 
 describe("AuditPage", () => {
   // 001-AC22: entries render as a table, newest first, with action badge and target.

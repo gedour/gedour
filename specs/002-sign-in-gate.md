@@ -1,6 +1,6 @@
 # 002 — Sign-in gate
 
-**Status**: draft
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-04
 
@@ -40,20 +40,20 @@ instead of leaving the user on an error page.
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given no session, when any app URL loads, then only the sign-in gate renders (no sidebar,
+- [x] **AC1** Given no session, when any app URL loads, then only the sign-in gate renders (no sidebar,
   no page content) and no API call other than `/api/v1/me` (and `/api/v1/version`) is made.
-- [ ] **AC2** Given the gate, when "Sign in" is clicked, then the browser goes to
+- [x] **AC2** Given the gate, when "Sign in" is clicked, then the browser goes to
   `/auth/login?return_to=<the URL first requested>`, and after a successful login lands back on it.
-- [ ] **AC3** Given a signed-in user, when the session ends server-side and the next API call answers
+- [x] **AC3** Given a signed-in user, when the session ends server-side and the next API call answers
   401, then the app is replaced by the gate within that call; no error toast or broken view is shown.
-- [ ] **AC4** Given a signed-in user on any page, when the inbox stream sends `signed_out`, or errors and
+- [x] **AC4** Given a signed-in user on any page, when the inbox stream sends `signed_out`, or errors and
   `/api/v1/me` then answers 401, then the gate replaces the app without user action.
-- [ ] **AC5** Given the identity provider unreachable, when "Sign in" is clicked, then the gate comes
+- [x] **AC5** Given the identity provider unreachable, when "Sign in" is clicked, then the gate comes
   back with "Sign-in service unavailable" and a working retry, never a plain-text error page.
-- [ ] **AC6** A failed callback (state mismatch, provider error, expired login cookie) lands on the gate
+- [x] **AC6** A failed callback (state mismatch, provider error, expired login cookie) lands on the gate
   with "Sign-in failed, try again", not on a plain-text error.
-- [ ] **AC7** In dev single-user mode the gate never renders; the app signs in as before.
-- [ ] **AC8** The gate passes the existing a11y (axe, light and dark), 375 px and keyboard checks, and
+- [x] **AC7** In dev single-user mode the gate never renders; the app signs in as before.
+- [x] **AC8** The gate passes the existing a11y (axe, light and dark), 375 px and keyboard checks, and
   the e2e CSP guard.
 
 ## Phases

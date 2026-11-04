@@ -145,7 +145,7 @@ describe("WatchDetailPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Delete watch" }));
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     expect(await screen.findByRole("heading", { level: 1, name: "Watches" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Deleted Go releases");
@@ -165,7 +165,7 @@ describe("WatchDetailPage", () => {
     expect(await screen.findByText(/Could not change the paused state: nope/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Delete watch" }));
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     expect(await screen.findByText(/Could not delete the watch/)).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0] as HTMLElement);

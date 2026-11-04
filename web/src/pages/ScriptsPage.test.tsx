@@ -221,9 +221,12 @@ describe("ScriptFormPage", () => {
     const { router } = renderApp("/scripts/s1");
     await user.click(await screen.findByRole("button", { name: "Delete script" }));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Delete Notify deploy?" })).getByRole("button", {
-        name: "Delete",
-      }),
+      within(await screen.findByRole("dialog", { name: "Delete Notify deploy?" })).getByRole(
+        "button",
+        {
+          name: "Delete",
+        },
+      ),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/scripts"));
 

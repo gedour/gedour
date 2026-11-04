@@ -256,11 +256,13 @@ describe("RuleFormPage", () => {
       }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
+    // Navigating back before the list rendered left the old form mounted: its Delete click opened nothing.
+    expect(await screen.findByRole("heading", { level: 1, name: "Rules" })).toBeInTheDocument();
 
     await router.navigate("/rules/r1");
     await userEvent.click(await screen.findByRole("button", { name: "Delete rule" }));
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
     expect(lastCall(fn, "/api/v1/rules/r1", "DELETE")).toBeDefined();
@@ -288,11 +290,11 @@ describe("RuleFormPage", () => {
     renderApp("/rules/r1");
     await userEvent.click(await screen.findByRole("button", { name: "Delete rule" }));
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     expect(await screen.findByText(/Could not delete the rule/)).toBeInTheDocument();
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel" }),
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

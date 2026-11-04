@@ -75,7 +75,7 @@ type createWatchInput struct {
 		Kind         string         `json:"kind" enum:"github_release,github_pr,gitlab_release,gitlab_mr,oci_tags"`
 		Config       map[string]any `json:"config"`
 		CredentialID string         `json:"credential_id,omitempty" format:"uuid" doc:"Owned credential of the kind's family"`
-		Schedule     string         `json:"schedule,omitempty" default:"15m" doc:"Go duration (1m to 168h) or 5-field cron expression"`
+		Schedule     string         `json:"schedule,omitempty" doc:"Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise"`
 		Paused       bool           `json:"paused,omitempty"`
 	}
 }
@@ -212,7 +212,7 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 	b := in.Body
 	cfg, errs := s.v.Config(b.Kind, b.Config)
 	if b.Schedule == "" {
-		b.Schedule = DefaultSchedule
+		b.Schedule = DefaultScheduleFor(b.Kind)
 	}
 	schedule, msg := parseSchedule(b.Schedule)
 	if msg != "" {

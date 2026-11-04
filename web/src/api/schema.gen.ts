@@ -818,11 +818,8 @@ export interface components {
       kind: "github_release" | "github_pr" | "gitlab_release" | "gitlab_mr" | "oci_tags";
       name: string;
       paused?: boolean;
-      /**
-       * @description Go duration (1m to 168h) or 5-field cron expression
-       * @default 15m
-       */
-      schedule: string;
+      /** @description Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise */
+      schedule?: string;
     };
     CreatedChannel: {
       /** @description telegram: chat_id; email: to; webhook: url; script: script_id */

@@ -279,10 +279,10 @@ describe("ChannelsPage", () => {
     renderApp("/channels");
     await userEvent.click(await screen.findByRole("button", { name: "Delete Deploy bot" }));
     await userEvent.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     expect(
-      await within(screen.getByRole("dialog")).findByText("database down"),
+      await within(await screen.findByRole("dialog")).findByText("database down"),
     ).toBeInTheDocument();
   });
 

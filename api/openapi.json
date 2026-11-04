@@ -508,8 +508,7 @@
             "type": "boolean"
           },
           "schedule": {
-            "default": "15m",
-            "description": "Go duration (1m to 168h) or 5-field cron expression",
+            "description": "Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise",
             "type": "string"
           }
         },

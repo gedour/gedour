@@ -118,7 +118,6 @@ describe("WatchFormPage (new)", () => {
       name: "Mine",
       kind: "github_release",
       config: { repo: "a/b", include_prereleases: false },
-      schedule: "15m",
       credential_id: "c1",
     });
     release(Response.json(watch({ id: "w9", name: "Mine" }), { status: 201 }));
@@ -263,5 +262,33 @@ describe("WatchFormPage (edit)", () => {
     mockApi({ "/api/v1/watches/w1": pending });
     renderApp("/watches/w1/edit");
     expect(screen.getByText("Loading…")).toBeInTheDocument();
+  });
+});
+
+describe("WatchFormPage default schedule", () => {
+  // Unauthenticated GitHub allows 60 requests an hour: GitHub kinds start hourly.
+  it("follows the kind until the user picks one", async () => {
+    mockApi({ "/api/v1/credentials": { items: [] } });
+    renderApp("/watches/new");
+    const schedule = await screen.findByLabelText("Schedule", { exact: true });
+    expect(schedule).toHaveValue("1h");
+    await userEvent.click(kindCard("GitLab releases"));
+    expect(schedule).toHaveValue("15m");
+    await userEvent.click(kindCard("GitHub pull request"));
+    expect(schedule).toHaveValue("1h");
+    await userEvent.click(screen.getByRole("button", { name: "6 hours" }));
+    await userEvent.click(kindCard("Image tags"));
+    expect(schedule).toHaveValue("6h");
+  });
+
+  it("follows a kind set by a pasted URL", async () => {
+    mockApi({ "/api/v1/credentials": { items: [] } });
+    renderApp("/watches/new");
+    await userEvent.type(
+      screen.getByLabelText(/Paste a URL/),
+      "https://gitlab.com/gitlab-org/gitlab/-/merge_requests/7",
+    );
+    expect(kindCard("GitLab merge request")).toBeChecked();
+    expect(screen.getByLabelText("Schedule", { exact: true })).toHaveValue("15m");
   });
 });

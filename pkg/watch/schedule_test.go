@@ -31,3 +31,20 @@ func TestNextRun(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultScheduleFor(t *testing.T) {
+	expected := map[string]string{
+		KindGitHubRelease: "1h", KindGitHubPR: "1h",
+		KindGitLabRelease: "15m", KindGitLabMR: "15m", KindOCITags: "15m",
+	}
+	// A new kind must pick its default here, not inherit 15m silently.
+	for _, kind := range Kinds {
+		want, ok := expected[kind]
+		if !ok {
+			t.Fatalf("%s: no expected default schedule", kind)
+		}
+		if got := DefaultScheduleFor(kind); got != want {
+			t.Errorf("%s: got %q, want %q", kind, got, want)
+		}
+	}
+}

@@ -12,9 +12,19 @@ import (
 const (
 	minInterval = time.Minute
 	maxInterval = 7 * 24 * time.Hour
-	// DefaultSchedule applies when a watch is created without one.
-	DefaultSchedule = "15m"
+	// defaultSchedule applies when a watch is created without one; GitHub kinds use githubSchedule.
+	defaultSchedule = "15m"
+	// Unauthenticated GitHub allows 60 requests an hour per address: a few 15m watches would exhaust it.
+	githubSchedule = "1h"
 )
+
+// DefaultScheduleFor returns the schedule a new watch of kind gets when none is given.
+func DefaultScheduleFor(kind string) string {
+	if kind == KindGitHubRelease || kind == KindGitHubPR {
+		return githubSchedule
+	}
+	return defaultSchedule
+}
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 

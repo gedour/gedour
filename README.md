@@ -360,3 +360,7 @@ Every other `/api` route needs a session (401 otherwise).
 ## Development
 
 See `AGENTS.md` for build, test, lint and e2e commands.
+
+## License
+
+Apache License 2.0, see [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE).

@@ -38,6 +38,7 @@ LABEL org.opencontainers.image.source=${PROJECT_URL}
 LABEL org.opencontainers.image.created=${BUILD_TIMESTAMP}
 LABEL org.opencontainers.image.version=${VERSION}
 LABEL org.opencontainers.image.revision=${COMMIT_HASH}
+LABEL org.opencontainers.image.licenses=Apache-2.0
 
 ENV VERSION="${VERSION}" \
     COMMIT_HASH="${COMMIT_HASH}" \

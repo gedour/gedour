@@ -80,6 +80,8 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
   `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
   the watch reads `running: true`, and the request is kept for when the run ends.
+- Default schedule: `1h` for GitHub watches (unauthenticated GitHub allows 60 requests an hour per
+  address), `15m` for the others; any schedule can be set explicitly.
 - Next run: interval schedules ±10 % jitter, cron schedules at their next activation (UTC). Errors back
   off `interval × 2^(failures-1)`, capped at 8 intervals. Rate limits (GitHub `X-RateLimit-*`, GitLab
   `RateLimit-Reset`, `Retry-After`) push the next run to the reset time, at most 1 h away, without

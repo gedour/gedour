@@ -8,6 +8,8 @@ export interface KindInfo {
   blurb: string;
   icon: LucideIcon;
   credential: CredentialKind;
+  /** Mirrors the server's DefaultScheduleFor: unauthenticated GitHub allows 60 requests an hour. */
+  defaultSchedule: string;
 }
 
 export const KINDS: KindInfo[] = [
@@ -17,6 +19,7 @@ export const KINDS: KindInfo[] = [
     blurb: "New releases of a repository",
     icon: Rocket,
     credential: "github_token",
+    defaultSchedule: "1h",
   },
   {
     kind: "github_pr",
@@ -24,6 +27,7 @@ export const KINDS: KindInfo[] = [
     blurb: "State, reviews and CI of one PR",
     icon: GitPullRequest,
     credential: "github_token",
+    defaultSchedule: "1h",
   },
   {
     kind: "gitlab_release",
@@ -31,6 +35,7 @@ export const KINDS: KindInfo[] = [
     blurb: "Releases of a project, any GitLab",
     icon: Tag,
     credential: "gitlab_token",
+    defaultSchedule: "15m",
   },
   {
     kind: "gitlab_mr",
@@ -38,6 +43,7 @@ export const KINDS: KindInfo[] = [
     blurb: "State, approvals and pipeline of one MR",
     icon: GitMerge,
     credential: "gitlab_token",
+    defaultSchedule: "15m",
   },
   {
     kind: "oci_tags",
@@ -45,6 +51,7 @@ export const KINDS: KindInfo[] = [
     blurb: "Tags of an image on any OCI registry",
     icon: Container,
     credential: "registry_basic",
+    defaultSchedule: "15m",
   },
 ];
 

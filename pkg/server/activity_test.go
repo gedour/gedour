@@ -172,7 +172,7 @@ func TestRetargetResetsBaseline(t *testing.T) {
 		t.Fatalf("retarget kept %d rows, next=%v", n, w.NextRunAt)
 	}
 	seed()
-	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"schedule": "1h"}, http.StatusOK, &w)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"schedule": "30m"}, http.StatusOK, &w)
 	if n := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); n != 1 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("schedule change: states=%d next=%v", n, w.NextRunAt)
 	}

@@ -102,7 +102,8 @@ export function WatchForm({ initial }: { initial?: Watch }) {
   const [values, setValues] = useState<FormValues>(initial ? fromConfig(initial.config) : {});
   const [name, setName] = useState(initial?.name ?? "");
   const [nameTouched, setNameTouched] = useState(editing);
-  const [schedule, setSchedule] = useState(initial?.schedule ?? "15m");
+  // null until the user picks one: the default follows the kind.
+  const [scheduleChoice, setSchedule] = useState<string | null>(initial?.schedule ?? null);
   const [credentialId, setCredentialId] = useState(initial?.credential_id ?? "");
   const [paste, setPaste] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -110,6 +111,7 @@ export function WatchForm({ initial }: { initial?: Watch }) {
   const navigate = useNavigate();
   const client = useQueryClient();
   const credentialKind = kindInfo(kind).credential;
+  const schedule = scheduleChoice ?? kindInfo(kind).defaultSchedule;
   const credentials = useQuery({
     queryKey: ["credentials", credentialKind],
     queryFn: () => listCredentials(credentialKind),
@@ -151,7 +153,8 @@ export function WatchForm({ initial }: { initial?: Watch }) {
         name,
         kind,
         config,
-        schedule,
+        // Unpicked: the server applies its own per-kind default, the one shown here mirrors it.
+        schedule: scheduleChoice ?? undefined,
         credential_id: credentialId || undefined,
       });
     },

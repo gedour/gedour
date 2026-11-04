@@ -131,7 +131,9 @@ func TestWatchCRUD(t *testing.T) {
 	for _, body := range sampleWatches {
 		var w watchJSON
 		a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", body, http.StatusCreated, &w)
-		if w.Permission != "owner" || w.Schedule != "15m" || w.Paused || w.OwnerName != "alice" || w.Kind != body["kind"] {
+		// GitHub kinds default to hourly: unauthenticated GitHub allows 60 requests an hour.
+		want := map[bool]string{true: "1h", false: "15m"}[strings.HasPrefix(w.Kind, "github_")]
+		if w.Permission != "owner" || w.Schedule != want || w.Paused || w.OwnerName != "alice" || w.Kind != body["kind"] {
 			t.Fatalf("created: %+v", w)
 		}
 		ids[w.Kind] = w.ID

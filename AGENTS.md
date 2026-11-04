@@ -58,7 +58,9 @@
   `modal={false}` (modal mode injects a `<style>`); modals use the native `<dialog>` of
   `components/ui/dialog.tsx`, never Radix Dialog/AlertDialog. e2e fails on any CSP violation.
 - `index.html`'s pre-paint theme script reads `%GEDOUR_THEME_KEY%`, filled by Vite from `src/lib/theme.ts`.
-- CI jobs live in the reusable `.github/workflows/checks.yml`, called by `ci.yml` and gating `release.yml`.
+- Default branch `develop`; releases are `vX.Y.Z` tags on it. CI jobs live in the reusable
+  `.github/workflows/checks.yml`, called by `ci.yml` (PRs) and gating `release.yml` (tags and `develop`
+  pushes, which publish `develop-<sha>-<run>` images).
   Actions are pinned to commit SHAs with a `# vX.Y.Z` comment; Dependabot bumps them.
 - Migrations: goose SQL files in `pkg/db/migrations`, embedded, applied at startup under a PG advisory lock.
   Never edit an applied migration; add a new numbered file.

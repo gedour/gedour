@@ -1,6 +1,6 @@
 name: checks
 
-# Reusable: ci.yml runs it on PRs and main, release.yml runs it before building a tag.
+# Reusable: ci.yml runs it on PRs, release.yml before publishing a tag or a develop image.
 # 001-AC29: lint, Go tests with PG, web tests, e2e and image build on every PR.
 on:
   workflow_call:

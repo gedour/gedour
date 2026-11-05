@@ -204,6 +204,13 @@ A Talk channel posts each delivery into a conversation as a bot. No Nextcloud us
 - Only a 201 is sent: a proxy or SSO page answering 200 is not a post. 401, 404 and 413 are final at once
   (`dead`, shown as Failed) with the reason; fix the channel, then retry the delivery by hand. Anything else,
   other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.
+- Nextcloud throttles every bot of an IP after repeated 401s. A 401 pauses that channel for 30 minutes or until
+  it is edited: its deliveries wait without using an attempt. One Talk request per channel runs at a time, about
+  one message per `GEDOUR_WORKER_POLL`. "Send test" and a manual retry of the refused delivery stay direct.
+  Nextcloud 32 and later stay under the limit; on 31 and older, a channel left broken for about 3.5 hours still
+  slows bot posts from this IP past gedour's timeout.
+- To exempt gedour's outgoing IP, add it to the Brute-force IP whitelist in Nextcloud's security settings; that
+  removes the protection for this IP, for every login attempt from it.
 - https is required, and http only for hosts in `GEDOUR_ALLOW_HTTP_HOSTS`. Same SSRF guard as webhooks: a
   Nextcloud on a private network needs its range in `GEDOUR_ALLOW_PRIVATE_NETS`.
 - Upstream text cannot mention anyone: `@` is escaped in titles, details and links.

@@ -25,7 +25,12 @@ const (
 	DeliveryLease = 2 * time.Minute
 	maxErrorLen   = 1024
 	sendTimeout   = 45 * time.Second
+	// talkPause holds a Talk channel after a 401: Nextcloud throttles every bot of the sending IP past
+	// 10 failures in 30 min, and a success resets nothing.
+	talkPause = 30 * time.Minute
 )
+
+const talkPausedError = "held: channel paused after Nextcloud Talk answered HTTP 401; it resumes on its own or when the channel is edited"
 
 // errUnreadable ends a delivery without sending: its channel's owner lost access to the watch.
 var errUnreadable = errors.New("not sent: the channel's owner can no longer read this watch")
@@ -190,6 +195,11 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 	defer cancel()
 	start := time.Now()
 	ch, nd, err := d.load(ctx, j)
+	if err == nil && ch.Type == notify.TypeNextcloudTalk {
+		if d.holdTalk(ctx, log, j) {
+			return
+		}
+	}
 	var logs *string
 	if err == nil {
 		var lines []string
@@ -234,6 +244,49 @@ func drained(sendErr error, stop context.Context) bool {
 	return sendErr != nil && stop.Err() != nil
 }
 
+// holdTalk sends the delivery back without an attempt while its channel is paused after a 401, or while
+// an earlier claim on the channel is in flight: concurrent sends would all fail before the first 401 is
+// recorded. Attempts stay put, so a pause alone never makes a delivery dead. A failed check holds too: it
+// says nothing about the channel, so it must not spend an attempt or risk a request. The channel's other
+// due rows go back too: one by one, a backlog would take every send slot and delay the other channels.
+func (d *Deliverer) holdTalk(ctx context.Context, log *zap.Logger, j claimed) bool {
+	var paused, busy bool
+	// ponytail: scans the channel's rows, 18 ms at 200k; a partial index needs a migration if a channel's history outgrows it.
+	err := d.pool.QueryRow(ctx, `SELECT
+		EXISTS (SELECT 1 FROM deliveries f JOIN channels c ON c.id = f.channel_id
+			WHERE f.channel_id = $1 AND f.status = 'dead' AND f.last_error LIKE '%: HTTP 401'
+				AND f.next_attempt_at > GREATEST(c.updated_at, now() - make_interval(secs => $3))),
+		EXISTS (SELECT 1 FROM deliveries o JOIN deliveries me ON me.id = $2
+			WHERE o.channel_id = $1 AND o.leased_until > now()
+				AND (o.leased_until, o.id) < (me.leased_until, me.id))`,
+		j.channelID, j.id, talkPause.Seconds()).Scan(&paused, &busy)
+	if err != nil {
+		log.Error("delivery_hold_check_failed", zap.Error(err))
+		busy = true
+	}
+	if !paused && !busy {
+		return false
+	}
+	// Half a poll: due again at the next tick, not the one after.
+	status, lastErr, delay := (*string)(nil), (*string)(nil), d.poll/2
+	if paused {
+		failed, msg := "failed", talkPausedError
+		status, lastErr, delay = &failed, &msg, Backoff[0]
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = COALESCE($3, status), last_error = COALESCE($4, last_error),
+			next_attempt_at = now() + make_interval(secs => $5), claim_token = NULL, leased_until = NULL
+		WHERE channel_id = $6 AND status IN ('pending', 'failed') AND ((id = $1 AND claim_token = $2)
+			OR (next_attempt_at <= now() AND (leased_until IS NULL OR leased_until <= now())))`,
+		j.id, j.token, status, lastErr, delay.Seconds(), j.channelID); err != nil {
+		// The lease expires and the delivery is claimed again: nothing went out.
+		log.Error("delivery_hold_failed", zap.Error(err))
+	}
+	log.Debug("delivery_held", zap.Bool("paused", paused))
+	return true
+}
+
 // release hands the claim back untouched: attempts and next attempt stay as they were.
 func (d *Deliverer) release(log *zap.Logger, j claimed) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -258,13 +311,16 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *
 		delay = retryDelay(attempt)
 		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, notify.ErrPermanent) {
 			status = "dead"
+			// A dead delivery's next_attempt_at is when it died: the Talk pause compares it to channel edits.
+			delay = 0
 		}
 	}
 	if logs != nil {
 		clean := strings.ReplaceAll(*logs, "\x00", "")
 		logs = &clean
 	}
-	tag, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = $3, attempts = $4, last_error = COALESCE($5, last_error),
+	tag, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = $3, attempts = $4,
+			last_error = CASE WHEN $3 = 'sent' AND last_error LIKE 'held:%' THEN NULL ELSE COALESCE($5, last_error) END,
 			logs = COALESCE($7, logs), sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
 			next_attempt_at = now() + make_interval(secs => $6), claim_token = NULL, leased_until = NULL
 		WHERE id = $1 AND claim_token = $2`, j.id, j.token, status, attempt, lastErr, delay.Seconds(), logs)

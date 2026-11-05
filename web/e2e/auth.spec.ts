@@ -55,6 +55,7 @@ test.describe("signed out", () => {
     await expect(page).toHaveURL(/\/inbox\?auth=forbidden$/);
     await expect(gate(page, "No access to gedour")).toBeVisible();
     await expect(page.getByText("Ask an administrator for access.")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Try again" })).toBeVisible();
     expect((await page.request.get("/api/v1/me")).status()).toBe(401);
   });
 

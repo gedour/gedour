@@ -5,7 +5,7 @@ import { useLocation } from "react-router";
 import { Wordmark } from "@/components/Wordmark";
 
 // Keyed by the server's fixed `?auth=` values: the query only picks a text, it is never rendered.
-const REASONS: Record<string, { title: string; body: string; final?: boolean }> = {
+const REASONS: Record<string, { title: string; body: string }> = {
   unavailable: {
     title: "Sign-in service unavailable",
     body: "The identity provider cannot be reached right now.",
@@ -17,8 +17,6 @@ const REASONS: Record<string, { title: string; body: string; final?: boolean }> 
   forbidden: {
     title: "No access to gedour",
     body: "Your account is not allowed to use gedour. Ask an administrator for access.",
-    // A retry would sign the same account straight back in through the provider's session.
-    final: true,
   },
 };
 
@@ -87,7 +85,7 @@ export function SignInGate({
               <RotateCw aria-hidden />
               Try again
             </button>
-          ) : reason?.final ? null : (
+          ) : (
             <a href={loginHref(pathname, search, hash)} className={ACTION}>
               <LogIn aria-hidden />
               {reason ? "Try again" : "Sign in"}

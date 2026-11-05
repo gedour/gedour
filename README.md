@@ -96,8 +96,7 @@ a failed dev sign-in answers a plain 500.
 - gedour reads the roles from the ID token's `GEDOUR_OIDC_ROLES_CLAIM`, a string array. A missing claim,
   another type or non-string items count as no role.
 - With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
-  gate with "No access to gedour" and no retry button: no session, no account created, an audit entry
-  `user.login_denied`.
+  gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
 - Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
   Sessions opened before the upgrade that added roles are not admin until their next sign-in.
 - `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.

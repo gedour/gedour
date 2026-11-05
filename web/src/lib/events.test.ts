@@ -90,6 +90,12 @@ describe("summarizeEvent", () => {
       "change",
     ],
     [
+      ev("pr.commented", { ...pr, author: "bob", excerpt: "Looks good." }),
+      "Comment",
+      "PR #12 commented by bob",
+      "change",
+    ],
+    [
       ev("mr.state_changed", { ...mr, from: "opened", to: "merged" }),
       "State",
       "MR !7 merged",

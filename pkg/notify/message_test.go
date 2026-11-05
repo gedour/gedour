@@ -30,6 +30,8 @@ func TestFormat(t *testing.T) {
 		{ev("pr.review_changed", map[string]any{"number": 7.0, "to": "changes_requested"}), "PR #7 review: changes requested", "", ""},
 		{ev("pr.review_changed", map[string]any{"number": 7.0, "to": "odd"}), "PR #7 review: odd", "", ""},
 		{ev("pr.ci_changed", map[string]any{"number": 7.0, "to": "failure"}), "PR #7 CI failing", "", ""},
+		{ev("pr.commented", map[string]any{"number": 7.0, "author": "bob", "title": "T", "excerpt": "Looks good.\nShip it", "url": "https://x.test/pr/7#issuecomment-1"}),
+			"PR #7 commented by bob", "Looks good. Ship it", "https://x.test/pr/7#issuecomment-1"},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": true, "count": 2.0}}), "MR !3 approved (2 approvals)", "", ""},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": false, "count": 1.0}}), "MR !3 not approved (1 approval)", "", ""},
 		{ev("mr.pipeline_changed", map[string]any{"iid": 3.0, "to": "success"}), "MR !3 pipeline success", "", ""},

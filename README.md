@@ -97,9 +97,11 @@ a failed dev sign-in answers a plain 500.
   counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged.
 - The first run stores a baseline and emits nothing. Each later change becomes typed events
   (`release.published`, `release.promoted`, `pr.state_changed`, `pr.draft_changed`, `pr.review_changed`,
-  `pr.ci_changed`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`, `mr.pipeline_changed`,
-  `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next run is a new baseline.
-  The last 50 states per watch are kept; events are kept.
+  `pr.ci_changed`, `pr.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
+  `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
+  run is a new baseline. The last 50 states per watch are kept; events are kept.
+- `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
+  comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,

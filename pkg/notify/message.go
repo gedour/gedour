@@ -129,6 +129,8 @@ func summarize(e Event) string {
 			to = c
 		}
 		return pr + " CI " + to
+	case "pr.commented":
+		return pr + " commented by " + str(p["author"])
 	case "mr.approval_changed":
 		a, _ := p["to"].(map[string]any)
 		n, _ := a["count"].(float64)
@@ -158,6 +160,8 @@ func Format(d Delivery) Message {
 	switch {
 	case d.Event.Type == TestEventType:
 		m.Detail = str(d.Event.Payload["message"])
+	case d.Event.Type == "pr.commented":
+		m.Detail = str(d.Event.Payload["excerpt"])
 	case str(d.Event.Payload["title"]) != "":
 		m.Detail = str(d.Event.Payload["title"])
 	case str(d.Event.Payload["name"]) != "" && str(d.Event.Payload["name"]) != str(d.Event.Payload["tag"]):

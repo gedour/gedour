@@ -181,7 +181,24 @@ type PRState struct {
 	CI             string `json:"ci"`              // success, failure, pending or none
 	HeadSHA        string `json:"head_sha"`
 	URL            string `json:"url"`
+	// Comments are the newest maxComments, oldest first. nil is a state stored before comments were
+	// collected: the diff then takes the current ones as its baseline instead of announcing them.
+	Comments []PRComment `json:"comments"`
 }
+
+// PRComment is one comment on a PR: conversation, inline review comment, or review body.
+type PRComment struct {
+	Author    string    `json:"author"`
+	CreatedAt time.Time `json:"created_at"`
+	// URL identifies the comment: the three kinds number their ids apart.
+	URL     string `json:"url"`
+	Excerpt string `json:"excerpt"`
+}
+
+const (
+	maxComments = 20
+	maxExcerpt  = 280
+)
 
 func collectGitHubPR(ctx context.Context, f *Fetcher, cfg watch.GitHubPRConfig, cred *Credential) (PRState, error) {
 	h := githubHeaders(cred)
@@ -198,12 +215,14 @@ func collectGitHubPR(ctx context.Context, f *Fetcher, cfg watch.GitHubPRConfig, 
 	if err := json.Unmarshal(pr.body, &head); err != nil || head.Head.SHA == "" {
 		return PRState{}, fmt.Errorf("decode pull request: no head sha (%v)", err)
 	}
-	var bodies [3][]byte
+	var bodies [4][]byte
 	for i, u := range []string{
 		// ponytail: first page only; a PR with more than 100 reviews or check runs reads its first 100.
 		fmt.Sprintf("%s/pulls/%d/reviews?per_page=100", base, cfg.Number),
 		fmt.Sprintf("%s/commits/%s/check-runs?per_page=100", base, head.Head.SHA),
 		fmt.Sprintf("%s/commits/%s/status?per_page=100", base, head.Head.SHA),
+		// This endpoint sorts newest first; the issue comments one has no sort option.
+		fmt.Sprintf("%s/pulls/%d/comments?per_page=100&sort=created&direction=desc", base, cfg.Number),
 	} {
 		r, err := f.get(ctx, u, h, false)
 		if err != nil {
@@ -211,7 +230,124 @@ func collectGitHubPR(ctx context.Context, f *Fetcher, cfg watch.GitHubPRConfig, 
 		}
 		bodies[i] = r.body
 	}
-	return normalizeGitHubPR(pr.body, bodies[0], bodies[1], bodies[2])
+	issue, err := lastPage(ctx, f, fmt.Sprintf("%s/issues/%d/comments?per_page=100", base, cfg.Number), h)
+	if err != nil {
+		return PRState{}, err
+	}
+	s, err := normalizeGitHubPR(pr.body, bodies[0], bodies[1], bodies[2])
+	if err != nil {
+		return PRState{}, err
+	}
+	if s.Comments, err = normalizeComments(bodies[0], bodies[3], issue); err != nil {
+		return PRState{}, err
+	}
+	return s, nil
+}
+
+// lastPage reads the Link rel="last" page of an oldest-first list, where its newest items sit.
+// ponytail: last page only; more than 100 comments in one run interval loses the overflow.
+func lastPage(ctx context.Context, f *Fetcher, u string, h http.Header) ([]byte, error) {
+	r, err := f.get(ctx, u, h, false)
+	if err != nil {
+		return nil, err
+	}
+	last, err := relLink(u, r.header.Get("Link"), lastRe)
+	if err != nil || last == "" {
+		return r.body, err
+	}
+	if r, err = f.get(ctx, last, h, false); err != nil {
+		return nil, err
+	}
+	return r.body, nil
+}
+
+// normalizeComments merges review bodies, inline comments and conversation comments into the newest
+// maxComments, oldest first. The result is never nil, so the next diff knows comments were collected.
+// One review is one comment: its inline comments fold into its body, or into the first of them.
+func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte) ([]PRComment, error) {
+	type item struct {
+		ID       int64 `json:"id"`
+		ReviewID int64 `json:"pull_request_review_id"`
+		User     struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body        string     `json:"body"`
+		HTMLURL     string     `json:"html_url"`
+		CreatedAt   *time.Time `json:"created_at"`
+		SubmittedAt *time.Time `json:"submitted_at"`
+	}
+	var reviews, inline, issue []item
+	for _, d := range []struct {
+		name string
+		b    []byte
+		v    *[]item
+	}{{"reviews", reviewsBody, &reviews}, {"review comments", reviewCommentsBody, &inline}, {"issue comments", issueCommentsBody, &issue}} {
+		if err := json.Unmarshal(d.b, d.v); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", d.name, err)
+		}
+	}
+	out := []PRComment{}
+	add := func(it item, at *time.Time) bool {
+		// An approval without text, or a pending review, is not a comment.
+		if at == nil || it.HTMLURL == "" || strings.TrimSpace(it.Body) == "" {
+			return false
+		}
+		out = append(out, PRComment{Author: it.User.Login, CreatedAt: *at, URL: it.HTMLURL, Excerpt: excerpt(it.Body)})
+		return true
+	}
+	carrier := map[int64]int{} // review id -> index in out of the comment that stands for the review
+	for _, r := range reviews {
+		if add(r, r.SubmittedAt) {
+			carrier[r.ID] = len(out) - 1
+		}
+	}
+	slices.SortStableFunc(inline, func(a, b item) int {
+		if a.CreatedAt == nil || b.CreatedAt == nil {
+			return 0 // dropped by add anyway
+		}
+		return a.CreatedAt.Compare(*b.CreatedAt)
+	})
+	more := map[int]int{}
+	for _, c := range inline {
+		if i, ok := carrier[c.ReviewID]; ok && c.ReviewID != 0 {
+			more[i]++
+			continue
+		}
+		if add(c, c.CreatedAt) && c.ReviewID != 0 {
+			carrier[c.ReviewID] = len(out) - 1
+		}
+	}
+	for i, n := range more {
+		out[i].Excerpt += fmt.Sprintf(" (+%d inline)", n)
+	}
+	for _, c := range issue {
+		add(c, c.CreatedAt)
+	}
+	slices.SortFunc(out, func(a, b PRComment) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.URL, b.URL)
+	})
+	return out[max(len(out)-maxComments, 0):], nil
+}
+
+// excerpt is the comment on one line, quoted lines (a reply's "> ...") left out, cut at maxExcerpt runes.
+func excerpt(body string) string {
+	var lines []string
+	for l := range strings.Lines(body) {
+		if !strings.HasPrefix(strings.TrimSpace(l), ">") {
+			lines = append(lines, l)
+		}
+	}
+	s := strings.Join(strings.Fields(strings.Join(lines, " ")), " ")
+	if s == "" { // a comment that only quotes
+		s = strings.Join(strings.Fields(body), " ")
+	}
+	if r := []rune(s); len(r) > maxExcerpt {
+		s = string(r[:maxExcerpt]) + "…"
+	}
+	return s
 }
 
 func normalizeGitHubPR(prBody, reviewsBody, checksBody, statusBody []byte) (PRState, error) {
@@ -318,17 +454,47 @@ func mapValues(m map[string]string) []string {
 	return out
 }
 
-// diffPR emits one event per changed facet: state, draft, review decision, CI.
+// diffPR emits one event per changed facet (state, draft, review decision, CI), then one per new comment.
 func diffPR(old, cur PRState) []Event {
 	base := func() map[string]any {
 		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
 	}
-	return diffFacets("pr", base, []facet{
+	events := diffFacets("pr", base, []facet{
 		{"state_changed", old.State, cur.State},
 		{"draft_changed", old.Draft, cur.Draft},
 		{"review_changed", old.ReviewDecision, cur.ReviewDecision},
 		{"ci_changed", old.CI, cur.CI},
 	})
+	for _, c := range newComments(old.Comments, cur.Comments) {
+		at := c.CreatedAt
+		events = append(events, Event{Type: "pr.commented", Subject: c.URL, OccurredAt: &at, Payload: map[string]any{
+			"number": cur.Number, "title": cur.Title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt,
+		}})
+	}
+	return events
+}
+
+// newComments lists the comments of cur missing from old. A comment older than old's oldest entry slid
+// back into the window (a deletion, a shorter last page), it is not new.
+func newComments(old, cur []PRComment) []PRComment {
+	if old == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(old))
+	for _, c := range old {
+		seen[c.URL] = true
+	}
+	var floor time.Time
+	if len(old) > 0 {
+		floor = old[0].CreatedAt
+	}
+	var out []PRComment
+	for _, c := range cur {
+		if !seen[c.URL] && !c.CreatedAt.Before(floor) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 type facet struct {

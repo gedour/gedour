@@ -49,7 +49,7 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 		{"github_release", map[string]any{"repo": "cli/cli", "include_prereleases": true, "api_url": srv.URL},
 			[]string{"release.promoted", "release.published", "release.published"}},
 		{"github_pr", map[string]any{"repo": "cli/cli", "number": 14925, "api_url": srv.URL},
-			[]string{"pr.draft_changed", "pr.review_changed", "pr.ci_changed"}},
+			[]string{"pr.draft_changed", "pr.review_changed", "pr.ci_changed", "pr.commented", "pr.commented", "pr.commented"}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner"},
 			[]string{"release.published", "release.published", "release.published", "release.published", "release.published"}},
 		{"gitlab_mr", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner", "iid": 7764},
@@ -313,7 +313,7 @@ func TestOCIEdgeCases(t *testing.T) {
 		{"cross-host next", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Link", `<https://elsewhere.test/v2/x/tags/list?last=a>; rel="next"`)
 			_, _ = w.Write([]byte(`{"tags":["a"]}`))
-		}, "left the registry"},
+		}, "pagination left"},
 		{"too many tags", func(w http.ResponseWriter, _ *http.Request) {
 			tags := make([]string, maxTags+1)
 			for i := range tags {
@@ -443,5 +443,52 @@ func TestFetcherKeepsGuardRedirectPolicy(t *testing.T) {
 	defer down.Close()
 	if _, err := f.get(t.Context(), down.URL, nil, false); !errors.Is(err, netguard.ErrBlocked) {
 		t.Fatalf("http redirect off the allowlist: %v", err)
+	}
+}
+
+// Issue comments come oldest first: the collector follows Link rel="last", on the same host only.
+func TestGitHubPRLastCommentPage(t *testing.T) {
+	for _, tt := range []struct {
+		name, link, want string
+	}{
+		{"last page read", `<%s/repos/a/b/issues/1/comments?per_page=100&page=3>; rel="next", <%s/repos/a/b/issues/1/comments?per_page=100&page=3>; rel="last"`, "page3"},
+		{"single page", ``, "page1"},
+		{"cross-host last refused", `<https://elsewhere.test/x?page=3>; rel="last"`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var srv *httptest.Server
+			srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/a/b/pulls/1":
+					_, _ = w.Write([]byte(`{"number":1,"state":"open","head":{"sha":"s"}}`))
+				case "/repos/a/b/commits/s/check-runs":
+					_, _ = w.Write([]byte(`{"check_runs":[]}`))
+				case "/repos/a/b/commits/s/status":
+					_, _ = w.Write([]byte(`{"state":"pending","total_count":0}`))
+				case "/repos/a/b/issues/1/comments":
+					page := "page1"
+					if r.URL.Query().Get("page") == "3" {
+						page = "page3"
+					} else if tt.link != "" {
+						w.Header().Set("Link", strings.ReplaceAll(tt.link, "%s", srv.URL))
+					}
+					_, _ = w.Write([]byte(`[{"user":{"login":"x"},"body":"b","html_url":"` + page + `","created_at":"2026-11-05T10:00:00Z"}]`))
+				default: // reviews, review comments
+					_, _ = w.Write([]byte(`[]`))
+				}
+			}))
+			defer srv.Close()
+			raw, err := Collectors()["github_pr"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 1, "api_url": srv.URL}), nil)
+			if tt.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "pagination left") {
+					t.Fatalf("want cross-host error, got %v", err)
+				}
+				return
+			}
+			var s PRState
+			if err != nil || json.Unmarshal(raw, &s) != nil || len(s.Comments) != 1 || s.Comments[0].URL != tt.want {
+				t.Fatalf("got %s, %v", raw, err)
+			}
+		})
 	}
 }

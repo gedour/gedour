@@ -97,6 +97,8 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       };
     case "pr.ci_changed":
       return { badge: "CI", tone: tone(to), text: `${pr} CI ${CI[to] ?? to}`, url };
+    case "pr.commented":
+      return { badge: "Comment", tone: "change", text: `${pr} commented by ${str(p.author)}`, url };
     case "mr.approval_changed": {
       const a = (p.to ?? {}) as Approvals;
       const count = plural(a.count ?? 0, "approval");

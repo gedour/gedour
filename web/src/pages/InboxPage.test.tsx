@@ -208,6 +208,53 @@ describe("InboxPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  // 004-AC7: the ids as one row; the notes behind a closed disclosure, never as a row.
+  it("shows the CVE ids and collapses the release notes", async () => {
+    const notes = "## Security\nFixes CVE-2026-1234.\n" + "x".repeat(64 << 10);
+    inboxServer([
+      inboxItem(1, {
+        event: {
+          id: 1,
+          type: "release.published",
+          occurred_at: yesterday(),
+          observed_at: yesterday(),
+          payload: { tag: "v1.0.0", body: notes, cves: ["CVE-2026-1234", "CVE-2026-20871"] },
+        },
+      }),
+    ]);
+    renderApp("/inbox");
+    await userEvent.click(await screen.findByRole("button", { name: /v1\.0\.0 published/ }));
+    const panel = screen.getByRole("complementary", { name: "v1.0.0 published" });
+    const details = within(panel).getByRole("region", { name: "Details" });
+    expect(details).toHaveTextContent("cvesCVE-2026-1234, CVE-2026-20871");
+    expect(details).not.toHaveTextContent("xxxxx");
+    const disclosure = within(panel).getByText("Release notes").closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(disclosure).toHaveTextContent("Fixes CVE-2026-1234.");
+    await userEvent.click(within(panel).getByText("Release notes"));
+    expect(disclosure).toHaveAttribute("open");
+  });
+
+  // 004-AC4: nothing to show for a release without notes or ids.
+  it("leaves out empty notes and an empty id list", async () => {
+    inboxServer([
+      inboxItem(1, {
+        event: {
+          id: 1,
+          type: "release.published",
+          occurred_at: yesterday(),
+          observed_at: yesterday(),
+          payload: { tag: "v1.0.0", body: "", cves: [] },
+        },
+      }),
+    ]);
+    renderApp("/inbox");
+    await userEvent.click(await screen.findByRole("button", { name: /v1\.0\.0 published/ }));
+    const panel = screen.getByRole("complementary", { name: "v1.0.0 published" });
+    expect(within(panel).getByRole("region", { name: "Details" })).not.toHaveTextContent("cves");
+    expect(within(panel).queryByText("Release notes")).not.toBeInTheDocument();
+  });
+
   it("closes the panel with Escape or its button", async () => {
     inboxServer([inboxItem(1, { read_at: yesterday() })]);
     renderApp("/inbox");

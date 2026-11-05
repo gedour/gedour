@@ -29,7 +29,11 @@ export interface ScriptCompletion {
 /** The globals a script sees (pkg/script), for the editor's autocomplete. */
 export const SCRIPT_COMPLETIONS: ScriptCompletion[] = [
   { label: "event.type", type: "property", detail: 'e.g. "release.published"' },
-  { label: "event.payload", type: "property", detail: "the event's data (tag, from, to, title…)" },
+  {
+    label: "event.payload",
+    type: "property",
+    detail: "the event's data (tag, from, to, title, body, cves…)",
+  },
   { label: "event.summary", type: "property", detail: 'e.g. "v1.2.0 published"' },
   { label: "event.url", type: "property", detail: "upstream page, when known" },
   { label: "event.occurred_at", type: "property", detail: "ISO time" },
@@ -63,6 +67,8 @@ export const SAMPLES: Sample[] = [
         name: "GitHub CLI 2.105.0",
         prerelease: false,
         url: "https://github.com/cli/cli/releases/tag/v2.105.0",
+        body: "## Security\n\nFixes CVE-2099-1234.",
+        cves: ["CVE-2099-1234"],
       },
       watch: { name: "GitHub CLI releases", kind: "github_release" },
     },

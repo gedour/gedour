@@ -720,6 +720,11 @@ export interface components {
     CostRef: {
       /**
        * Format: int64
+       * @description Bytes assumed for event.payload.body, or for a payload key computed at run time
+       */
+      body_bytes: number;
+      /**
+       * Format: int64
        * @description Most units one filter may cost
        */
       budget: number;
@@ -983,7 +988,7 @@ export interface components {
        * @description Upstream time of the change, when the upstream gives one
        */
       occurred_at: string | null;
-      /** @description Per-type details: tag, from/to, url... */
+      /** @description Per-type details: tag, from/to, url, cves... The release notes (body) only come with the inbox list and to channels */
       payload: {
         [key: string]: unknown;
       };
@@ -1038,6 +1043,11 @@ export interface components {
        * @description Items of an array literal
        */
       max_array: number;
+      /**
+       * Format: int64
+       * @description Bytes a filter sees of event.payload.body
+       */
+      max_body: number;
       /**
        * Format: int64
        * @description Entries of one payload array or map a filter sees

@@ -460,6 +460,73 @@ func TestRealCollectorETagAndEvents(t *testing.T) {
 	}
 }
 
+// 004-AC1, 004-AC6: through PostgreSQL, the events carry the notes and the stored states do not; a later
+// edit of a release's notes alone changes nothing. A NUL in the notes does not fail the run.
+func TestReleaseNotesInEventsNotStates(t *testing.T) {
+	e := newEnv(t)
+	note := `"CVE-2026-1 a\u0000b ` + strings.Repeat("n", 70_000) + `"`
+	release := func(tag, body string) string {
+		return fmt.Sprintf(`{"tag_name":%q,"published_at":"2026-01-01T00:00:00Z","html_url":"https://x/%s","body":%s}`, tag, tag, body)
+	}
+	var mu sync.Mutex
+	var page string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		_, _ = w.Write([]byte(page))
+	}))
+	defer srv.Close()
+	set := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		page = s
+	}
+	id := e.addWatch(t, "github_release", fmt.Sprintf(`{"repo":"o/r","api_url":%q,"include_prereleases":true}`, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	run := func(k int) {
+		t.Helper()
+		e.clock.set(t0.Add(time.Duration(k) * time.Minute))
+		tick(t, w)
+		if r := e.row(t, id); *r.status != "ok" {
+			t.Fatalf("run %d: %s %v", k, *r.status, *r.lastErr)
+		}
+	}
+	set("[" + release("v1", `"baseline"`) + "]")
+	run(0)
+	set("[" + release("v2", note) + "," + release("v3", "null") + "," + release("v1", `"baseline"`) + "]")
+	run(1)
+
+	var bodyLen int
+	var cves, empty string
+	if err := e.pool.QueryRow(context.Background(), `SELECT length(payload->>'body'), payload->>'cves' FROM events WHERE payload->>'tag' = 'v2'`).Scan(&bodyLen, &cves); err != nil {
+		t.Fatal(err)
+	}
+	if bodyLen != collect.MaxNotes || cves != `["CVE-2026-1"]` {
+		t.Fatalf("v2: %d bytes of body, cves %s", bodyLen, cves)
+	}
+	if err := e.pool.QueryRow(context.Background(), `SELECT (payload->'body')::text || (payload->'cves')::text FROM events WHERE payload->>'tag' = 'v3'`).Scan(&empty); err != nil {
+		t.Fatal(err)
+	}
+	// 004-AC4
+	if empty != `""[]` {
+		t.Fatalf("v3 without notes: %s", empty)
+	}
+	var stateBytes int
+	if err := e.pool.QueryRow(context.Background(), `SELECT max(length(state::text)) FROM watch_states WHERE watch_id = $1`, id).Scan(&stateBytes); err != nil {
+		t.Fatal(err)
+	}
+	if stateBytes > 1000 {
+		t.Fatalf("a state of %d bytes: it holds the notes", stateBytes)
+	}
+	states, events := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id), e.count(t, `SELECT count(*) FROM events WHERE watch_id = $1`, id)
+
+	set("[" + release("v2", `"edited, CVE-2026-2"`) + "," + release("v3", `"added later"`) + "," + release("v1", `"edited too"`) + "]")
+	run(2)
+	if s, n := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id), e.count(t, `SELECT count(*) FROM events WHERE watch_id = $1`, id); s != states || n != events {
+		t.Fatalf("an edit of the notes: %d states, %d events; want %d, %d", s, n, states, events)
+	}
+}
+
 // Credentials are opened for the run; a ciphertext that does not open is a run error, not a crash.
 func TestCredential(t *testing.T) {
 	e := newEnv(t)

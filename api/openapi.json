@@ -281,6 +281,11 @@
       "CostRef": {
         "additionalProperties": false,
         "properties": {
+          "body_bytes": {
+            "description": "Bytes assumed for event.payload.body, or for a payload key computed at run time",
+            "format": "int64",
+            "type": "integer"
+          },
           "budget": {
             "description": "Most units one filter may cost",
             "format": "int64",
@@ -335,6 +340,7 @@
           "date",
           "deep_value",
           "field_bytes",
+          "body_bytes",
           "item_bytes",
           "predicate_items"
         ],
@@ -923,7 +929,7 @@
           },
           "payload": {
             "additionalProperties": {},
-            "description": "Per-type details: tag, from/to, url...",
+            "description": "Per-type details: tag, from/to, url, cves... The release notes (body) only come with the inbox list and to channels",
             "type": "object"
           },
           "type": {
@@ -1074,6 +1080,11 @@
             "format": "int64",
             "type": "integer"
           },
+          "max_body": {
+            "description": "Bytes a filter sees of event.payload.body",
+            "format": "int64",
+            "type": "integer"
+          },
           "max_items": {
             "description": "Entries of one payload array or map a filter sees",
             "format": "int64",
@@ -1130,6 +1141,7 @@
           "max_array",
           "predicate_depth",
           "max_string",
+          "max_body",
           "max_items"
         ],
         "type": "object"

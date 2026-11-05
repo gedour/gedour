@@ -514,9 +514,18 @@ function InboxRow({
 
 function payloadRows(payload: Record<string, unknown>): [string, string][] {
   return Object.entries(payload)
-    .filter(([k]) => k !== "url")
-    .map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]);
+    .filter(([k, v]) => k !== "url" && k !== "body" && !(k === "cves" && isEmptyList(v)))
+    .map(([k, v]) => [
+      k,
+      k === "cves" && Array.isArray(v)
+        ? v.join(", ")
+        : typeof v === "string"
+          ? v
+          : JSON.stringify(v),
+    ]);
 }
+
+const isEmptyList = (v: unknown) => Array.isArray(v) && v.length === 0;
 
 function InboxPanel({
   item,
@@ -581,6 +590,7 @@ function DetailBody({
 }) {
   const s = summarizeEvent(item.event);
   const rows = payloadRows(item.event.payload);
+  const notes = item.event.payload.body;
   return (
     <div className="flex flex-col gap-4">
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
@@ -619,6 +629,12 @@ function DetailBody({
             ))}
           </dl>
         </section>
+      )}
+      {typeof notes === "string" && notes !== "" && (
+        <details className="rounded-lg bg-bg p-3 text-xs">
+          <summary className="cursor-pointer text-muted">Release notes</summary>
+          <pre className="mt-2 font-mono break-words whitespace-pre-wrap">{notes}</pre>
+        </details>
       )}
       <div className="flex flex-wrap gap-2">
         {s.url && (

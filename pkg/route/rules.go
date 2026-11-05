@@ -453,6 +453,8 @@ func (s *Service) previewRule(ctx context.Context, in *previewInput) (*previewOu
 		if err != nil {
 			it.Error = err.Error()
 		}
+		// Evaluated on the whole notes, returned without them: 20 events of 64 KiB for a list that never shows them.
+		delete(it.Event.Payload, "body")
 	}
 	out := &previewOutput{}
 	out.Body.Items = items
@@ -469,8 +471,17 @@ func envOf(e watch.Event, w WatchRef) filter.Env {
 	if e.OccurredAt != nil {
 		at = *e.OccurredAt
 	}
+	// Sanitize returns a copy: these defaults reach no stored or delivered payload. Only releases carry the two
+	// fields, and len(nil) or lower(nil) would fail a rule on all watches at every other event.
+	payload := filter.Sanitize(e.Payload)
+	if payload["cves"] == nil {
+		payload["cves"] = []any{}
+	}
+	if payload["body"] == nil {
+		payload["body"] = ""
+	}
 	return filter.Env{
-		Event: filter.Event{Type: e.Type, Payload: filter.Sanitize(e.Payload), OccurredAt: at},
+		Event: filter.Event{Type: e.Type, Payload: payload, OccurredAt: at},
 		Watch: filter.Watch{ID: w.ID, Name: w.Name, Kind: w.Kind},
 	}
 }

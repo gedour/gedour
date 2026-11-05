@@ -286,7 +286,7 @@ func TestSanitizeDeterministic(t *testing.T) {
 	}
 }
 
-// Every string a filter reads, matches included, is at most MaxString bytes.
+// Every string a filter reads, matches included, is at most MaxString bytes, or MaxBody for body.
 func TestSanitizedStringsBounded(t *testing.T) {
 	var walk func(v any)
 	walk = func(v any) {
@@ -305,5 +305,10 @@ func TestSanitizedStringsBounded(t *testing.T) {
 			}
 		}
 	}
-	walk(maxPayload())
+	p := maxPayload()
+	if n := len(p["body"].(string)); n != MaxBody {
+		t.Fatalf("body cut to %d bytes", n)
+	}
+	delete(p, "body")
+	walk(p)
 }

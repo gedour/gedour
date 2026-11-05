@@ -46,8 +46,8 @@ jobs:
           go-version-file: go.mod
       # testcontainers starts postgres:18-alpine on the runner's Docker; coverage gate fails below 80 %.
       - run: make go-coverage
-      # The race detector slows evaluation, so the strict filter cost bounds only hold without it.
-      - run: go test -count=1 -run 'TestWorstCaseTiming|TestRuleSetBound' ./pkg/filter
+      # The race detector slows evaluation and allocates more, so the strict bounds only hold without it.
+      - run: go test -count=1 -run 'TestWorstCaseTiming|TestRuleSetBound|TestCostModelProperty|TestParseNotesAllocations' ./pkg/filter ./pkg/collect
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

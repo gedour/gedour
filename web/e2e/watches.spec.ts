@@ -1,4 +1,4 @@
-import type { Browser, Page } from "@playwright/test";
+import type { Browser, Page, Response } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
 import { ALICE, api, expect, test, UPSTREAM, watchCsp } from "./fixtures";
@@ -195,13 +195,19 @@ test("sharing with bob, read-only then read-write", async ({ page, browser, base
 test("credentials never return their secret", async ({ page }) => {
   const t = tag();
   const secret = `ghp_e2e${t}SECRETvalue`;
-  const bodies: Promise<string>[] = [];
+  const bodies: Promise<string | null>[] = [];
+  // A read still open when page.goto navigates away may never settle: that body is lost, not a hang.
+  const read = (res: Response) => {
+    let timer: NodeJS.Timeout | undefined;
+    const lost = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), 5_000);
+    });
+    return Promise.race([res.text().catch(() => null), lost]).finally(() => clearTimeout(timer));
+  };
   page.on("response", (res) => {
     const path = new URL(res.url()).pathname;
     // The inbox stream never ends: its body would never resolve.
-    if (path.startsWith("/api/") && path !== "/api/v1/inbox/stream") {
-      bodies.push(res.text().catch(() => ""));
-    }
+    if (path.startsWith("/api/") && path !== "/api/v1/inbox/stream") bodies.push(read(res));
   });
   await page.goto("/settings/credentials");
   await page.getByRole("button", { name: "Add credential" }).click();
@@ -235,7 +241,7 @@ test("credentials never return their secret", async ({ page }) => {
   expect(await page.content()).not.toContain(secret);
   bodies.push(page.request.get("/api/v1/credentials").then((r) => r.text()));
   bodies.push(page.request.get("/api/v1/audit?target_type=credential").then((r) => r.text()));
-  const all = await Promise.all(bodies);
+  const all = (await Promise.all(bodies)).filter((b) => b !== null);
   expect(all.length).toBeGreaterThan(3);
   for (const b of all) expect(b).not.toContain(secret);
 });

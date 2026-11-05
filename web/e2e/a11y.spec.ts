@@ -97,6 +97,10 @@ for (const theme of ["light", "dark"] as const) {
         .click();
       await expect(page.getByRole("button", { name: "Close details" })).toBeVisible();
       expect(await violations(page)).toEqual([]);
+      // 004-AC7: the release notes, open.
+      await page.getByText("Release notes").first().click();
+      await expect(page.locator("details[open] pre").first()).toBeVisible();
+      expect(await violations(page)).toEqual([]);
 
       await page.goto("/channels");
       await page.getByRole("button", { name: "New channel" }).first().click();

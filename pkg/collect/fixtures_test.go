@@ -166,6 +166,9 @@ func TestGitLabReleaseFixtures(t *testing.T) {
 	}
 	check(t, summary(t, diffReleases(a, b)), []string{
 		`release.published v19.3.5 {"name":"v19.3.5","prerelease":false,"tag":"v19.3.5","url":"https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.5"}`,
+		`release.published v19.3.6 {"name":"v19.3.6","prerelease":false,"tag":"v19.3.6","url":"https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.6"}`,
+		`release.published v19.3.7 {"name":"v19.3.7","prerelease":false,"tag":"v19.3.7","url":"https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.7"}`,
+		`release.published v19.3.8 {"name":"v19.3.8","prerelease":false,"tag":"v19.3.8","url":"https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.8"}`,
 		`release.published v19.4.0 {"name":"v19.4.0","prerelease":true,"tag":"v19.4.0","url":"https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.4.0"}`,
 	})
 	if _, err := normalizeGitLabReleases([]byte(`{}`)); err == nil {

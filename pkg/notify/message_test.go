@@ -62,3 +62,21 @@ func TestTelegramText(t *testing.T) {
 		t.Fatalf("long text: %d bytes", len(long))
 	}
 }
+
+// 004-AC8: the notes and ids change no chat or mail message.
+func TestFormatIgnoresNotes(t *testing.T) {
+	base := map[string]any{"tag": "v1", "name": "One", "prerelease": false, "url": "https://x/v1"}
+	with := map[string]any{"body": strings.Repeat("secret notes\n", 5000), "cves": []any{"CVE-2026-1"}}
+	for k, v := range base {
+		with[k] = v
+	}
+	for _, typ := range []string{"release.published", "release.promoted"} {
+		got, want := Format(ev(typ, with)), Format(ev(typ, base))
+		if got != want {
+			t.Fatalf("%s: %+v, want %+v", typ, got, want)
+		}
+		if strings.Contains(got.Title+got.Summary+got.Detail+got.URL, "CVE") || strings.Contains(got.Title+got.Summary+got.Detail, "secret") {
+			t.Fatalf("%s: message shows the notes: %+v", typ, got)
+		}
+	}
+}

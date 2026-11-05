@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,55 @@ type Release struct {
 // ReleaseState is the normalized state of a release watch, newest first.
 type ReleaseState struct {
 	Releases []Release `json:"releases"`
+	// Notes by tag: out of the JSON, so an edit of the notes alone changes neither the stored state nor its hash.
+	Notes map[string]string `json:"-"`
+}
+
+const (
+	// MaxNotes caps payload.body of a release event.
+	MaxNotes = 64 << 10
+	maxCVEs  = 200
+	// maxCVELen drops longer matches: no real id is that long, and it would escape every size bound.
+	maxCVELen = 32
+)
+
+var cveID = regexp.MustCompile(`(?i)\bCVE-[0-9]{4}-[0-9]+\b`)
+
+// parseNotes turns raw release notes into payload.body and payload.cves; the ids come from the whole
+// notes, before the cut. cves is never nil, so a filter always sees a list.
+func parseNotes(notes string) (body string, cves []string) {
+	// jsonb refuses NUL, and the notes do not go through the state's StripNUL.
+	notes = strings.ReplaceAll(notes, "\x00", "")
+	cves = []string{}
+	seen := map[string]bool{}
+	for rest := notes; len(cves) < maxCVEs; {
+		loc := cveID.FindStringIndex(rest)
+		if loc == nil {
+			break
+		}
+		m := rest[loc[0]:loc[1]]
+		// A match ends on a word boundary, so the text left starts outside a word: \b still reads right there.
+		rest = rest[loc[1]:]
+		if id := strings.ToUpper(m); len(m) <= maxCVELen && !seen[id] {
+			seen[id] = true
+			cves = append(cves, id)
+		}
+	}
+	if len(notes) > MaxNotes {
+		notes = strings.ToValidUTF8(notes[:MaxNotes], "")
+	}
+	return notes, cves
+}
+
+// WithNotes adds body and cves to the events of a release watch: Diff reads stored states, which hold no
+// notes. A nil map means another kind of watch.
+func WithNotes(events []Event, notes map[string]string) {
+	if notes == nil {
+		return
+	}
+	for _, e := range events {
+		e.Payload["body"], e.Payload["cves"] = parseNotes(notes[e.Subject])
+	}
 }
 
 func githubHeaders(cred *Credential) http.Header {
@@ -42,7 +92,9 @@ func collectGitHubReleases(ctx context.Context, f *Fetcher, cfg watch.GitHubRele
 	if err != nil {
 		return ReleaseState{}, err
 	}
-	return normalizeGitHubReleases(r.body, cfg.IncludePrereleases)
+	s, err := normalizeGitHubReleases(r.body, cfg.IncludePrereleases)
+	f.Notes = s.Notes
+	return s, err
 }
 
 func normalizeGitHubReleases(body []byte, includePrereleases bool) (ReleaseState, error) {
@@ -53,17 +105,19 @@ func normalizeGitHubReleases(body []byte, includePrereleases bool) (ReleaseState
 		Draft       bool       `json:"draft"`
 		PublishedAt *time.Time `json:"published_at"`
 		HTMLURL     string     `json:"html_url"`
+		Body        string     `json:"body"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return ReleaseState{}, fmt.Errorf("decode releases: %w", err)
 	}
-	var s ReleaseState
+	s := ReleaseState{Notes: map[string]string{}}
 	for _, r := range raw {
 		if r.TagName == "" || (r.Prerelease && !includePrereleases) {
 			continue
 		}
 		s.Releases = append(s.Releases, Release{Tag: r.TagName, Name: r.Name, Prerelease: r.Prerelease, Draft: r.Draft,
 			PublishedAt: r.PublishedAt, URL: r.HTMLURL})
+		s.Notes[r.TagName] = r.Body
 	}
 	sortReleases(s.Releases)
 	return s, nil

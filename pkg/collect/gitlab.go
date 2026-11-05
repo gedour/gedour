@@ -28,7 +28,9 @@ func collectGitLabReleases(ctx context.Context, f *Fetcher, cfg watch.GitLabRele
 	if err != nil {
 		return ReleaseState{}, err
 	}
-	return normalizeGitLabReleases(r.body)
+	s, err := normalizeGitLabReleases(r.body)
+	f.Notes = s.Notes
+	return s, err
 }
 
 func normalizeGitLabReleases(body []byte) (ReleaseState, error) {
@@ -37,6 +39,7 @@ func normalizeGitLabReleases(body []byte) (ReleaseState, error) {
 		Name            string     `json:"name"`
 		ReleasedAt      *time.Time `json:"released_at"`
 		UpcomingRelease bool       `json:"upcoming_release"`
+		Description     string     `json:"description"`
 		Links           struct {
 			Self string `json:"self"`
 		} `json:"_links"`
@@ -44,7 +47,7 @@ func normalizeGitLabReleases(body []byte) (ReleaseState, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return ReleaseState{}, fmt.Errorf("decode releases: %w", err)
 	}
-	var s ReleaseState
+	s := ReleaseState{Notes: map[string]string{}}
 	for _, r := range raw {
 		if r.TagName == "" {
 			continue
@@ -52,6 +55,7 @@ func normalizeGitLabReleases(body []byte) (ReleaseState, error) {
 		// An upcoming release (released_at in the future) is GitLab's closest thing to a prerelease.
 		s.Releases = append(s.Releases, Release{Tag: r.TagName, Name: r.Name, Prerelease: r.UpcomingRelease,
 			PublishedAt: r.ReleasedAt, URL: r.Links.Self})
+		s.Notes[r.TagName] = r.Description
 	}
 	sortReleases(s.Releases)
 	return s, nil

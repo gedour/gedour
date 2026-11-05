@@ -39,6 +39,7 @@ func NewRouter(pool *pgxpool.Pool, log *zap.Logger, m *Metrics, poll time.Durati
 
 // Run routes until ctx ends. An interrupted batch rolls back: its events stay unrouted for the next run.
 func (r *Router) Run(ctx context.Context) {
+	r.logRefusedRules(ctx)
 	tick := time.NewTicker(r.poll)
 	defer tick.Stop()
 	for ctx.Err() == nil {
@@ -54,6 +55,34 @@ func (r *Router) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 		case <-tick.C:
+		}
+	}
+}
+
+// logRefusedRules names the enabled rules that no longer compile, say after the cost model changed: each one
+// counts as no match on every event, which an owner would not notice otherwise.
+func (r *Router) logRefusedRules(ctx context.Context) {
+	rows, err := r.pool.Query(ctx, `SELECT id::text, owner_id::text, filter FROM rules WHERE enabled`)
+	if err != nil {
+		if ctx.Err() == nil {
+			r.log.Error("rule_check_failed", zap.Error(err))
+		}
+		return
+	}
+	rules, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (matchRule, error) {
+		var m matchRule
+		err := row.Scan(&m.id, &m.owner, &m.filter)
+		return m, err
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			r.log.Error("rule_check_failed", zap.Error(err))
+		}
+		return
+	}
+	for _, rule := range rules {
+		if _, err := filter.Compile(rule.filter); err != nil {
+			r.log.Error("rule_filter_refused", zap.String("rule_id", rule.id), zap.String("owner_id", rule.owner), zap.Error(err))
 		}
 	}
 }

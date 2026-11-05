@@ -1,6 +1,6 @@
 # 004 — Release notes and CVE ids in events
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-05
 
@@ -48,27 +48,27 @@ found in the whole notes in `payload.cves`. A rule can then read
 
 ## Acceptance criteria
 
-- [ ] **AC1** A new GitHub or GitLab release whose notes cite CVEs produces an event with `payload.body`
+- [x] **AC1** A new GitHub or GitLab release whose notes cite CVEs produces an event with `payload.body`
   and `payload.cves` set, the ids uppercased, deduplicated and in order.
-- [ ] **AC2** Notes over 64 KiB are cut to at most 64 KiB of valid UTF-8, and a CVE id past the cut is still
+- [x] **AC2** Notes over 64 KiB are cut to at most 64 KiB of valid UTF-8, and a CVE id past the cut is still
   in `payload.cves`.
-- [ ] **AC3** More than 200 distinct ids keep the first 200; `XCVE-2026-1` and `CVE-2026-1x` are not ids.
-- [ ] **AC4** A release without notes has `body: ""` and `cves: []`; a filter on either evaluates without
+- [x] **AC3** More than 200 distinct ids keep the first 200; `XCVE-2026-1` and `CVE-2026-1x` are not ids.
+- [x] **AC4** A release without notes has `body: ""` and `cves: []`; a filter on either evaluates without
   error. Any other event reads them the same way in filters, without them being stored.
-- [ ] **AC5** The filter `"CVE-2026-1234" in event.payload.cves` and the filter
+- [x] **AC5** The filter `"CVE-2026-1234" in event.payload.cves` and the filter
   `event.payload.body matches "CVE-[0-9]{4}-[0-9]+"` are accepted by the rule API and route a matching event.
-- [ ] **AC6** Notes are not stored in `watch_states`: the persisted state of a watch does not grow with
+- [x] **AC6** Notes are not stored in `watch_states`: the persisted state of a watch does not grow with
   them, and an edit of a release's notes alone creates no event.
-- [ ] **AC7** The inbox panel shows `cves` and stays readable with 64 KiB of notes, at 375 px too; the a11y and
+- [x] **AC7** The inbox panel shows `cves` and stays readable with 64 KiB of notes, at 375 px too; the a11y and
   CSP checks pass.
-- [ ] **AC8** Telegram, email and Talk messages do not change; webhook payloads and script events carry both
+- [x] **AC8** Telegram, email and Talk messages do not change; webhook payloads and script events carry both
   fields.
-- [ ] **AC9** A filter reads `event.payload.body` to its 64 KiB cut (a match at 60 KiB routes), and a filter on
+- [x] **AC9** A filter reads `event.payload.body` to its 64 KiB cut (a match at 60 KiB routes), and a filter on
   any other field is priced at 4 KiB as before.
-- [ ] **AC10** The budget is 4,000,000 units: a 60-instruction pattern on `body` is accepted, a filter above the
+- [x] **AC10** The budget is 4,000,000 units: a 60-instruction pattern on `body` is accepted, a filter above the
   budget is refused on save with its computed cost. On hostile payloads a filter takes about 45 ms and 100 rules
   about 4.5 s (measured); the timing tests gate at 2.5 times that for slower runners.
-- [ ] **AC11** While a worst-case rule set evaluates an event, other due watches and deliveries still run on time
+- [x] **AC11** While a worst-case rule set evaluates an event, other due watches and deliveries still run on time
   (routing does not block them); if it does, the fix is part of this spec.
 
 ## Phases

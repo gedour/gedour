@@ -16,6 +16,18 @@ import (
 
 // Linux only: /proc, rlimits and F_SETPIPE_SZ.
 
+// 004-AC8: a script reads both fields of a 64 KiB release, across the process boundary.
+func TestScriptSeesNotes(t *testing.T) {
+	r := testRunner(t, Options{Metrics: NewMetrics(prometheus.NewRegistry())})
+	in := sampleInput()
+	in.Event.Payload["body"] = strings.Repeat("n", 64<<10)
+	in.Event.Payload["cves"] = []any{"CVE-2026-1"}
+	res := r.Run(t.Context(), `function main(e) { return e.payload.body.length + " " + e.payload.cves[0] }`, in)
+	if res.Outcome != OutcomeOK || res.Result != `"65536 CVE-2026-1"` {
+		t.Fatalf("%+v", res)
+	}
+}
+
 // 001-AC17: through the real subprocess: an empty environment, cwd /, and a result.
 func TestSandboxProcess(t *testing.T) {
 	reg := prometheus.NewRegistry()

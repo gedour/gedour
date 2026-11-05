@@ -149,11 +149,17 @@ func basicToken(c *Credential) string {
 	return strings.TrimPrefix(r.Header.Get("Authorization"), "Basic ")
 }
 
-var nextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="?next"?`)
+var (
+	nextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="?next"?`)
+	lastRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="?last"?`)
+)
 
 // nextLink resolves the Link rel="next" page; it must stay on the registry's host, which holds the token.
-func nextLink(current, link string) (string, error) {
-	m := nextRe.FindStringSubmatch(link)
+func nextLink(current, link string) (string, error) { return relLink(current, link, nextRe) }
+
+// relLink resolves the Link page rel matches; it must stay on the current host, which holds the credential.
+func relLink(current, link string, rel *regexp.Regexp) (string, error) {
+	m := rel.FindStringSubmatch(link)
 	if m == nil {
 		return "", nil
 	}
@@ -164,7 +170,7 @@ func nextLink(current, link string) (string, error) {
 	}
 	next := cur.ResolveReference(ref)
 	if next.Host != cur.Host || next.Scheme != cur.Scheme {
-		return "", fmt.Errorf("tag pagination left the registry (%s)", next.Host)
+		return "", fmt.Errorf("pagination left %s for %s", cur.Host, next.Host)
 	}
 	return next.String(), nil
 }

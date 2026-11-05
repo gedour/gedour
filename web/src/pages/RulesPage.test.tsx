@@ -241,9 +241,13 @@ describe("RuleFormPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
     expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({ priority: "high" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Rules" })).toBeInTheDocument();
 
     await router.navigate("/rules/r1");
-    const stored = await screen.findByRole("combobox", { name: "Priority" });
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Edit Releases" }),
+    ).toBeInTheDocument();
+    const stored = screen.getByRole("combobox", { name: "Priority" });
     expect(stored).toHaveValue("high");
     await userEvent.selectOptions(stored, "normal");
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));

@@ -358,6 +358,10 @@ export const getPurgePreview = (id: string) =>
   getJSON<PurgePreview>(`/api/v1/admin/users/${encodeURIComponent(id)}/purge-preview`);
 export const purgeUser = (id: string) =>
   sendJSON<undefined>("POST", `/api/v1/admin/users/${encodeURIComponent(id)}/purge`);
+/** Runs this session as another account until stopActing; every query must be refetched after either. */
+export const startActingAs = (id: string) =>
+  sendJSON<undefined>("POST", `/api/v1/admin/users/${encodeURIComponent(id)}/act-as`);
+export const stopActing = () => sendJSON<undefined>("DELETE", "/api/v1/admin/act-as");
 /** Disabling revokes the account's sessions at once; enabling lets it sign in again. */
 export const setUserDisabled = (id: string, disabled: boolean) =>
   sendJSON<undefined>(

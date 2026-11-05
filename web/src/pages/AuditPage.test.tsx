@@ -18,6 +18,8 @@ const entry = (id: number, over: Partial<AuditItem> = {}): AuditItem => ({
   before: null,
   after: { session: "abcd" },
   request_id: "req-1",
+  on_behalf_of: null,
+  on_behalf_of_name: "",
   ...over,
 });
 
@@ -43,6 +45,24 @@ describe("AuditPage", () => {
     expect(rows[2]).toHaveTextContent("System");
     expect(rows[2]).toHaveTextContent("short");
     expect(within(table).getAllByRole("time")[0]).toHaveAttribute("datetime", first.at);
+  });
+
+  // 006-AC16: an entry made while acting names the admin, then the user it was made for.
+  it("shows who acted for whom", async () => {
+    mockApi({
+      "/api/v1/audit": {
+        items: [
+          entry(1, { action: "rule.created", on_behalf_of: "u2", on_behalf_of_name: "Bob" }),
+          entry(2, { action: "rule.updated", on_behalf_of: "u3", on_behalf_of_name: "" }),
+        ],
+      },
+    });
+    renderApp("/audit");
+    const table = await screen.findByRole("table", { name: "Audit entries, newest first" });
+    await within(table).findByText("for Bob", { exact: false });
+    const rows = within(table).getAllByRole("row");
+    expect(rows[1]).toHaveTextContent(/Alice for Bobrule\.created/);
+    expect(rows[2]).toHaveTextContent("Alice for a purged account");
   });
 
   it("shows skeleton rows while loading", () => {

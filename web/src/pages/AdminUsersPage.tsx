@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useId, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 
 import {
   ApiError,
@@ -8,6 +9,7 @@ import {
   listUserWatches,
   purgeUser,
   setUserDisabled,
+  startActingAs,
   transferWatch,
 } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
@@ -53,7 +55,7 @@ const STATUS: Record<AdminUserStatus, { label: string; className: string }> = {
 const accountName = (u: AdminUser) => u.display_name || u.email || "Purged account";
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-type Action = "toggle" | "purge";
+type Action = "toggle" | "purge" | "act-as";
 
 /**
  * The id a dialog shows now. Dialogs stay mounted, so a mutation settling after Cancel acts on the
@@ -70,7 +72,8 @@ function useOpenId(id: string | null) {
 export function AdminUsersPage({ item }: { item: NavItem }) {
   // Rendered inside the shell, which only shows once the session is known.
   const me = useMe().data as Me;
-  const isAdmin = me.is_admin;
+  // 006-AC15: the admin API answers 409 while acting, so it is not called.
+  const isAdmin = me.is_admin && !me.acting_as;
   const query = useQuery({
     queryKey: ["admin", "users"],
     queryFn: listAdminUsers,
@@ -79,6 +82,21 @@ export function AdminUsersPage({ item }: { item: NavItem }) {
   const [target, setTarget] = useState<{ user: AdminUser; action: Action } | null>(null);
   const [transfer, setTransfer] = useState<{ watch: AdminWatch; owner: AdminUser } | null>(null);
   const users = query.data ?? [];
+  const client = useQueryClient();
+  const toast = useToast();
+  const navigate = useNavigate();
+  const actAs = useMutation({
+    mutationFn: (u: AdminUser) => startActingAs(u.id),
+    onSuccess: () => {
+      // Every cached query holds the admin's own data; the admin pages answer 409 from now on.
+      void client.invalidateQueries();
+      void navigate("/inbox");
+    },
+    onError: (err, u) => {
+      void client.invalidateQueries({ queryKey: ["admin", "users"] });
+      toast(`${accountName(u)}: ${problemText(err)}`, "error");
+    },
+  });
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-8 md:px-10 md:py-12">
       <title>{`${item.label} – gedour`}</title>
@@ -89,7 +107,12 @@ export function AdminUsersPage({ item }: { item: NavItem }) {
           rules; its data and watches stay. Purging a disabled one deletes its data for good.
         </p>
       </div>
-      {!isAdmin ? (
+      {me.acting_as ? (
+        <EmptyState
+          title="Stop acting first"
+          body="Administration is closed while you act as another user: use Stop in the banner."
+        />
+      ) : !isAdmin ? (
         <EmptyState
           title="Administrators only"
           body="This page needs the admin role. Ask an administrator if you need something changed."
@@ -107,7 +130,10 @@ export function AdminUsersPage({ item }: { item: NavItem }) {
           items={users}
           loading={query.isPending}
           self={me.id}
-          onAction={(user, action) => setTarget({ user, action })}
+          onAction={(user, action) =>
+            action === "act-as" ? actAs.mutate(user) : setTarget({ user, action })
+          }
+          actingPending={actAs.isPending}
           onTransfer={(watch, owner) => setTransfer({ watch, owner })}
         />
       )}
@@ -129,12 +155,14 @@ function UserTable({
   loading,
   self,
   onAction,
+  actingPending,
   onTransfer,
 }: {
   items: AdminUser[];
   loading: boolean;
   self: string;
   onAction: (u: AdminUser, action: Action) => void;
+  actingPending: boolean;
   onTransfer: (w: AdminWatch, owner: AdminUser) => void;
 }) {
   return (
@@ -177,6 +205,7 @@ function UserTable({
                   user={u}
                   self={u.id === self}
                   onAction={(action) => onAction(u, action)}
+                  actingPending={actingPending}
                   onTransfer={(w) => onTransfer(w, u)}
                 />
               ))}
@@ -191,11 +220,13 @@ function UserRow({
   user: u,
   self,
   onAction,
+  actingPending,
   onTransfer,
 }: {
   user: AdminUser;
   self: boolean;
   onAction: (action: Action) => void;
+  actingPending: boolean;
   onTransfer: (w: AdminWatch) => void;
 }) {
   const s = STATUS[u.status];
@@ -266,6 +297,18 @@ function UserRow({
           </td>
         ))}
         <td className="px-4 py-2 text-right whitespace-nowrap">
+          {/* 006-AC17: the API refuses oneself and a purged account; a disabled one is allowed. */}
+          {!self && u.status !== "purged" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Act as ${name}`}
+              disabled={actingPending}
+              onClick={() => onAction("act-as")}
+            >
+              Act as
+            </Button>
+          )}
           {action && (
             <Button
               variant="ghost"

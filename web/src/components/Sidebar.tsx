@@ -35,7 +35,9 @@ export function Sidebar({
 }: SidebarProps) {
   const iconOnly = collapsed && !mobile;
   const unread = useInboxCount().data ?? 0;
-  const isAdmin = (useMe().data as Me).is_admin;
+  const me = useMe().data as Me;
+  // 006-AC15: admin pages answer 409 while acting as someone, so they are not offered.
+  const isAdmin = me.is_admin && !me.acting_as;
   const drag = useRef<{ x: number; width: number } | null>(null);
   const [dragging, setDragging] = useState(false);
 

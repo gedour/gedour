@@ -17,6 +17,8 @@ export interface Me {
   csrf_token: string;
   dev_mode: boolean;
   is_admin: boolean;
+  /** The admin who signed in, while the session acts as the user above (006-AC15); null otherwise. */
+  acting_as: { id: string; email: string; display_name: string } | null;
 }
 
 // audit.Item (GET /api/v1/audit)
@@ -31,6 +33,9 @@ export interface AuditItem {
   before: unknown;
   after: unknown;
   request_id: string;
+  /** User the actor was acting as (006-AC16). */
+  on_behalf_of: string | null;
+  on_behalf_of_name: string;
 }
 
 export interface AuditPage {

@@ -3,7 +3,7 @@ import { act, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { COUNT_KEY, LIST_KEY, useInboxStream } from "@/hooks/useInbox";
-import { mockApi } from "@/test/api";
+import { ME, mockApi } from "@/test/api";
 
 function Probe() {
   useInboxStream();
@@ -15,6 +15,8 @@ describe("useInboxStream", () => {
   it("refetches the list when the count changes, whatever set it", async () => {
     mockApi({ "/api/v1/inbox/count": { unread: 1 } });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // The shell holds the stream only once the session is known.
+    client.setQueryData(["me"], ME);
     const spy = vi.spyOn(client, "invalidateQueries");
     render(
       <QueryClientProvider client={client}>

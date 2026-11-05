@@ -26,6 +26,7 @@ type PurgeCounts struct {
 	SharesReceived int `json:"shares_received" doc:"Watches of other users shared with the account"`
 	InboxItems     int `json:"inbox_items"`
 	Sessions       int `json:"sessions"`
+	ActingSessions int `json:"acting_sessions" doc:"Admin sessions acting as the account, sent back to their admin's own data"`
 }
 
 // SharedWatch is an owned watch other users lose with the purge.
@@ -79,6 +80,7 @@ const purgePreviewSQL = `SELECT
 		(SELECT count(*) FROM watch_shares WHERE user_id = u.id),
 		(SELECT count(*) FROM inbox_items WHERE user_id = u.id),
 		(SELECT count(*) FROM sessions WHERE user_id = u.id),
+		(SELECT count(*) FROM sessions WHERE acting_as = u.id),
 		(SELECT coalesce(json_agg(json_build_object('id', s.id, 'name', s.name, 'shared_with', s.users) ORDER BY lower(s.name), s.id), '[]')
 			FROM (SELECT w.id, w.name, array_agg(` + userLabelSQL + ` ORDER BY lower(` + userLabelSQL + `)) AS users
 				FROM watches w JOIN watch_shares ws ON ws.watch_id = w.id JOIN users o ON o.id = ws.user_id
@@ -97,7 +99,7 @@ func (s *Service) purgePreview(ctx context.Context, in *userIDPath) (*purgePrevi
 	b := &out.Body
 	c := &b.Counts
 	err := s.pool.QueryRow(ctx, purgePreviewSQL, in.ID).Scan(&c.Watches, &c.Channels, &c.Rules, &c.OtherUsersRules, &c.Scripts,
-		&c.Credentials, &c.SharesReceived, &c.InboxItems, &c.Sessions, &b.SharedWatches, &b.OtherRules)
+		&c.Credentials, &c.SharesReceived, &c.InboxItems, &c.Sessions, &c.ActingSessions, &b.SharedWatches, &b.OtherRules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, huma.Error404NotFound("no such account")
 	}
@@ -128,6 +130,9 @@ var purgeSteps = []struct {
 	{`WITH d AS (DELETE FROM inbox_items WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.InboxItems }},
 	{`WITH d AS (DELETE FROM watch_shares WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.SharesReceived }},
 	{`WITH d AS (DELETE FROM sessions WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Sessions }},
+	// The row stays, so ON DELETE SET NULL never fires: other admins' sessions acting as it end here.
+	{`WITH d AS (UPDATE sessions SET acting_as = NULL WHERE acting_as = $1 RETURNING 1) SELECT count(*) FROM d`,
+		func(c *PurgeCounts) *int { return &c.ActingSessions }},
 	// Cascades to other users' rules on them, events (and their inbox items and deliveries), shares, states, cache.
 	{`WITH d AS (DELETE FROM watches WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Watches }},
 	{`WITH d AS (DELETE FROM credentials WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Credentials }},
@@ -144,7 +149,9 @@ func (s *Service) purgeUser(ctx context.Context, in *userIDPath) (*struct{}, err
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var status string
-		err := tx.QueryRow(ctx, `SELECT `+statusSQL+` FROM users u WHERE u.id = $1 FOR UPDATE`, in.ID).Scan(&status)
+		// NO KEY UPDATE: sign-in, act-as start, shares and transfers still wait, FK checks (audit rows of a
+		// stop or of a change made acting as the account, holding rows this purge needs) do not.
+		err := tx.QueryRow(ctx, `SELECT `+statusSQL+` FROM users u WHERE u.id = $1 FOR NO KEY UPDATE`, in.ID).Scan(&status)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return huma.Error404NotFound("no such account")
 		}

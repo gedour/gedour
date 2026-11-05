@@ -60,6 +60,27 @@
         ],
         "type": "object"
       },
+      "Admin": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name"
+        ],
+        "type": "object"
+      },
       "AdminUser": {
         "additionalProperties": false,
         "properties": {
@@ -1195,6 +1216,17 @@
             "format": "int64",
             "type": "integer"
           },
+          "on_behalf_of": {
+            "description": "User the actor was acting as; null otherwise",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_behalf_of_name": {
+            "description": "That user's display name, or email; empty when on_behalf_of is null",
+            "type": "string"
+          },
           "request_id": {
             "type": "string"
           },
@@ -1210,6 +1242,8 @@
           "at",
           "actor_user_id",
           "actor_name",
+          "on_behalf_of",
+          "on_behalf_of_name",
           "action",
           "target_type",
           "target_id",
@@ -1557,6 +1591,10 @@
       "MeOutputBody": {
         "additionalProperties": false,
         "properties": {
+          "acting_as": {
+            "$ref": "#/components/schemas/Admin",
+            "description": "The admin who signed in, while this session acts as the user above; null otherwise"
+          },
           "csrf_token": {
             "description": "Send back in the X-CSRF-Token header on every non-GET request",
             "type": "string"
@@ -1586,7 +1624,8 @@
           "display_name",
           "csrf_token",
           "dev_mode",
-          "is_admin"
+          "is_admin",
+          "acting_as"
         ],
         "type": "object"
       },
@@ -1675,6 +1714,11 @@
       "PurgeCounts": {
         "additionalProperties": false,
         "properties": {
+          "acting_sessions": {
+            "description": "Admin sessions acting as the account, sent back to their admin's own data",
+            "format": "int64",
+            "type": "integer"
+          },
           "channels": {
             "format": "int64",
             "type": "integer"
@@ -1723,7 +1767,8 @@
           "credential_count",
           "shares_received",
           "inbox_items",
-          "sessions"
+          "sessions",
+          "acting_sessions"
         ],
         "type": "object"
       },
@@ -2528,6 +2573,30 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/act-as": {
+      "delete": {
+        "operationId": "admin-act-as-stop",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Return this session to the admin's own account",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/users": {
       "get": {
         "operationId": "admin-list-users",
@@ -2554,6 +2623,41 @@
           }
         },
         "summary": "Every account with its last sign-in, status and what it owns (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/act-as": {
+      "post": {
+        "operationId": "admin-act-as-start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Run this session as another account until stopped; audited on both sides (admin only)",
         "tags": [
           "admin"
         ]

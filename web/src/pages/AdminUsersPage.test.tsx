@@ -1,13 +1,16 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { focusManager } from "@tanstack/react-query";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ME, mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
+import { FakeEventSource } from "@/test/routing";
 import { lastCall, pending, problem } from "@/test/watches";
-import type { AdminUser, AdminWatch } from "@/types/api";
+import type { AdminUser, AdminWatch, Me } from "@/types/api";
 
-const ADMIN = { ...ME, is_admin: true };
+const ADMIN: Me = { ...ME, is_admin: true };
+const ALICE_ADMIN = { id: ME.id, email: ME.email, display_name: ME.display_name };
 
 function account(over: Partial<AdminUser> = {}): AdminUser {
   return {
@@ -107,7 +110,9 @@ describe("AdminUsersPage", () => {
     await within(table).findByText("Bob");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(5);
-    expect(rows[0]).toHaveTextContent(/^new@example\.testNeverActive3 \(1 shared\)2411Disable$/);
+    expect(rows[0]).toHaveTextContent(
+      /^new@example\.testNeverActive3 \(1 shared\)2411Act asDisable$/,
+    );
     expect(rows[1]).toHaveTextContent("Bobbob@example.test");
     expect(within(rows[1] as HTMLElement).getByRole("time")).toHaveAttribute(
       "datetime",
@@ -120,6 +125,133 @@ describe("AdminUsersPage", () => {
     expect(within(rows[3] as HTMLElement).queryByRole("button")).toBeNull();
     expect(rows[4]).toHaveTextContent("(you)");
     expect(within(rows[4] as HTMLElement).queryByRole("button", { name: /Disable/ })).toBeNull();
+  });
+
+  // 006-AC15, 006-AC17: "Act as" on another live account (a disabled one too) opens its inbox under a
+  // banner, without Administration; Stop brings the admin's own session back with everything refetched.
+  it("acts as a user and stops", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    let me: Me = ADMIN;
+    const bob = account();
+    const fn = mockApi({
+      "/api/v1/me": () => Response.json(me),
+      "/api/v1/admin/users": {
+        items: [
+          bob,
+          { ...DEE, status: "disabled" },
+          account({ id: "p", email: "", display_name: "", status: "purged" }),
+          ALICE,
+        ],
+      },
+      [`/api/v1/admin/users/${bob.id}/act-as`]: () => {
+        me = {
+          ...ADMIN,
+          id: bob.id,
+          email: bob.email,
+          display_name: "Bob",
+          acting_as: ALICE_ADMIN,
+        };
+        return new Response(null, { status: 204 });
+      },
+      "/api/v1/admin/act-as": () => {
+        me = ADMIN;
+        return new Response(null, { status: 204 });
+      },
+    });
+    const { router } = renderApp("/admin/users", ADMIN);
+    const table = await screen.findByRole("table", { name: "Accounts" });
+    await within(table).findByText("Bob");
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(
+      within(rows[1] as HTMLElement).getByRole("button", { name: "Act as Dee" }),
+    ).toBeEnabled();
+    expect(within(rows[2] as HTMLElement).queryByRole("button", { name: /Act as/ })).toBeNull();
+    expect(within(rows[3] as HTMLElement).queryByRole("button", { name: /Act as/ })).toBeNull();
+
+    await userEvent.click(within(table).getByRole("button", { name: "Act as Bob" }));
+    const banner = await screen.findByRole("region", { name: "Acting as another user" });
+    expect(banner).toHaveTextContent("Acting as Bob");
+    // The stream serves the user it opened for: it is reopened for bob.
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+    expect(FakeEventSource.instances[0]?.readyState).toBe(FakeEventSource.CLOSED);
+    expect(lastCall(fn, `/api/v1/admin/users/${bob.id}/act-as`, "POST")).toBeDefined();
+    expect(await screen.findByRole("heading", { level: 1, name: "Inbox" })).toBeInTheDocument();
+    await waitFor(() => expect(navLinks()).not.toContain("Administration"));
+
+    // Stop lands on the admin's inbox, not on a page of the user's.
+    await act(() => router.navigate("/rules"));
+    await screen.findByRole("heading", { level: 1, name: "Rules" });
+    await userEvent.click(within(banner).getByRole("button", { name: "Stop" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Acting as another user" })).toBeNull(),
+    );
+    expect(router.state.location.pathname).toBe("/inbox");
+    expect(lastCall(fn, "/api/v1/admin/act-as", "DELETE")).toBeDefined();
+    expect(navLinks()).toContain("Administration");
+    expect(FakeEventSource.instances).toHaveLength(3);
+  });
+
+  // 006-AC15: opened by URL while acting, the page says why and calls no admin API (it would answer 409).
+  it("stays closed while acting", async () => {
+    const acting: Me = { ...ADMIN, id: "b", display_name: "Bob", acting_as: ALICE_ADMIN };
+    const fn = mockApi({ "/api/v1/me": acting });
+    renderApp("/admin/users", acting);
+    expect(await screen.findByRole("region", { name: "Stop acting first" })).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/admin/users")).toBeUndefined();
+  });
+
+  // Another tab started acting on this session: focusing this one refetches /me and shows the banner.
+  it("learns of a switch made in another tab on focus", async () => {
+    mockApi({ "/api/v1/me": ADMIN });
+    renderApp("/inbox", ADMIN);
+    await screen.findByRole("heading", { level: 1, name: "Inbox" });
+    expect(screen.queryByRole("region", { name: "Acting as another user" })).toBeNull();
+    mockApi({ "/api/v1/me": { ...ADMIN, id: "b", display_name: "Bob", acting_as: ALICE_ADMIN } });
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    focusManager.setFocused(undefined);
+    expect(await screen.findByRole("region", { name: "Acting as another user" })).toHaveTextContent(
+      "Acting as Bob",
+    );
+  });
+
+  it("reports a refused act-as and stays on the page", async () => {
+    const bob = account();
+    mockApi({
+      "/api/v1/me": ADMIN,
+      "/api/v1/admin/users": { items: [bob, ALICE] },
+      [`/api/v1/admin/users/${bob.id}/act-as`]: () => problem(409, "the account is purged"),
+    });
+    renderApp("/admin/users", ADMIN);
+    await userEvent.click(await screen.findByRole("button", { name: "Act as Bob" }));
+    expect(await screen.findByText("Bob: the account is purged")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Administration" })).toBeInTheDocument();
+  });
+
+  // A 409 means the session is already back to the admin (another tab, a purge): same landing as a stop.
+  it("toasts a refused stop, refetches and leaves the user's page", async () => {
+    const acting: Me = {
+      ...ADMIN,
+      id: "b",
+      email: "b@x.test",
+      display_name: "",
+      acting_as: ALICE_ADMIN,
+    };
+    const fn = mockApi({
+      "/api/v1/me": acting,
+      "/api/v1/admin/act-as": () => problem(409, "this session is not acting as anyone"),
+    });
+    const { router } = renderApp("/rules", acting);
+    const banner = await screen.findByRole("region", { name: "Acting as another user" });
+    expect(banner).toHaveTextContent("Acting as b@x.test");
+    const before = fn.mock.calls.length;
+    await userEvent.click(within(banner).getByRole("button", { name: "Stop" }));
+    expect(await screen.findByText("this session is not acting as anyone")).toBeInTheDocument();
+    await waitFor(() => expect(fn.mock.calls.length).toBeGreaterThan(before + 1));
+    expect(router.state.location.pathname).toBe("/inbox");
   });
 
   // 006-AC7, 006-AC9: disable and enable go through a confirmation, then the list reloads.

@@ -2,6 +2,7 @@ import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 
+import { ActingBanner } from "@/components/ActingBanner";
 import { Sidebar } from "@/components/Sidebar";
 import { ToastProvider } from "@/components/Toaster";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -79,6 +80,7 @@ export function AppShell() {
           >
             Skip to content
           </a>
+          <ActingBanner />
           <header className="relative z-50 flex h-14 shrink-0 items-center gap-2 px-3">
             <Button
               variant="harbor"

@@ -36,6 +36,16 @@ func RequestID(ctx context.Context) string {
 	return id
 }
 
+type actingKey struct{}
+
+type acting struct{ admin, target string }
+
+// WithActing tags ctx as an admin acting as target: entries recorded under it name the admin as actor
+// and target as on_behalf_of, whatever ActorUserID says.
+func WithActing(ctx context.Context, admin, target string) context.Context {
+	return context.WithValue(ctx, actingKey{}, acting{admin, target})
+}
+
 // Record inserts e within tx; a failure must abort the caller's transaction so the mutation rolls back.
 // 001-AC21: same transaction as the mutation, secrets redacted.
 func Record(ctx context.Context, tx pgx.Tx, e Entry) error {
@@ -50,12 +60,16 @@ func Record(ctx context.Context, tx pgx.Tx, e Entry) error {
 	if e.RequestID == "" {
 		e.RequestID = RequestID(ctx)
 	}
-	var actor *string
+	var actor, onBehalfOf *string
 	if e.ActorUserID != "" {
 		actor = &e.ActorUserID
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, before, after, request_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`, actor, e.Action, e.TargetType, e.TargetID, before, after, e.RequestID)
+	// 006-AC16: one place for every handler, so none can forget the admin behind the effective user.
+	if a, ok := ctx.Value(actingKey{}).(acting); ok {
+		actor, onBehalfOf = &a.admin, &a.target
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, before, after, request_id, on_behalf_of)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, actor, e.Action, e.TargetType, e.TargetID, before, after, e.RequestID, onBehalfOf)
 	if err != nil {
 		return fmt.Errorf("audit insert %s: %w", e.Action, err)
 	}

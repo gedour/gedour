@@ -145,6 +145,19 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   append-only and untouched: entries written before the purge (such as the account's creation) keep
   what they recorded. Audited as `user.purge` with the deleted counts, never the email or name.
 
+#### Acting as a user
+
+- "Act as" on an account row (not your own, not a purged one; a disabled one is fine, to fix it before
+  enabling it): your session runs as that user. Every page shows their data, inbox included, under a
+  banner with "Stop". Stop returns the session to your own data. Signing out ends your session.
+- While acting, the Administration pages are hidden and every admin API call answers 409, except
+  `DELETE /api/v1/admin/act-as` (stop).
+- Audit: every change made while acting records you as actor and the user as `on_behalf_of`. The user
+  sees those entries in their audit view as "<you> for <them>", plus the start and the stop
+  (`session.act_as_start`, `session.act_as_stop`); you see them in yours.
+- Purging an account sends every admin session acting as it back to its admin (`acting_sessions` in the
+  preview and the audit).
+
 ## Collection
 
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas

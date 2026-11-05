@@ -69,11 +69,20 @@ func (s *Service) registerTransfer(api huma.API, tags []string) {
 	}, s.transferWatch)
 }
 
-// adminActor is the signed-in admin's user id.
-func adminActor(ctx context.Context) (string, error) {
+// sessionOf is the session Guard put in ctx; handlers outside Guard (tests) get a 401.
+func sessionOf(ctx context.Context) (*session, error) {
 	sess, ok := ctx.Value(ctxKey{}).(*session)
 	if !ok {
-		return "", huma.Error401Unauthorized("not signed in")
+		return nil, huma.Error401Unauthorized("not signed in")
+	}
+	return sess, nil
+}
+
+// adminActor is the signed-in admin's user id.
+func adminActor(ctx context.Context) (string, error) {
+	sess, err := sessionOf(ctx)
+	if err != nil {
+		return "", err
 	}
 	return sess.ID, nil
 }

@@ -157,6 +157,80 @@ func TestPriorityMigration(t *testing.T) {
 	}
 }
 
+// 00011 and 00012 add on_behalf_of to an audit_log that already holds rows: ADD COLUMN fires none of its
+// append-only row triggers, the rows stay with a null on_behalf_of, and they still refuse an UPDATE.
+func TestActAsMigration(t *testing.T) {
+	ctx := context.Background()
+	pool, err := Connect(ctx, testpg.NewDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := fs.Sub(migrations, "migrations")
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = sqlDB.Close() }()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 10); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO audit_log (action, target_type) VALUES ('a', 't')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 11); err != nil {
+		t.Fatalf("up to 11: %v", err)
+	}
+	// A cut-short CONCURRENTLY build leaves an INVALID index of the name: a unique build on duplicates is one.
+	for _, sql := range []string{
+		`INSERT INTO users (oidc_sub) VALUES ('dup')`,
+		`INSERT INTO audit_log (action, target_type, on_behalf_of) SELECT 'a', 't', id FROM users, generate_series(1, 2)`,
+		`INSERT INTO sessions (id, user_id, csrf_token, expires_at, acting_as) SELECT decode(md5(g::text), 'hex'), id, 'c', now(), id FROM users, generate_series(1, 2) g`,
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	for _, sql := range []string{
+		`CREATE UNIQUE INDEX CONCURRENTLY audit_log_on_behalf_of_idx ON audit_log (on_behalf_of)`,
+		`CREATE UNIQUE INDEX CONCURRENTLY sessions_acting_as_idx ON sessions (acting_as)`,
+	} {
+		if _, err := pool.Exec(ctx, sql); err == nil {
+			t.Fatalf("%s: built, want a failed build", sql)
+		}
+	}
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE on_behalf_of IS NULL`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("existing audit rows: %d, %v", n, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE audit_log SET on_behalf_of = NULL`); err == nil {
+		t.Fatal("audit_log accepts an UPDATE after the migration")
+	}
+	if _, err := pool.Exec(ctx, `SELECT acting_as FROM sessions`); err != nil {
+		t.Fatalf("sessions.acting_as: %v", err)
+	}
+	// 00012 runs outside a transaction (CONCURRENTLY): it rebuilds the invalid leftovers, valid and not unique.
+	var valid int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+		WHERE c.relname IN ('audit_log_on_behalf_of_idx', 'sessions_acting_as_idx') AND i.indisvalid AND NOT i.indisunique`).Scan(&valid); err != nil || valid != 2 {
+		t.Fatalf("valid act-as indexes: %d, %v", valid, err)
+	}
+	var validated bool
+	if err := pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'audit_log_on_behalf_of_fkey'`).Scan(&validated); err != nil || !validated {
+		t.Fatalf("on_behalf_of FK validated: %v, %v", validated, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO audit_log (action, target_type, on_behalf_of) VALUES ('a', 't', gen_random_uuid())`); err == nil {
+		t.Fatal("on_behalf_of accepts an unknown user")
+	}
+}
+
 // slowFS holds a migration that is not idempotent and slow enough that unlocked migrators overlap.
 var slowFS = fstest.MapFS{
 	"00001_slow.sql": {Data: []byte("-- +goose Up\nCREATE TABLE lock_probe (id int);\nSELECT pg_sleep(1);\n\n-- +goose Down\nDROP TABLE lock_probe;\n")},

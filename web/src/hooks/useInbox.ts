@@ -2,7 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
 import { auth, inboxCount } from "@/api/client";
+import { useMe } from "@/hooks/useMe";
 import { connectInbox } from "@/lib/inbox";
+import type { Me } from "@/types/api";
 
 export const COUNT_KEY = ["inbox", "count"] as const;
 export const LIST_KEY = ["inbox", "list"] as const;
@@ -16,6 +18,8 @@ export function useInboxCount() {
 export function useInboxStream() {
   const client = useQueryClient();
   const count = useInboxCount().data;
+  // The stream serves whoever the session runs as when it opens: act-as start and stop reopen it.
+  const userId = (useMe().data as Me).id;
   const last = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (last.current !== undefined && count !== undefined && count !== last.current) {
@@ -44,5 +48,5 @@ export function useInboxStream() {
       onSessionCheck: () => void client.invalidateQueries({ queryKey: ["me"] }),
       onSignedOut: () => auth.set(true),
     });
-  }, [client]);
+  }, [client, userId]);
 }

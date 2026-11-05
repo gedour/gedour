@@ -73,7 +73,12 @@ func TestAdminOperationsNeedAdmin(t *testing.T) {
 		t.Cleanup(func() { _ = resp.Body.Close() })
 		return resp
 	}
-	user, admin := session("user-token", false), session("admin-token", true)
+	user, admin, acting := session("user-token", false), session("admin-token", true), session("acting-token", true)
+	actAs := func() {
+		if _, err := pool.Exec(ctx, `UPDATE sessions SET acting_as = (SELECT id FROM users WHERE oidc_sub = 'user-token') WHERE user_id = (SELECT id FROM users WHERE oidc_sub = $1)`, acting); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	var doc struct {
 		Paths map[string]map[string]any `json:"paths"`
@@ -100,10 +105,16 @@ func TestAdminOperationsNeedAdmin(t *testing.T) {
 			if resp := call(m, concrete, admin); resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 				t.Errorf("%s %s as an admin: %d", m, path, resp.StatusCode)
 			}
+			// 006-AC15: acting as a user, every admin operation is 409 but the way out.
+			actAs()
+			stop := m == http.MethodDelete && path == "/api/v1/admin/act-as"
+			if resp := call(m, concrete, acting); (resp.StatusCode == http.StatusConflict) == stop || resp.StatusCode == http.StatusForbidden {
+				t.Errorf("%s %s while acting: %d", m, path, resp.StatusCode)
+			}
 		}
 	}
-	if n < 7 {
-		t.Fatalf("found %d admin operations, want at least 7", n)
+	if n < 9 {
+		t.Fatalf("found %d admin operations, want at least 9", n)
 	}
 }
 
@@ -203,7 +214,7 @@ func TestShareWaitsForPurge(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = purge.Rollback(ctx) }()
-	if _, err := purge.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, dave.id); err != nil {
+	if _, err := purge.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, dave.id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := purge.Exec(ctx, `UPDATE users SET email = '', display_name = '', disabled_at = now(), purged_at = now() WHERE id = $1`, dave.id); err != nil {

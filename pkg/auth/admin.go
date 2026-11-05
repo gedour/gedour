@@ -94,6 +94,7 @@ func (s *Service) registerAdmin(api huma.API) {
 	})
 	s.registerTransfer(api, tags)
 	s.registerPurge(api, tags)
+	s.registerActAs(api, tags)
 }
 
 // apiFail passes API errors through and turns anything else into a logged, opaque 500.
@@ -129,21 +130,22 @@ func (s *Service) listUsers(ctx context.Context, _ *struct{}) (*listUsersOutput,
 	return out, nil
 }
 
-// setDisabled disables or enables an account under its row lock; disabling deletes its sessions in the
+// setDisabled disables or enables an account under its row lock (NO KEY UPDATE: FK checks on the user, such as
+// the audit insert of a logout holding its session, never wait on it); disabling deletes its sessions in the
 // same tx (006-AC7, 006-AC9, 006-AC18).
 func (s *Service) setDisabled(ctx context.Context, id string, disable bool) error {
-	sess, ok := ctx.Value(ctxKey{}).(*session)
-	if !ok {
-		return huma.Error401Unauthorized("not signed in")
+	sess, err := sessionOf(ctx)
+	if err != nil {
+		return err
 	}
 	action, op := "user.enable", "admin-enable-user"
 	if disable {
 		action, op = "user.disable", "admin-disable-user"
 	}
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var uid string
 		var before userState
-		err := tx.QueryRow(ctx, `SELECT u.id::text, `+statusSQL+`, u.disabled_at FROM users u WHERE u.id = $1 FOR UPDATE`, id).
+		err := tx.QueryRow(ctx, `SELECT u.id::text, `+statusSQL+`, u.disabled_at FROM users u WHERE u.id = $1 FOR NO KEY UPDATE`, id).
 			Scan(&uid, &before.Status, &before.DisabledAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return huma.Error404NotFound("no such account")

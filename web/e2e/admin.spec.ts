@@ -7,6 +7,7 @@ import {
   DAVE,
   expect,
   gate,
+  SEED,
   signInFromGate,
   test,
   UPSTREAM,
@@ -243,6 +244,74 @@ test("an admin purges a disabled account", async ({ page, browser, baseURL }) =>
     expect(await daveState()).toBe("purged");
   } finally {
     await Promise.all(contexts.map((c) => c.close()));
+  }
+  expect(violations.flat()).toEqual([]);
+});
+
+// 006-AC15, 006-AC16, 006-AC17: alice (admin) acts as bob from the Administration page: bob's data under a
+// banner, without Administration; a rule she creates is bob's; Stop brings her own session back; bob's
+// audit view shows the entry as made by alice for bob.
+test("an admin acts as a user", async ({ page, browser, baseURL }) => {
+  const violations: string[][] = [];
+  const contexts: BrowserContext[] = [];
+  const call = await api(page);
+  const users = (await (await call("GET", "/api/v1/admin/users")).json()).items as {
+    id: string;
+    email: string;
+  }[];
+  const bobId = users.find((u) => u.email === BOB_EMAIL)?.id as string;
+  const name = `act-as e2e ${Date.now()}`;
+  let ruleId = "";
+  const banner = page.getByRole("region", { name: "Acting as another user" });
+  try {
+    await page.goto("/admin/users");
+    const row = page
+      .getByRole("table", { name: "Accounts" })
+      .getByRole("row")
+      .filter({ hasText: BOB_EMAIL });
+    await row.getByRole("button", { name: `Act as ${BOB.name}` }).click();
+    await expect(banner).toContainText(`Acting as ${BOB.name}`);
+    await expect(page).toHaveURL(/\/inbox$/);
+    await expect(page.getByRole("link", { name: "Administration" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: `Account: ${BOB.name}` })).toBeVisible();
+
+    const created = await call("POST", "/api/v1/rules", { name });
+    expect(created.status()).toBe(201);
+    ruleId = ((await created.json()) as { id: string }).id;
+    await page.getByRole("link", { name: "Rules", exact: true }).click();
+    const rules = page.getByRole("list", { name: "Rules" });
+    await expect(rules).toContainText(SEED.rule);
+    await expect(rules).toContainText(name);
+
+    await banner.getByRole("button", { name: "Stop" }).click();
+    await expect(banner).toBeHidden();
+    await expect(page.getByRole("link", { name: "Administration" })).toBeVisible();
+    await expect(page.getByRole("button", { name: `Account: ${ALICE.name}` })).toBeVisible();
+    await expect(page.getByText(SEED.rule)).toHaveCount(0);
+    await expect(page.getByText(name)).toHaveCount(0);
+
+    // A sign-in of its own: the disable test revoked bob's stored session.
+    const ctx = await open(browser, baseURL, contexts);
+    violations.push(ctx.violations);
+    await ctx.page.goto("/audit");
+    await signInFromGate(ctx.page, BOB);
+    const entry = ctx.page
+      .getByRole("table", { name: "Audit entries, newest first" })
+      .getByRole("row")
+      .filter({ hasText: "rule.created" })
+      .filter({ hasText: `${ruleId.slice(0, 8)}…` });
+    await expect(entry).toContainText(`${ALICE.name} for ${BOB.name}`);
+  } finally {
+    await Promise.all(contexts.map((c) => c.close()));
+    // Bob loses the rule and alice leaves act-as, whatever step failed.
+    if (ruleId) {
+      const status = (await call("POST", `/api/v1/admin/users/${bobId}/act-as`)).status();
+      expect([204, 409]).toContain(status);
+      expect((await call("DELETE", `/api/v1/rules/${ruleId}`)).status()).toBe(204);
+    }
+    await call("DELETE", "/api/v1/admin/act-as");
+    const me = (await (await call("GET", "/api/v1/me")).json()) as { acting_as: unknown };
+    expect(me.acting_as).toBeNull();
   }
   expect(violations.flat()).toEqual([]);
 });

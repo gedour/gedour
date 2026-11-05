@@ -142,17 +142,21 @@ func (s *Service) addShare(ctx context.Context, in *addShareInput) (*shareOutput
 	email := strings.TrimSpace(in.Body.Email)
 	var sh Share
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		w, err := authorize(ctx, tx, me, in.ID, levelOwner, true)
-		if err != nil {
+		// Unlocked first: a stranger is refused before any lock, and users come before watches in the lock order.
+		if _, err := authorize(ctx, tx, me, in.ID, levelOwner, false); err != nil {
 			return err
 		}
-		// Exact (case-insensitive) match only: no search, so the endpoint cannot enumerate users. KEY SHARE waits
-		// for a purge in flight, then re-checks the row: a purged account (blank email) is no longer found.
-		rows, err := tx.Query(ctx, `SELECT id::text FROM users WHERE email <> '' AND lower(email) = lower($1) AND purged_at IS NULL LIMIT 2 FOR KEY SHARE`, email)
+		// Exact (case-insensitive) match only: no search, so the endpoint cannot enumerate users. FOR SHARE waits
+		// for a purge in flight (NO KEY UPDATE), then re-checks the row: a purged account (blank email) is no longer found.
+		rows, err := tx.Query(ctx, `SELECT id::text FROM users WHERE email <> '' AND lower(email) = lower($1) AND purged_at IS NULL LIMIT 2 FOR SHARE`, email)
 		if err != nil {
 			return err
 		}
 		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		w, err := authorize(ctx, tx, me, in.ID, levelOwner, true)
 		if err != nil {
 			return err
 		}

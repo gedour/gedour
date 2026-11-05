@@ -182,11 +182,15 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	ctx := r.Context()
 	sess := &session{id: hashToken(c.Value)}
 	var stale bool
+	var target struct{ id, email, name *string }
+	// The target may be disabled (act-as helps fix it before enabling); a purge clears acting_as.
 	err = s.pool.QueryRow(ctx, `SELECT u.id::text, u.email, u.display_name, s.csrf_token, COALESCE(s.id_token, ''),
-			s.last_seen_at < now() - interval '1 minute', s.is_admin
+			s.last_seen_at < now() - interval '1 minute', s.is_admin, t.id::text, t.email, t.display_name
 		FROM sessions s JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL AND u.purged_at IS NULL
+		LEFT JOIN users t ON t.id = s.acting_as
 		WHERE s.id = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval`, sess.id, s.idle).
-		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale, &sess.isAdmin)
+		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale, &sess.isAdmin,
+			&target.id, &target.email, &target.name)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -195,6 +199,12 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	}
 	// 006-AC19: a dev session row from before 00009 holds false, and dev mode never signs in again.
 	sess.isAdmin = sess.isAdmin || s.DevMode()
+	if target.id != nil {
+		// 006-AC15: every owner-scoped handler reads User, so they all run as the target unchanged.
+		admin := sess.User
+		sess.admin = &admin
+		sess.User = User{ID: *target.id, Email: *target.email, DisplayName: *target.name}
+	}
 	// Idle clock moves at most once a minute: no write on every request.
 	if stale && touch {
 		if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = now() WHERE id = $1`, sess.id); err != nil {
@@ -225,10 +235,14 @@ func (s *Service) auditDenied(ctx context.Context, sub, reason string) error {
 
 // logout deletes the session and audits it in one transaction.
 func (s *Service) logout(ctx context.Context, sess *session) error {
+	// /auth/logout runs outside Guard, which tags acting requests.
+	if sess.admin != nil {
+		ctx = audit.WithActing(ctx, sess.admin.ID, sess.ID)
+	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, sess.id); err != nil {
 			return fmt.Errorf("delete session: %w", err)
 		}
-		return audit.Record(ctx, tx, audit.Entry{ActorUserID: sess.ID, Action: "session.logout", TargetType: "session", TargetID: auditID(sess.id)})
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: sess.self().ID, Action: "session.logout", TargetType: "session", TargetID: auditID(sess.id)})
 	})
 }

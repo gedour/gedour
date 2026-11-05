@@ -306,7 +306,7 @@ func TestLoginRechecksDisabledUnderLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, id); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, id); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

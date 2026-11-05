@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+  "/api/v1/admin/act-as": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Return this session to the admin's own account */
+    delete: operations["admin-act-as-stop"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/users": {
     parameters: {
       query?: never;
@@ -15,6 +32,23 @@ export interface paths {
     get: operations["admin-list-users"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/act-as": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Run this session as another account until stopped; audited on both sides (admin only) */
+    post: operations["admin-act-as-start"];
     delete?: never;
     options?: never;
     head?: never;
@@ -787,6 +821,12 @@ export interface components {
       /** @enum {string} */
       permission: "ro" | "rw";
     };
+    Admin: {
+      display_name: string;
+      email: string;
+      /** Format: uuid */
+      id: string;
+    };
     AdminUser: {
       counts: components["schemas"]["AdminUserCounts"];
       /** Format: date-time */
@@ -1227,6 +1267,10 @@ export interface components {
       before: unknown;
       /** Format: int64 */
       id: number;
+      /** @description User the actor was acting as; null otherwise */
+      on_behalf_of: string | null;
+      /** @description That user's display name, or email; empty when on_behalf_of is null */
+      on_behalf_of_name: string;
       request_id: string;
       target_id: string;
       target_type: string;
@@ -1347,6 +1391,8 @@ export interface components {
       items: components["schemas"]["Watch"][] | null;
     };
     MeOutputBody: {
+      /** @description The admin who signed in, while this session acts as the user above; null otherwise */
+      acting_as: components["schemas"]["Admin"];
       /** @description Send back in the X-CSRF-Token header on every non-GET request */
       csrf_token: string;
       /** @description Single-user mode: there is no real sign-out */
@@ -1382,6 +1428,11 @@ export interface components {
       items: components["schemas"]["PreviewItem"][] | null;
     };
     PurgeCounts: {
+      /**
+       * Format: int64
+       * @description Admin sessions acting as the account, sent back to their admin's own data
+       */
+      acting_sessions: number;
       /** Format: int64 */
       channels: number;
       /** Format: int64 */
@@ -1674,6 +1725,33 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  "admin-act-as-stop": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "admin-list-users": {
     parameters: {
       query?: never;
@@ -1691,6 +1769,35 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["ListUsersOutputBody"];
         };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-act-as-start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Error */
       default: {

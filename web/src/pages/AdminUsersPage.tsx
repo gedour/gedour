@@ -327,7 +327,6 @@ function UserWatches({
               w.kind,
               w.credential_name && `credential ${w.credential_name}`,
               w.shares > 0 && `shared with ${plural(w.shares, "user")}`,
-              w.owner_rules > 0 && `${plural(w.owner_rules, "rule")} of the owner`,
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -548,14 +547,10 @@ function TransferDialog({
   };
   const mutation = useMutation({
     mutationFn: (v: { watch: AdminWatch; to: AdminUser }) => transferWatch(v.watch.id, v.to.id),
-    onSuccess: (res, v) => {
+    onSuccess: (_, v) => {
       void client.invalidateQueries({ queryKey: ["admin"] });
       void client.invalidateQueries({ queryKey: ["audit"] });
-      const rules = res.deleted_rules as { name: string }[];
-      toast(
-        `Transferred ${v.watch.name} to ${accountName(v.to)}` +
-          (rules.length > 0 ? `; deleted rules: ${rules.map((r) => r.name).join(", ")}` : ""),
-      );
+      toast(`Transferred ${v.watch.name} to ${accountName(v.to)}`);
       if (openId.current === v.watch.id) close();
     },
     onError: (err, v) => {
@@ -593,12 +588,6 @@ function TransferDialog({
             <li>
               Its credential {w.credential_name} moves with it, unless another watch of{" "}
               {accountName(target.owner)} uses it.
-            </li>
-          )}
-          {w.owner_rules > 0 && (
-            <li>
-              {plural(w.owner_rules, "rule")} of {accountName(target.owner)} targeting it will be
-              deleted.
             </li>
           )}
           <li>A share the new owner held on it is dropped; other users keep theirs.</li>

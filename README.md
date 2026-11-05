@@ -135,8 +135,9 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
   the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
   those watches listed). The new owner's share on the watch is dropped, other users keep theirs. The old
-  owner loses access, and its rules targeting that watch are deleted. Audited as `watch.transfer` (owners, credential, deleted
-  rules; never the secret).
+  owner loses access; its rules targeting that watch stay and route nothing while it cannot read the watch
+  (a share or a transfer back restores routing).
+  Audited as `watch.transfer` (owners, credential; never the secret).
 - Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
   scripts, credentials, shares and inbox, and blanks its email and name. Other users lose the watches it
   shared with them and their rules on those watches; the confirmation lists both. The account row stays

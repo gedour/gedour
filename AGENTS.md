@@ -75,6 +75,9 @@
   need `X-CSRF-Token`. Frontend calls go through `web/src/api/client.ts`, which adds it.
 - `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
+- Row locks (`FOR UPDATE`/`NO KEY UPDATE`/`SHARE`) go users, rules, watches, credentials, by id. KEY SHARE on users
+  (FK checks, addShare, router) may come last: only disable and purge lock users `FOR UPDATE`, and nothing before. Events: router
+  (event, then KEY SHARE on rule/channel/user) and cascades only; the events cascade fires first, so pre-delete rule locks are `NO KEY UPDATE`.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
 

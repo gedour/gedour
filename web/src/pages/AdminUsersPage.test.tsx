@@ -43,7 +43,6 @@ function watchOf(over: Partial<AdminWatch> = {}): AdminWatch {
     kind: "github_release",
     credential_name: "gh",
     shares: 1,
-    owner_rules: 2,
     ...over,
   };
 }
@@ -235,8 +234,8 @@ describe("AdminUsersPage", () => {
     expect(await screen.findByText("Bob")).toBeInTheDocument();
   });
 
-  // 006-AC10: an account's watches open from its row; a transfer picks an active account, says what
-  // moves and what is deleted, then reports the deleted rules.
+  // 006-AC10: an account's watches open from its row; a transfer picks an active account and says what
+  // moves, never that rules are deleted.
   it("lists an account's watches and transfers one", async () => {
     const purged = account({ id: "p", email: "", display_name: "", status: "purged" });
     const off = account({ id: "d", display_name: "Off", status: "disabled" });
@@ -251,10 +250,6 @@ describe("AdminUsersPage", () => {
           credential_moved: true,
           credential_name: "gh (transferred)",
           dropped_share: false,
-          deleted_rules: [
-            { id: "r1", name: "r1" },
-            { id: "r2", name: "r2" },
-          ],
         }),
     });
     renderApp("/admin/users", ADMIN);
@@ -264,12 +259,12 @@ describe("AdminUsersPage", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const list = await screen.findByRole("list", { name: "Watches of Bob" });
     expect(list).toHaveTextContent(
-      "Go releasesgithub_release · credential gh · shared with 1 user · 2 rules of the owner",
+      "Go releasesgithub_release · credential gh · shared with 1 user",
     );
     await userEvent.click(within(list).getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
     expect(d).toHaveTextContent("Its credential gh moves with it");
-    expect(d).toHaveTextContent("2 rules of Bob targeting it will be deleted");
+    expect(d).not.toHaveTextContent("rule");
     const confirm = within(d).getByRole("button", { name: "Transfer" });
     expect(confirm).toBeDisabled();
     const select = within(d).getByRole("combobox", { name: "New owner" });
@@ -284,9 +279,7 @@ describe("AdminUsersPage", () => {
     ]);
     await userEvent.selectOptions(select, DEE.id);
     await userEvent.click(confirm);
-    expect(
-      await screen.findByText("Transferred Go releases to Dee; deleted rules: r1, r2"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Transferred Go releases to Dee")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(lastCall(fn, `/api/v1/admin/watches/${watchOf().id}/transfer`, "POST")?.body).toEqual({
       to_user_id: DEE.id,
@@ -302,7 +295,7 @@ describe("AdminUsersPage", () => {
       "/api/v1/me": ADMIN,
       "/api/v1/admin/users": { items: [account(), DEE] },
       [`/api/v1/admin/users/${account().id}/watches`]: {
-        items: [watchOf({ credential_name: null, owner_rules: 0, shares: 0 })],
+        items: [watchOf({ credential_name: null, shares: 0 })],
       },
       [`/api/v1/admin/watches/${watchOf().id}/transfer`]: () =>
         problem(409, "the credential is also used by also, Zed"),
@@ -313,7 +306,6 @@ describe("AdminUsersPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
     expect(d).not.toHaveTextContent("credential");
-    expect(d).not.toHaveTextContent("will be deleted");
     await userEvent.selectOptions(within(d).getByRole("combobox"), DEE.id);
     const calls = (path: string) =>
       fn.mock.calls.filter(([input]) => new URL(String(input), "http://app.test").pathname === path)
@@ -613,7 +605,6 @@ describe("AdminUsersPage", () => {
                 credential_moved: false,
                 credential_name: null,
                 dropped_share: false,
-                deleted_rules: [],
               })
             : l.answer.clone(),
         );

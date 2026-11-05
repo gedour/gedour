@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -379,12 +380,10 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		if _, err := authorize(ctx, tx, me, in.ID, levelOwner, false); err != nil {
 			return err
 		}
-		// Rules on the watch before the watch, as an admin transfer locks them, else the cascade below waits on
-		// rules while holding the watch the transfer waits for. NO KEY UPDATE lets the router's FK KEY SHARE
-		// through: it holds the watch's events, which the cascade waits on.
-		// Relies on the events cascade firing before the rules one (older FK trigger); TestWatchDeleteRacingRouter guards it.
+		// Rules before the watch (lock order in AGENTS.md): a rule edit holds its rule, then wants the watch's KEY SHARE.
+		// NO KEY UPDATE lets the router's FK KEY SHARE through; TestWatchDeleteRacingRouter guards it.
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE watch_id = $1 ORDER BY id FOR NO KEY UPDATE`, in.ID); err != nil {
-			return err
+			return fmt.Errorf("lock rules: %w", err)
 		}
 		before, err := authorize(ctx, tx, me, in.ID, levelOwner, true)
 		if err != nil {

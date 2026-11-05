@@ -179,7 +179,6 @@ func TestAdminDataDatabaseFailure(t *testing.T) {
 		{"credentials", http.MethodPost, "/api/v1/admin/watches/" + withCred + "/transfer", map[string]string{"to_user_id": bob}},
 		{"credentials", http.MethodPost, "/api/v1/admin/users/" + alice + "/purge", nil},
 		{"watch_shares", http.MethodPost, "/api/v1/admin/watches/" + plain + "/transfer", map[string]string{"to_user_id": bob}},
-		{"rules", http.MethodPost, "/api/v1/admin/watches/" + plain + "/transfer", map[string]string{"to_user_id": bob}},
 	} {
 		e.exec(t, `ALTER TABLE `+tt.table+` RENAME TO gone`)
 		code, raw := e.send(t, tt.method, tt.path, token, csrf, tt.body)
@@ -227,5 +226,79 @@ func TestPurgeRacingRouter(t *testing.T) {
 	}
 	if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 1 {
 		t.Errorf("audit other_users_rules %d, want 1", n)
+	}
+}
+
+// 006-AC13, 006-AC18: a sharee's rule created on the purged account's watch, committed while the purge waits
+// on that watch, is deleted by the cascade and counted: the audit's other_users_rules matches what went.
+func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	w := e.watchOf(t, dave, "w", nil)
+	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
+	early := e.ruleOf(t, erin, "early", &w)
+	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
+	ctx := context.Background()
+	// createRule's statements: the cap lock on its owner, the watch's KEY SHARE, then the insert.
+	create := e.begin(t)
+	var late string
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, []any{erin}},
+		{`SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, []any{w}},
+	} {
+		if _, err := create.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.sql, err)
+		}
+	}
+	if err := create.QueryRow(ctx, `INSERT INTO rules (owner_id, name, watch_id) VALUES ($1, 'late', $2) RETURNING id::text`, erin, w).Scan(&late); err != nil {
+		t.Fatal(err)
+	}
+	purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
+	e.waitLockWaiters(t, 1)
+	if err := create.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-purge; code != http.StatusNoContent {
+		t.Fatalf("purge: %d, want 204", code)
+	}
+	if n := e.count(t, `SELECT count(*) FROM rules WHERE id IN ($1, $2)`, early, late); n != 0 {
+		t.Fatalf("%d of erin's rules on the purged watch survived", n)
+	}
+	if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 2 {
+		t.Fatalf("audit other_users_rules %d, want 2 (both deleted)", n)
+	}
+}
+
+// A sharee's rule edit holds the rule, then takes the watch's KEY SHARE (rules API order). The purge locks
+// other users' rules before its watches, so it waits on the edit instead of deadlocking with it.
+func TestPurgeRacingRuleEdit(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	w := e.watchOf(t, dave, "w", nil)
+	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
+	r := e.ruleOf(t, erin, "erin on w", &w)
+	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
+	ctx := context.Background()
+	edit := e.begin(t)
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
+		t.Fatal(err)
+	}
+	purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
+	e.waitLockWaiters(t, 1)
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w); err != nil {
+		t.Fatalf("rule edit's watch check: %v", err)
+	}
+	if err := edit.Commit(ctx); err != nil {
+		t.Fatalf("rule edit commit: %v", err)
+	}
+	if code := <-purge; code != http.StatusNoContent {
+		t.Fatalf("purge: %d, want 204", code)
 	}
 }

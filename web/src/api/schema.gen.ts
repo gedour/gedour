@@ -831,11 +831,6 @@ export interface components {
       name: string;
       /**
        * Format: int64
-       * @description Owner's rules targeting this watch: a transfer deletes them
-       */
-      owner_rules: number;
-      /**
-       * Format: int64
        * @description Users the watch is shared with
        */
       shares: number;
@@ -1065,11 +1060,6 @@ export interface components {
       used_by_count: number;
       /** @description registry_basic only */
       username: string | null;
-    };
-    DeletedRule: {
-      /** Format: uuid */
-      id: string;
-      name: string;
     };
     Delivery: {
       /** Format: int64 */
@@ -1572,8 +1562,6 @@ export interface components {
       credential_moved: boolean;
       /** @description Its name at the new owner, suffixed on a clash */
       credential_name: string | null;
-      /** @description The old owner's rules targeting the watch */
-      deleted_rules: components["schemas"]["DeletedRule"][] | null;
       /** @description The new owner's share on the watch was removed */
       dropped_share: boolean;
       /** Format: uuid */

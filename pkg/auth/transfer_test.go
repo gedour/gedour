@@ -85,7 +85,7 @@ func (e *env) transfer(t *testing.T, token, csrf, watch, to string) (int, []byte
 }
 
 // 006-AC10: the watch, its credential (renamed on a clash) and nothing of the old owner's move; the new
-// owner's share is dropped, the old owner's rules on it deleted, other users' shares and rules stay.
+// owner's share is dropped, the old owner's rules on it and other users' shares and rules stay.
 // 006-AC18: audited with before and after.
 func TestTransferWatch(t *testing.T) {
 	e := setup(t, false)
@@ -109,7 +109,7 @@ func TestTransferWatch(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil || len(listed.Items) != 1 {
 		t.Fatalf("alice's watches: %v %+v", err, listed)
 	}
-	if got := listed.Items[0]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" || got.Shares != 2 || got.OwnerRules != 1 {
+	if got := listed.Items[0]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" || got.Shares != 2 {
 		t.Fatalf("listed %+v", got)
 	}
 
@@ -121,8 +121,7 @@ func TestTransferWatch(t *testing.T) {
 	if err := json.Unmarshal(raw, &res); err != nil {
 		t.Fatal(err)
 	}
-	want := TransferResult{OwnerID: bob, CredentialID: &cred, CredentialMoved: true, DroppedShare: true,
-		DeletedRules: []DeletedRule{{ID: aliceOnW, Name: "on w"}}}
+	want := TransferResult{OwnerID: bob, CredentialID: &cred, CredentialMoved: true, DroppedShare: true}
 	if res.CredentialName == nil || *res.CredentialName != "gh (transferred 2)" {
 		t.Fatalf("credential name %v", res.CredentialName)
 	}
@@ -138,9 +137,8 @@ func TestTransferWatch(t *testing.T) {
 		{`SELECT count(*) FROM credentials WHERE id = '` + cred + `' AND owner_id = '` + bob + `' AND name = 'gh (transferred 2)'`, 1},
 		{`SELECT count(*) FROM watch_shares WHERE watch_id = '` + w + `' AND user_id = '` + bob + `'`, 0},
 		{`SELECT count(*) FROM watch_shares WHERE watch_id = '` + w + `' AND user_id = '` + carol + `'`, 1},
-		{`SELECT count(*) FROM rules WHERE id = '` + aliceOnW + `'`, 0},
-		{`SELECT count(*) FROM rule_channels WHERE channel_id = '` + ch + `'`, 0},
-		{`SELECT count(*) FROM rules WHERE id IN ('` + aliceAll + `', '` + carolOnW + `')`, 2},
+		{`SELECT count(*) FROM rule_channels WHERE channel_id = '` + ch + `'`, 1},
+		{`SELECT count(*) FROM rules WHERE id IN ('` + aliceOnW + `', '` + aliceAll + `', '` + carolOnW + `')`, 3},
 	} {
 		if n := e.count(t, c.sql); n != c.want {
 			t.Errorf("%s: %d, want %d", c.sql, n, c.want)
@@ -156,9 +154,9 @@ func TestTransferWatch(t *testing.T) {
 		t.Fatalf("audit by %s: before %v after %v", actor, before, after)
 	}
 
-	// Back to alice: the name stays (no clash there), no share to drop, no bob rule to delete.
+	// Back to alice: the name stays (no clash there), no share to drop.
 	if code, raw := e.transfer(t, token, csrf, w, alice); code != http.StatusOK || !strings.Contains(string(raw), `"credential_name":"gh (transferred 2)"`) ||
-		!strings.Contains(string(raw), `"dropped_share":false`) || !strings.Contains(string(raw), `"deleted_rules":[]`) {
+		!strings.Contains(string(raw), `"dropped_share":false`) {
 		t.Fatalf("transfer back: %d %s", code, raw)
 	}
 }
@@ -471,57 +469,36 @@ func (e *env) begin(t *testing.T) pgx.Tx {
 	return tx
 }
 
-// A share added to the transfer's target while the transfer holds both users runs through (its FK check
-// takes KEY SHARE, which the transfer's FOR SHARE allows); the transfer then waits on the watch, and drops
-// the share. No deadlock, no 500.
+// A share added to the transfer's target while the transfer holds both users and waits on the watch the
+// share holds: its insert's FK check takes KEY SHARE on the user, which the transfer's FOR SHARE allows.
+// No deadlock, and the transfer then drops the share.
 func TestTransferRacingAddShare(t *testing.T) {
 	e := setup(t, false)
 	_, token, csrf := e.signedIn(t, "admin", true)
 	alice, _, _ := e.signedIn(t, "alice", false)
 	bob, _, _ := e.signedIn(t, "bob", false)
 	w := e.watchOf(t, alice, "w", nil)
-	r := e.ruleOf(t, alice, "on w", &w)
 	ctx := context.Background()
-	// Holds the transfer between its users lock and its watch lock.
-	pause := e.begin(t)
-	if _, err := pause.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
+	// addShare's statements: the watch row lock, then the insert (KEY SHARE on bob).
+	share := e.begin(t)
+	if _, err := share.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w); err != nil {
 		t.Fatal(err)
 	}
 	transfer := e.sendAsync(http.MethodPost, "/api/v1/admin/watches/"+w+"/transfer", token, csrf, map[string]string{"to_user_id": bob})
 	e.waitLockWaiters(t, 1)
-	// addShare's statements: the watch row lock, then the insert (KEY SHARE on bob).
-	share := e.begin(t)
 	added := make(chan error, 1)
 	go func() {
-		if _, err := share.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w); err != nil {
-			added <- err
-			return
-		}
 		_, err := share.Exec(ctx, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob)
 		added <- err
 	}()
-	// The insert either goes through, or (users locked FOR UPDATE) waits behind the transfer.
-	var err error
 	select {
-	case err = <-added:
+	case err := <-added:
+		if err != nil {
+			t.Fatalf("add share: %v", err)
+		}
 	case <-e.lockWaiters(2):
-		if err := pause.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-		// The transfer now wants the watch the share holds: PostgreSQL breaks the cycle, failing one side.
-		err = <-added
-		if code := <-transfer; err == nil && code != http.StatusOK {
-			t.Fatalf("transfer: %d (deadlock victim), want 200", code)
-		}
-		t.Fatalf("add share waited on the transfer's user lock: %v", err)
+		t.Fatal("add share waited on the transfer's user lock")
 	}
-	if err != nil {
-		t.Fatalf("add share: %v", err)
-	}
-	if err := pause.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	e.waitLockWaiters(t, 1)
 	if err := share.Commit(ctx); err != nil {
 		t.Fatalf("add share commit: %v", err)
 	}
@@ -607,40 +584,5 @@ func TestTransferNameCreateIsConflict(t *testing.T) {
 	}
 	if n := e.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND owner_id = $2`, w, alice); n != 1 {
 		t.Fatal("the refused transfer moved the watch")
-	}
-}
-
-// An edit of the old owner's rule on the watch (rule row lock, then the watch's KEY SHARE, as the rules
-// API does) racing a transfer: the transfer waits on the rule before taking the watch, so no deadlock.
-func TestTransferRacingRuleUpdate(t *testing.T) {
-	e := setup(t, false)
-	_, token, csrf := e.signedIn(t, "admin", true)
-	alice, _, _ := e.signedIn(t, "alice", false)
-	bob, _, _ := e.signedIn(t, "bob", false)
-	w := e.watchOf(t, alice, "w", nil)
-	r := e.ruleOf(t, alice, "on w", &w)
-	ctx := context.Background()
-	edit := e.begin(t)
-	if _, err := edit.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
-		t.Fatal(err)
-	}
-	transfer := e.sendAsync(http.MethodPost, "/api/v1/admin/watches/"+w+"/transfer", token, csrf, map[string]string{"to_user_id": bob})
-	e.waitLockWaiters(t, 1)
-	checked := make(chan error, 1)
-	go func() {
-		_, err := edit.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w)
-		checked <- err
-	}()
-	if err := <-checked; err != nil {
-		t.Fatalf("rule edit's watch check: %v", err)
-	}
-	if err := edit.Commit(ctx); err != nil {
-		t.Fatalf("rule edit commit: %v", err)
-	}
-	if code := <-transfer; code != http.StatusOK {
-		t.Fatalf("transfer: %d, want 200", code)
-	}
-	if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, r); n != 0 {
-		t.Fatal("the old owner's rule on the watch survived")
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/netguard"
+	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/testpg"
 	"github.com/gedour/gedour/pkg/worker"
@@ -260,58 +261,37 @@ func (a *devApp) waitLockWaiters(t *testing.T, n int) {
 	}
 }
 
-// A transfer and the owner's delete of the same watch both lock its rules before the watch, so whichever
-// queues first on the rule wins and the other answers 404 (or 409); never a deadlock 500. A held rule
-// lock queues them in each order.
-func TestTransferRacingWatchDelete(t *testing.T) {
-	for _, transferFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "transfer first", false: "delete first"}[transferFirst], func(t *testing.T) {
-			a := newDevApp(t)
-			alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
-			a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
-			var w watchJSON
-			a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-			var rule struct {
-				ID string `json:"id"`
-			}
-			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
-			ctx := context.Background()
-			hold, err := a.pool.Begin(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = hold.Rollback(ctx) }()
-			if _, err := hold.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, rule.ID); err != nil {
-				t.Fatal(err)
-			}
-			start := []func() <-chan int{
-				func() <-chan int {
-					return a.callAsync(admin, http.MethodPost, "/api/v1/admin/watches/"+w.ID+"/transfer", map[string]any{"to_user_id": bob.id})
-				},
-				func() <-chan int { return a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil) },
-			}
-			if !transferFirst {
-				start[0], start[1] = start[1], start[0]
-			}
-			first := start[0]()
-			a.waitLockWaiters(t, 1)
-			second := start[1]()
-			a.waitLockWaiters(t, 2)
-			if err := hold.Commit(ctx); err != nil {
-				t.Fatal(err)
-			}
-			got := []int{<-first, <-second}
-			transfer, del := got[0], got[1]
-			if !transferFirst {
-				transfer, del = got[1], got[0]
-			}
-			if transferFirst && (transfer != http.StatusOK || del != http.StatusNotFound) {
-				t.Fatalf("transfer %d, delete %d: want 200 then 404", transfer, del)
-			}
-			if !transferFirst && (del != http.StatusNoContent || transfer != http.StatusNotFound) {
-				t.Fatalf("delete %d, transfer %d: want 204 then 404", del, transfer)
-			}
-		})
+// A rule edit holds its rule FOR UPDATE, then takes the watch's KEY SHARE (the UI always sends watch_id).
+// A delete of that watch locking the watch first would wait on the rule in its cascade: the delete locks
+// the rules first, so the edit goes through and the delete then completes.
+func TestWatchDeleteRacingRuleEdit(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	var rule struct {
+		ID string `json:"id"`
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
+	ctx := context.Background()
+	edit, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = edit.Rollback(ctx) }()
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
+	a.waitLockWaiters(t, 1)
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w.ID); err != nil {
+		t.Fatalf("rule edit's watch check: %v", err)
+	}
+	if err := edit.Commit(ctx); err != nil {
+		t.Fatalf("rule edit commit: %v", err)
+	}
+	if code := <-deleted; code != http.StatusNoContent {
+		t.Fatalf("delete: %d, want 204", code)
 	}
 }
 
@@ -379,5 +359,133 @@ func TestWatchDeleteRefusedWithoutLocking(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a stranger's delete waited on the watch's rule lock")
+	}
+}
+
+// 006-AC10: the old owner's rule on a transferred watch stays but routes nothing and reads with a null
+// watch_name; once the new owner shares the watch back, it routes again.
+func TestTransferKeepsRulesOfOldOwner(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	var rule struct {
+		ID string `json:"id"`
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
+	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w.ID+"/transfer", map[string]any{"to_user_id": bob.id}, http.StatusOK, nil)
+
+	var rules struct {
+		Items []struct {
+			ID        string  `json:"id"`
+			WatchID   *string `json:"watch_id"`
+			WatchName *string `json:"watch_name"`
+		} `json:"items"`
+	}
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/rules", nil, http.StatusOK, &rules)
+	if len(rules.Items) != 1 || rules.Items[0].ID != rule.ID || rules.Items[0].WatchID == nil || *rules.Items[0].WatchID != w.ID || rules.Items[0].WatchName != nil {
+		t.Fatalf("alice's rules after the transfer: %+v", rules.Items)
+	}
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second)
+	routed := func(key string) int {
+		t.Helper()
+		var ev int64
+		if err := a.pool.QueryRow(context.Background(), `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', $2) RETURNING id`, w.ID, key).Scan(&ev); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := router.RouteOnce(context.Background()); err != nil || n != 1 {
+			t.Fatalf("route: %d %v", n, err)
+		}
+		return a.countRows(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, alice.id, ev)
+	}
+	if n := routed("k1"); n != 0 {
+		t.Fatal("the old owner's rule routed an event of a watch it can no longer read")
+	}
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": alice.email, "permission": "ro"}, http.StatusCreated, nil)
+	if n := routed("k2"); n != 1 {
+		t.Fatal("the old owner's rule did not route once the watch was shared back")
+	}
+}
+
+// A transfer and the owner's delete of the same watch queue on its row, in either order: the first wins,
+// the second answers 404, never a deadlock 500.
+func TestTransferRacingWatchDelete(t *testing.T) {
+	for _, transferFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "transfer first", false: "delete first"}[transferFirst], func(t *testing.T) {
+			a := newDevApp(t)
+			alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
+			a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+			var w watchJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, nil)
+			ctx := context.Background()
+			hold, err := a.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = hold.Rollback(ctx) }()
+			if _, err := hold.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w.ID); err != nil {
+				t.Fatal(err)
+			}
+			transfer := func() <-chan int {
+				return a.callAsync(admin, http.MethodPost, "/api/v1/admin/watches/"+w.ID+"/transfer", map[string]any{"to_user_id": bob.id})
+			}
+			del := func() <-chan int { return a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil) }
+			var tr, dl <-chan int
+			if transferFirst {
+				tr = transfer()
+				a.waitLockWaiters(t, 1)
+				dl = del()
+			} else {
+				dl = del()
+				a.waitLockWaiters(t, 1)
+				tr = transfer()
+			}
+			a.waitLockWaiters(t, 2)
+			if err := hold.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			got := []int{<-tr, <-dl}
+			if transferFirst && (got[0] != http.StatusOK || got[1] != http.StatusNotFound) {
+				t.Fatalf("transfer %d, delete %d: want 200 then 404", got[0], got[1])
+			}
+			if !transferFirst && (got[1] != http.StatusNoContent || got[0] != http.StatusNotFound) {
+				t.Fatalf("delete %d, transfer %d: want 204 then 404", got[1], got[0])
+			}
+		})
+	}
+}
+
+// Run-all locks a rw sharee's watches in id order, as a purge locks the owner's: a purge holding the lower
+// watch and then taking the higher one does not deadlock with it. The higher id is inserted first, so an
+// unordered scan would lock it first.
+func TestRunAllRacingPurgeLocks(t *testing.T) {
+	a := newDevApp(t)
+	dave, erin := a.signIn(t, "dave"), a.signIn(t, "erin")
+	const low, high = "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-4fff-bfff-ffffffffffff"
+	for _, id := range []string{high, low} {
+		a.exec(t, `INSERT INTO watches (id, owner_id, name, kind, config) VALUES ($1, $2, $3, 'github_release', '{"repo":"a/b"}')`, id, dave.id, id)
+		a.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'rw')`, id, erin.id)
+	}
+	ctx := context.Background()
+	purge, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = purge.Rollback(ctx) }()
+	if _, err := purge.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, low); err != nil {
+		t.Fatal(err)
+	}
+	run := a.callAsync(erin, http.MethodPost, "/api/v1/watches/run", nil)
+	a.waitLockWaiters(t, 1)
+	if _, err := purge.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, high); err != nil {
+		t.Fatalf("purge's second watch lock: %v", err)
+	}
+	if err := purge.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-run; code != http.StatusAccepted {
+		t.Fatalf("run-all: %d, want 202", code)
 	}
 }

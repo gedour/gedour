@@ -24,7 +24,6 @@ type AdminWatch struct {
 	Kind           string  `json:"kind"`
 	CredentialName *string `json:"credential_name" nullable:"true" doc:"Null when the watch uses no credential"`
 	Shares         int     `json:"shares" doc:"Users the watch is shared with"`
-	OwnerRules     int     `json:"owner_rules" doc:"Owner's rules targeting this watch: a transfer deletes them"`
 }
 
 type listUserWatchesOutput struct {
@@ -40,12 +39,6 @@ type transferInput struct {
 	}
 }
 
-// DeletedRule names a rule a transfer or a purge deleted.
-type DeletedRule struct {
-	ID   string `json:"id" format:"uuid"`
-	Name string `json:"name"`
-}
-
 // transferBefore is the audited state before a transfer (006-AC18).
 type transferBefore struct {
 	OwnerID      string  `json:"owner_id"`
@@ -54,12 +47,11 @@ type transferBefore struct {
 
 // TransferResult is the state after a transfer, answered and audited; it never holds a secret (006-AC18).
 type TransferResult struct {
-	OwnerID         string        `json:"owner_id" format:"uuid"`
-	CredentialID    *string       `json:"credential_id" nullable:"true"`
-	CredentialMoved bool          `json:"credential_moved"`
-	CredentialName  *string       `json:"credential_name" nullable:"true" doc:"Its name at the new owner, suffixed on a clash"`
-	DroppedShare    bool          `json:"dropped_share" doc:"The new owner's share on the watch was removed"`
-	DeletedRules    []DeletedRule `json:"deleted_rules" doc:"The old owner's rules targeting the watch"`
+	OwnerID         string  `json:"owner_id" format:"uuid"`
+	CredentialID    *string `json:"credential_id" nullable:"true"`
+	CredentialMoved bool    `json:"credential_moved"`
+	CredentialName  *string `json:"credential_name" nullable:"true" doc:"Its name at the new owner, suffixed on a clash"`
+	DroppedShare    bool    `json:"dropped_share" doc:"The new owner's share on the watch was removed"`
 }
 
 type transferOutput struct {
@@ -89,8 +81,7 @@ func adminActor(ctx context.Context) (string, error) {
 func (s *Service) listUserWatches(ctx context.Context, in *userIDPath) (*listUserWatchesOutput, error) {
 	out := &listUserWatchesOutput{}
 	err := s.pool.QueryRow(ctx, `SELECT coalesce((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'kind', w.kind, 'credential_name', c.name,
-			'shares', (SELECT count(*) FROM watch_shares ws WHERE ws.watch_id = w.id),
-			'owner_rules', (SELECT count(*) FROM rules r WHERE r.watch_id = w.id AND r.owner_id = w.owner_id)) ORDER BY lower(w.name), w.id)
+			'shares', (SELECT count(*) FROM watch_shares ws WHERE ws.watch_id = w.id)) ORDER BY lower(w.name), w.id)
 		FROM watches w LEFT JOIN credentials c ON c.id = w.credential_id WHERE w.owner_id = u.id), '[]')
 		FROM users u WHERE u.id = $1`, in.ID).Scan(&out.Body.Items)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -102,19 +93,16 @@ func (s *Service) listUserWatches(ctx context.Context, in *userIDPath) (*listUse
 	return out, nil
 }
 
-// transferWatch moves a watch to another account in one tx (006-AC10, 006-AC11, 006-AC18). Lock order,
-// shared by every path that takes more than one of these: users (by id), rules on the watch (by id), the
-// watch, its credential. Purge, disable and sign-in lock the user first; rule edits and watch deletes lock
-// the rules before the watch; FK checks (shares, rules, credential attaches) take KEY SHARE on users,
-// which this FOR SHARE does not block. The router may wait on the rule lock here (it holds events and
-// needs KEY SHARE on rules), but a transfer never touches events, so it never waits on the router.
+// transferWatch moves a watch to another account in one tx (006-AC10, 006-AC11, 006-AC18); locks follow the
+// order in AGENTS.md. The old owner's rules on it stay and route nothing while it cannot read the watch
+// (a share or a transfer back restores routing).
 func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transferOutput, error) {
 	actor, err := adminActor(ctx)
 	if err != nil {
 		return nil, err
 	}
 	to := in.Body.ToUserID
-	res := TransferResult{OwnerID: to, DeletedRules: []DeletedRule{}}
+	res := TransferResult{OwnerID: to}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var owner string
 		err := tx.QueryRow(ctx, `SELECT owner_id::text FROM watches WHERE id = $1`, in.ID).Scan(&owner)
@@ -126,9 +114,6 @@ func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transf
 		}
 		if err := lockTransferUsers(ctx, tx, owner, to); err != nil {
 			return err
-		}
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE watch_id = $1 AND owner_id = $2 ORDER BY id FOR UPDATE`, in.ID, owner); err != nil {
-			return fmt.Errorf("lock old owner rules: %w", err)
 		}
 		var before transferBefore
 		err = tx.QueryRow(ctx, `SELECT owner_id::text, credential_id::text FROM watches WHERE id = $1 FOR UPDATE`, in.ID).
@@ -154,16 +139,6 @@ func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transf
 			return fmt.Errorf("drop share: %w", err)
 		}
 		res.DroppedShare = tag.RowsAffected() > 0
-		// The old owner cannot read the watch any more, so its rules on it could never route again.
-		rows, err := tx.Query(ctx, `DELETE FROM rules WHERE watch_id = $1 AND owner_id = $2 RETURNING id::text, name`, in.ID, before.OwnerID)
-		if err != nil {
-			return fmt.Errorf("delete old owner rules: %w", err)
-		}
-		deleted, err := pgx.CollectRows(rows, pgx.RowToStructByPos[DeletedRule])
-		if err != nil {
-			return fmt.Errorf("delete old owner rules: %w", err)
-		}
-		res.DeletedRules = append(res.DeletedRules, deleted...)
 		if _, err := tx.Exec(ctx, `UPDATE watches SET owner_id = $2, updated_at = now() WHERE id = $1`, in.ID, to); err != nil {
 			return fmt.Errorf("update watch: %w", err)
 		}

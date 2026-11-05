@@ -175,11 +175,6 @@
           "name": {
             "type": "string"
           },
-          "owner_rules": {
-            "description": "Owner's rules targeting this watch: a transfer deletes them",
-            "format": "int64",
-            "type": "integer"
-          },
           "shares": {
             "description": "Users the watch is shared with",
             "format": "int64",
@@ -191,8 +186,7 @@
           "name",
           "kind",
           "credential_name",
-          "shares",
-          "owner_rules"
+          "shares"
         ],
         "type": "object"
       },
@@ -800,23 +794,6 @@
           "created_at",
           "updated_at",
           "used_by_count"
-        ],
-        "type": "object"
-      },
-      "DeletedRule": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name"
         ],
         "type": "object"
       },
@@ -2252,16 +2229,6 @@
               "null"
             ]
           },
-          "deleted_rules": {
-            "description": "The old owner's rules targeting the watch",
-            "items": {
-              "$ref": "#/components/schemas/DeletedRule"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "dropped_share": {
             "description": "The new owner's share on the watch was removed",
             "type": "boolean"
@@ -2276,8 +2243,7 @@
           "credential_id",
           "credential_moved",
           "credential_name",
-          "dropped_share",
-          "deleted_rules"
+          "dropped_share"
         ],
         "type": "object"
       },

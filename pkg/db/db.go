@@ -22,6 +22,10 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// migrationLockTimeout bounds each lock wait of a migration: a waiting ALTER TABLE queues every later query on
+// its table behind it, so it fails and the pod restart retries. goose polls with pg_try_advisory_lock, which never waits.
+const migrationLockTimeout = "5s"
+
 // Connect opens a pool; it does not wait for the server to be reachable.
 func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	pool, err := pgxpool.New(ctx, url)
@@ -46,7 +50,11 @@ func migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("migration locker: %w", err)
 	}
-	sqlDB := stdlib.OpenDBFromPool(pool)
+	// Own connections, closed below: a setting on a pooled connection would outlive the migrations. A startup
+	// parameter is also what RESET returns to, should a file SET its own wait.
+	cfg := pool.Config().ConnConfig
+	cfg.RuntimeParams["lock_timeout"] = migrationLockTimeout
+	sqlDB := stdlib.OpenDB(*cfg)
 	defer func() { _ = sqlDB.Close() }()
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys, goose.WithSessionLocker(locker))
 	if err != nil {

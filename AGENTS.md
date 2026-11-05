@@ -29,7 +29,7 @@
   (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got. Its Talk endpoint checks
   the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
-  runs before the parallel specs and leaves 3 events in bob's inbox; the a11y, 375 px and keyboard specs run
+  runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005); the a11y, 375 px and keyboard specs run
   as bob, and only the keyboard spec touches the rc promotion item.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by

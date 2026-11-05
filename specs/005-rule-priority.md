@@ -1,6 +1,6 @@
 # 005 — High priority rules
 
-**Status**: approved
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-05
 
@@ -17,7 +17,8 @@ hands, with the filters they already write, for example `len(event.payload.cves)
 
 ## Scope
 
-- `priority` on rules: `normal` (default, also for existing rules) or `high`; API and rule form.
+- `priority` on rules: `normal` (default, also for existing rules) or `high`; API, rule form, and a badge in
+  the rules list.
 - `priority` on inbox items, set when the event is routed. Several matching rules of one user still make one
   item, and it is high if any of them is high.
 - Inbox: badge on high items, in the list and the detail panel; a filter for high items; the list order stays
@@ -35,18 +36,18 @@ hands, with the filters they already write, for example `len(event.payload.cves)
 
 ## Acceptance criteria
 
-- [ ] **AC1** A rule is created and edited with a priority through the API and the form; omitted means `normal`,
+- [x] **AC1** A rule is created and edited with a priority through the API and the form; omitted means `normal`,
   an unknown value is a 400, existing rules read `normal`.
-- [ ] **AC2** An event matched by a high rule creates an inbox item with priority `high`; one matched only by
+- [x] **AC2** An event matched by a high rule creates an inbox item with priority `high`; one matched only by
   normal rules is `normal`.
-- [ ] **AC3** An event matched by a normal and a high rule of the same user makes one item, `high`, whatever the
+- [x] **AC3** An event matched by a normal and a high rule of the same user makes one item, `high`, whatever the
   order the rules run in.
-- [ ] **AC4** Two users watching the same target with different rules see their own priority for the same event.
-- [ ] **AC5** Inbox items show a badge when high, conveyed by text and not by color alone; the high priority
+- [x] **AC4** Two users watching the same target with different rules see their own priority for the same event.
+- [x] **AC5** Inbox items show a badge when high, conveyed by text and not by color alone; the high priority
   filter lists only those, with working pagination.
-- [ ] **AC6** Editing a rule's priority leaves existing items unchanged and applies to the next events.
-- [ ] **AC7** The rule form control and the badge pass the a11y (light and dark), 375 px, keyboard and CSP checks.
-- [ ] **AC8** A rule's priority change is in the audit log.
+- [x] **AC6** Editing a rule's priority leaves existing items unchanged and applies to the next events.
+- [x] **AC7** The rule form control and the badge pass the a11y (light and dark), 375 px, keyboard and CSP checks.
+- [x] **AC8** A rule's priority change is in the audit log.
 
 ## Phases
 

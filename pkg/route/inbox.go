@@ -26,14 +26,16 @@ type InboxItem struct {
 	CreatedAt  time.Time   `json:"created_at"`
 	ReadAt     *time.Time  `json:"read_at" nullable:"true"`
 	ArchivedAt *time.Time  `json:"archived_at" nullable:"true"`
+	Priority   string      `json:"priority" enum:"normal,high" doc:"Set once, when the event was routed"`
 	Event      watch.Event `json:"event"`
 	Watch      WatchRef    `json:"watch"`
 }
 
 type listInboxInput struct {
-	State  string `query:"state" enum:"unread,all,archived" default:"all" doc:"unread: not read, not archived; all: not archived"`
-	Cursor string `query:"cursor" doc:"next_cursor of the previous page"`
-	Limit  int    `query:"limit" minimum:"1" maximum:"200" default:"50"`
+	State    string `query:"state" enum:"unread,all,archived" default:"all" doc:"unread: not read, not archived; all: not archived"`
+	Priority string `query:"priority" enum:"normal,high" doc:"Only items of this priority; absent: all"`
+	Cursor   string `query:"cursor" doc:"next_cursor of the previous page"`
+	Limit    int    `query:"limit" minimum:"1" maximum:"200" default:"50"`
 }
 
 type listInboxOutput struct {
@@ -109,7 +111,7 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 	if err != nil {
 		return nil, err
 	}
-	sql := `SELECT i.id, i.created_at, i.read_at, i.archived_at, e.id, e.type, e.occurred_at, e.observed_at, e.payload,
+	sql := `SELECT i.id, i.created_at, i.read_at, i.archived_at, i.priority, e.id, e.type, e.occurred_at, e.observed_at, e.payload,
 			w.id::text, w.name, w.kind
 		FROM inbox_items i JOIN events e ON e.id = i.event_id JOIN watches w ON w.id = e.watch_id
 		WHERE i.user_id = @me AND ` + watch.ReadableSQL("w", "@me")
@@ -121,6 +123,13 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 		sql += " AND i.archived_at IS NOT NULL"
 	default:
 		sql += " AND i.archived_at IS NULL"
+	}
+	// Literals: a generic plan with a parameter could not use the partial index on high items.
+	switch in.Priority {
+	case priorityHigh:
+		sql += " AND i.priority = 'high'"
+	case priorityNormal:
+		sql += " AND i.priority = 'normal'"
 	}
 	if in.Cursor != "" {
 		before, err := strconv.ParseInt(in.Cursor, 10, 64)
@@ -137,7 +146,7 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (InboxItem, error) {
 		var it InboxItem
 		e := &it.Event
-		err := r.Scan(&it.ID, &it.CreatedAt, &it.ReadAt, &it.ArchivedAt, &e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload,
+		err := r.Scan(&it.ID, &it.CreatedAt, &it.ReadAt, &it.ArchivedAt, &it.Priority, &e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload,
 			&it.Watch.ID, &it.Watch.Name, &it.Watch.Kind)
 		return it, err
 	})

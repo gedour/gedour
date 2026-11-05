@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { expect, gate, test, UPSTREAM } from "./fixtures";
+import { expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE });
 
@@ -114,6 +114,49 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(item).toHaveAttribute("data-unread", "false");
   await page.reload();
   await expect(item).toHaveAttribute("data-unread", "false");
+});
+
+// 005-AC7: the rule form's priority and the inbox filter from the keyboard, focus always visible.
+test("set a rule's priority and filter the inbox, by keyboard only", async ({ page }) => {
+  const t = tag();
+  await page.goto("/rules/new");
+  await tabTo(page, page.getByLabel("Name"));
+  await page.keyboard.type(`Kbd high ${t}`);
+  const watches = page.getByLabel("Watches");
+  await tabTo(page, watches);
+  await page.keyboard.type(SEED.watch);
+  await expect(watches.locator("option:checked")).toHaveText(SEED.watch);
+  const priority = page.getByLabel("Priority");
+  await tabTo(page, priority);
+  await page.keyboard.type("High");
+  await expect(priority).toHaveValue("high");
+  await tabTo(page, page.getByLabel("Expression"));
+  // Matches nothing: bob's seeded items stay as they are.
+  await page.keyboard.type('event.type == "none"');
+  await expect(page.getByText("Valid filter")).toBeVisible();
+  await tabTo(page, page.getByRole("button", { name: "Create rule" }));
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/rules$/);
+  await expect(
+    page
+      .getByRole("listitem")
+      .filter({ hasText: `Kbd high ${t}` })
+      .getByText("High priority"),
+  ).toBeVisible();
+
+  await tabTo(page, nav(page, /^Inbox/), true);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+  const filter = page.getByRole("button", { name: "High priority", exact: true });
+  await tabTo(page, filter);
+  await page.keyboard.press("Enter");
+  await expect(filter).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(/priority=high/);
+  const rows = page.getByRole("list", { name: /^Inbox, / }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  await page.keyboard.press("Space");
+  await expect(filter).toHaveAttribute("aria-pressed", "false");
+  await expect(rows).toHaveCount(3);
 });
 
 // 003-AC5: the Talk form's type radio and Silent switch work from the keyboard.

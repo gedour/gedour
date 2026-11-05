@@ -65,6 +65,8 @@ for (const theme of ["light", "dark"] as const) {
       const { watch, rule } = await seedIds(page);
       const views: [string, string][] = [
         ["/inbox?state=all", "Inbox"],
+        // 005-AC7: the filter pressed and the badge, the high rule's badge in /rules.
+        ["/inbox?priority=high", "Inbox"],
         ["/watches", "Watches"],
         [`/watches/${watch}`, SEED.watch],
         ["/watches/new", "New watch"],
@@ -121,6 +123,28 @@ for (const theme of ["light", "dark"] as const) {
         await expect.poll(() => switchContrast(silent)).toBeGreaterThanOrEqual(3);
         await silent.click();
       }
+    });
+
+    // 005-AC7: the badge in the panel, the form's control on a high rule.
+    test("the high priority panel and rule form have no serious axe violation", async ({
+      page,
+    }) => {
+      await page.goto("/inbox?priority=high");
+      await page
+        .getByRole("list", { name: /^Inbox, / })
+        .getByRole("button")
+        .first()
+        .click();
+      await expect(page.getByRole("complementary").getByText("High priority")).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+
+      const rules = (await (await (await api(page))("GET", "/api/v1/rules")).json()).items as {
+        id: string;
+        name: string;
+      }[];
+      await page.goto(`/rules/${rules.find((r) => r.name === SEED.highRule)?.id}`);
+      await expect(page.getByLabel("Priority")).toHaveValue("high");
+      expect(await violations(page)).toEqual([]);
     });
 
     test("the signed-out page has no serious axe violation", async ({ page }) => {

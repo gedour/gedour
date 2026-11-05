@@ -457,6 +457,14 @@
             "minLength": 1,
             "type": "string"
           },
+          "priority": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "high"
+            ],
+            "type": "string"
+          },
           "watch_id": {
             "description": "A watch the caller can read; empty for all of them",
             "type": "string"
@@ -996,6 +1004,14 @@
             "format": "int64",
             "type": "integer"
           },
+          "priority": {
+            "description": "Set once, when the event was routed",
+            "enum": [
+              "normal",
+              "high"
+            ],
+            "type": "string"
+          },
           "read_at": {
             "format": "date-time",
             "type": [
@@ -1012,6 +1028,7 @@
           "created_at",
           "read_at",
           "archived_at",
+          "priority",
           "event",
           "watch"
         ],
@@ -1557,6 +1574,14 @@
           "name": {
             "type": "string"
           },
+          "priority": {
+            "description": "high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs",
+            "enum": [
+              "normal",
+              "high"
+            ],
+            "type": "string"
+          },
           "updated_at": {
             "format": "date-time",
             "type": "string"
@@ -1584,6 +1609,7 @@
           "watch_name",
           "filter",
           "enabled",
+          "priority",
           "channel_ids",
           "created_at",
           "updated_at"
@@ -1890,6 +1916,13 @@
           "name": {
             "maxLength": 200,
             "minLength": 1,
+            "type": "string"
+          },
+          "priority": {
+            "enum": [
+              "normal",
+              "high"
+            ],
             "type": "string"
           },
           "watch_id": {
@@ -2902,6 +2935,20 @@
                 "unread",
                 "all",
                 "archived"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items of this priority; absent: all",
+            "explode": false,
+            "in": "query",
+            "name": "priority",
+            "schema": {
+              "description": "Only items of this priority; absent: all",
+              "enum": [
+                "normal",
+                "high"
               ],
               "type": "string"
             }

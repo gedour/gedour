@@ -93,8 +93,8 @@ type routedEvent struct {
 }
 
 type matchRule struct {
-	id, owner, filter string
-	channels          []string
+	id, owner, filter, priority string
+	channels                    []string
 }
 
 func (r *Router) program(src string) (*filter.Program, error) {
@@ -171,7 +171,7 @@ func (r *Router) RouteOnce(ctx context.Context) (int, error) {
 // routeEvent evaluates the enabled rules of every user who can read the event's watch right now: a
 // revoked share stops routing at once.
 func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notify map[string]bool) error {
-	rows, err := tx.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter,
+	rows, err := tx.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter, r.priority,
 			COALESCE((SELECT array_agg(rc.channel_id::text) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}')
 		FROM rules r JOIN watches w ON w.id = $1
 		WHERE r.enabled AND (r.watch_id IS NULL OR r.watch_id = $1) AND `+watch.ReadableSQL("w", "r.owner_id")+`
@@ -181,13 +181,15 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 	}
 	rules, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (matchRule, error) {
 		var m matchRule
-		err := row.Scan(&m.id, &m.owner, &m.filter, &m.channels)
+		err := row.Scan(&m.id, &m.owner, &m.filter, &m.priority, &m.channels)
 		return m, err
 	})
 	if err != nil {
 		return err
 	}
 	env := envOf(x.ev, x.w)
+	// Decided over all of a user's rules before the insert, as the item is written once.
+	items := map[string]string{}
 	for _, rule := range rules {
 		matched, err := r.match(rule, env)
 		if err != nil {
@@ -198,19 +200,24 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 		if !matched {
 			continue
 		}
-		// One item per user per event, however many of their rules match.
-		tag, err := tx.Exec(ctx, `INSERT INTO inbox_items (user_id, event_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, rule.owner, x.ev.ID)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 1 {
-			notify[rule.owner] = true
+		if items[rule.owner] != priorityHigh {
+			items[rule.owner] = rule.priority
 		}
 		if len(rule.channels) > 0 {
 			if _, err := tx.Exec(ctx, `INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT $1, $2, unnest($3::uuid[])
 				ON CONFLICT (event_id, channel_id) DO NOTHING`, x.ev.ID, rule.id, rule.channels); err != nil {
 				return err
 			}
+		}
+	}
+	for owner, priority := range items {
+		// One item per user per event, however many of their rules match. DO NOTHING: a replay keeps the stored level.
+		tag, err := tx.Exec(ctx, `INSERT INTO inbox_items (user_id, event_id, priority) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, owner, x.ev.ID, priority)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 1 {
+			notify[owner] = true
 		}
 	}
 	return nil

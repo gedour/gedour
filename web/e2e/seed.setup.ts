@@ -9,7 +9,9 @@ test("seed bob's inbox", async ({ page }) => {
   // Idempotent: a previous seed (a retry, a reused database) is removed first, its inbox items with it.
   const list = async (path: string) =>
     ((await (await call("GET", path)).json()).items as { id: string; name: string }[]) ?? [];
-  for (const r of (await list("/api/v1/rules")).filter((r) => r.name === SEED.rule)) {
+  for (const r of (await list("/api/v1/rules")).filter((r) =>
+    [SEED.rule, SEED.highRule].includes(r.name),
+  )) {
     expect((await call("DELETE", `/api/v1/rules/${r.id}`)).ok()).toBe(true);
   }
   for (const w of (await list("/api/v1/watches")).filter((w) => w.name === SEED.watch)) {
@@ -34,9 +36,21 @@ test("seed bob's inbox", async ({ page }) => {
   // No filter, no channel: every event of the watch lands in the inbox.
   const rule = await call("POST", "/api/v1/rules", { name: SEED.rule, watch_id: id });
   expect(rule.status()).toBe(201);
+  // 005-AC2, 005-AC3: its events also match the rule above, and still make one item each, high.
+  const high = await call("POST", "/api/v1/rules", {
+    name: SEED.highRule,
+    watch_id: id,
+    filter: "len(event.payload.cves) > 0",
+    priority: "high",
+  });
+  expect(high.status()).toBe(201);
   await setFixture(page, "b");
   expect((await call("POST", `/api/v1/watches/${id}/run`)).status()).toBe(202);
   // The fixture's 3 changes, unfiltered: exactly 3 new unread items.
   await expect.poll(unread, { timeout: 15_000 }).toBe(before + 3);
+  const items = (await (await call("GET", "/api/v1/inbox?priority=high")).json()).items as {
+    event: { payload: { tag: string } };
+  }[];
+  expect(items.map((i) => i.event.payload.tag).sort()).toEqual(["v2.103.3", "v2.105.0"]);
   await setFixture(page, "a");
 });

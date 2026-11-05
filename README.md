@@ -138,6 +138,9 @@ a failed dev sign-in answers a plain 500.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule whose owner can
   read the watch now (own or shared) is evaluated; a match adds one inbox item per user and one delivery
   per channel. A filter failing on an event counts as no match (`gedour_rule_eval_errors_total`).
+  A rule's `priority` is `normal` or `high`: an event taken by a high rule of a user is high in that user's
+  inbox, with a badge and a "High priority" filter, for example on `len(event.payload.cves) > 0`. The level is
+  set once at routing: editing a rule leaves existing items as they are. The list stays newest first.
   Events stored before this version are not routed.
 - Deliveries retry after 30 s, 2 min, 10 min and 30 min; the 5th failure is final (`dead`). A failed or
   dead delivery can be retried by hand. Lease and backoff use the database clock. A delivery whose
@@ -408,7 +411,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `POST /api/v1/scripts/{id}/dry-run` and `POST /api/v1/scripts/dry-run {source}`, each with
   `{event_id}` (a readable event) or `{sample: {type, payload, occurred_at, watch}}`: answers
   `{ok, outcome, error, logs, result, fetches, duration_ms}`.
-- `GET /api/v1/inbox?state=unread|all|archived&cursor=`, `GET /api/v1/inbox/count`,
+- `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&cursor=`, `GET /api/v1/inbox/count`,
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer

@@ -38,6 +38,7 @@ test("main views fit 375 px", async ({ page }) => {
   for (const path of [
     `/watches/${seeded}`,
     "/inbox?state=all",
+    "/inbox?priority=high",
     "/watches",
     "/watches/new",
     "/rules",
@@ -98,6 +99,34 @@ test("the inbox panel fits 375 px with 64 KiB of notes", async ({ page }) => {
     .first()
     .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
   expect(details.scroll).toBeLessThanOrEqual(details.client);
+  await expectNoHorizontalScroll(page);
+});
+
+// 005-AC7: the filter by touch at 375 px, the badge in the rows and the dialog, the form's control.
+test("high priority at 375 px", async ({ page }) => {
+  await page.goto("/inbox?state=all");
+  const filter = page.getByRole("button", { name: "High priority", exact: true });
+  await expect(filter).toBeInViewport();
+  await expectNoHorizontalScroll(page);
+  await filter.tap();
+  await expect(page).toHaveURL(/priority=high/);
+  const rows = page.getByRole("list", { name: /^Inbox, / }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  // Rows clip their overflow, which the page's scroll width would not show.
+  await expect(rows.first().getByText("High priority")).toBeInViewport({ ratio: 1 });
+  await expect(rows.first().locator("time")).toBeInViewport({ ratio: 1 });
+  await expectNoHorizontalScroll(page);
+  await shot(page, "high-priority");
+  await rows.first().getByRole("button").first().tap();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("High priority")).toBeInViewport({ ratio: 1 });
+  await expectNoHorizontalScroll(page);
+  await dialog.getByRole("button", { name: "Close" }).tap();
+
+  await page.goto("/rules/new");
+  await expect(page.getByLabel("Priority")).toBeVisible();
+  await page.getByLabel("Priority").selectOption("high");
+  await expect(page.getByLabel("Priority")).toHaveValue("high");
   await expectNoHorizontalScroll(page);
 });
 

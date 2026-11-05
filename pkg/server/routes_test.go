@@ -16,8 +16,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap"
+
 	"github.com/gedour/gedour/pkg/filter"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/route"
 )
 
 type channelJSON struct {
@@ -37,6 +41,7 @@ type ruleJSON struct {
 	WatchName  *string  `json:"watch_name"`
 	Filter     string   `json:"filter"`
 	Enabled    bool     `json:"enabled"`
+	Priority   string   `json:"priority"`
 	ChannelIDs []string `json:"channel_ids"`
 }
 
@@ -666,9 +671,10 @@ func TestRulePreview(t *testing.T) {
 
 type inboxJSON struct {
 	Items []struct {
-		ID     int64   `json:"id"`
-		ReadAt *string `json:"read_at"`
-		Event  struct {
+		ID       int64   `json:"id"`
+		ReadAt   *string `json:"read_at"`
+		Priority string  `json:"priority"`
+		Event    struct {
 			Type string `json:"type"`
 		} `json:"event"`
 		Watch struct{ Name string } `json:"watch"`
@@ -757,6 +763,191 @@ func TestInboxAPI(t *testing.T) {
 		a.problemOf(t, alice, http.MethodGet, "/api/v1/inbox?"+q, nil, http.StatusBadRequest)
 	}
 	a.problemOf(t, alice, http.MethodPost, "/api/v1/inbox/read", map[string]any{"ids": []int64{}}, http.StatusBadRequest)
+}
+
+// 005-AC1: priority through the API, default normal, unknown values refused; a row without one reads normal.
+// 005-AC8: a change shows in the audit log.
+func TestRulePriority(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var r ruleJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "omitted"}, http.StatusCreated, &r)
+	if r.Priority != "normal" {
+		t.Fatalf("omitted: %q", r.Priority)
+	}
+	var high ruleJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "high", "priority": "high"}, http.StatusCreated, &high)
+	if high.Priority != "high" {
+		t.Fatalf("created high: %q", high.Priority)
+	}
+	for _, bad := range []any{"urgent", "HIGH", "", 1} {
+		a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "bad", "priority": bad}, http.StatusBadRequest)
+		a.problemOf(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": bad}, http.StatusBadRequest)
+	}
+	a.exec(t, `INSERT INTO rules (owner_id, name) VALUES ($1, 'stored')`, alice.id)
+	var list struct{ Items []ruleJSON }
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/rules", nil, http.StatusOK, &list)
+	want := map[string]string{"high": "high", "omitted": "normal", "stored": "normal"}
+	if len(list.Items) != len(want) {
+		t.Fatalf("list: %+v", list.Items)
+	}
+	for _, it := range list.Items {
+		if it.Priority != want[it.Name] {
+			t.Fatalf("list, %s: %q", it.Name, it.Priority)
+		}
+	}
+
+	var upd ruleJSON
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": "high"}, http.StatusOK, &upd)
+	if upd.Priority != "high" {
+		t.Fatalf("patched: %q", upd.Priority)
+	}
+	const changed = `SELECT count(*) FROM audit_log WHERE action = 'rule.updated' AND target_id = $1 AND before->>'priority' = $2 AND after->>'priority' = $3`
+	if n := a.countRows(t, changed, r.ID, "normal", "high"); n != 1 {
+		t.Fatalf("audit of normal to high: %d rows", n)
+	}
+	// A patch that does not name the priority keeps it.
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"enabled": false}, http.StatusOK, &upd)
+	if upd.Priority != "high" {
+		t.Fatalf("patched without priority: %q", upd.Priority)
+	}
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": "normal"}, http.StatusOK, &upd)
+	if n := a.countRows(t, changed, r.ID, "high", "normal"); n != 1 {
+		t.Fatalf("audit of high to normal: %d rows", n)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'rule.created' AND target_id = $1 AND after->>'priority' = 'high'`, high.ID); n != 1 {
+		t.Fatalf("audit of a created high rule: %d rows", n)
+	}
+}
+
+// 005-AC6: a PATCH of a rule's priority, both ways, leaves stored items as they are and applies to the next event.
+func TestRulePriorityEditKeepsItems(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	var r ruleJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "all", "watch_id": w.ID, "priority": "high"}, http.StatusCreated, &r)
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second)
+	nextEvent := func(key string) {
+		t.Helper()
+		a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', $2)`, w.ID, key)
+		if n, err := router.RouteOnce(context.Background()); err != nil || n != 1 {
+			t.Fatalf("route: %d, %v", n, err)
+		}
+	}
+	levels := func(step string, want ...string) {
+		t.Helper()
+		var page inboxJSON
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox", nil, http.StatusOK, &page)
+		got := []string{}
+		for _, it := range page.Items {
+			got = append(got, it.Priority)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: levels newest first %v, want %v", step, got, want)
+		}
+	}
+	patch := func(priority string) {
+		t.Helper()
+		a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": priority}, http.StatusOK, nil)
+	}
+
+	nextEvent("1")
+	levels("seeded", "high")
+	patch("normal")
+	levels("after high to normal", "high")
+	nextEvent("2")
+	levels("next event under normal", "normal", "high")
+	patch("high")
+	levels("after normal to high", "normal", "high")
+	nextEvent("3")
+	levels("next event under high", "high", "normal", "high")
+}
+
+// 005-AC5: the filter lists one level, with state and cursor pagination, newest first; items carry their level.
+func TestInboxPriorityFilter(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
+	var w, bobs watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &bobs)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 'release.published', '{}', g::text FROM generate_series(1, 6) g`, w.ID)
+	// Oldest to newest: high, normal, high, normal, high, high.
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id, priority)
+		SELECT $1, id, CASE WHEN row_number() OVER (ORDER BY id) IN (2, 4) THEN 'normal' ELSE 'high' END FROM events ORDER BY id`, alice.id)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', 'b')`, bobs.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id, priority) SELECT $1, id, 'high' FROM events WHERE watch_id = $2`, bob.id, bobs.ID)
+
+	all := a.inboxIDs(t, alice, "all")
+	if len(all) != 6 {
+		t.Fatalf("all: %v", all)
+	}
+	wantHigh := []int64{all[0], all[1], all[3], all[5]}
+	wantNormal := []int64{all[2], all[4]}
+	get := func(q string) inboxJSON {
+		t.Helper()
+		var page inboxJSON
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?"+q, nil, http.StatusOK, &page)
+		return page
+	}
+	ids := func(page inboxJSON, level string) []int64 {
+		t.Helper()
+		out := []int64{}
+		for _, it := range page.Items {
+			if it.Priority != level {
+				t.Fatalf("item %d: priority %q, want %q", it.ID, it.Priority, level)
+			}
+			out = append(out, it.ID)
+		}
+		return out
+	}
+	if got := ids(get("priority=high"), "high"); !slices.Equal(got, wantHigh) {
+		t.Fatalf("high: %v, want %v", got, wantHigh)
+	}
+	if got := ids(get("priority=normal"), "normal"); !slices.Equal(got, wantNormal) {
+		t.Fatalf("normal: %v, want %v", got, wantNormal)
+	}
+
+	// Pages stay within the filter, none short and none past the last high item.
+	var paged []int64
+	for cursor, n := "", 0; ; n++ {
+		page := get("priority=high&limit=3&cursor=" + cursor)
+		paged = append(paged, ids(page, "high")...)
+		if page.NextCursor == "" {
+			if n != 1 {
+				t.Fatalf("%d extra pages", n)
+			}
+			break
+		}
+		if len(page.Items) != 3 {
+			t.Fatalf("short page: %+v", page)
+		}
+		cursor = page.NextCursor
+	}
+	if !slices.Equal(paged, wantHigh) {
+		t.Fatalf("paged: %v, want %v", paged, wantHigh)
+	}
+	if page := get("priority=high&limit=4"); page.NextCursor != "" {
+		t.Fatalf("the normal items behind the last high one made a next page: %+v", page)
+	}
+
+	// With the state filter.
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/read", map[string]any{"ids": []int64{wantHigh[0], wantNormal[0]}}, http.StatusOK, nil)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/archive", map[string]any{"ids": []int64{wantHigh[3], wantNormal[1]}}, http.StatusOK, nil)
+	if got := ids(get("state=unread&priority=high"), "high"); !slices.Equal(got, wantHigh[1:3]) {
+		t.Fatalf("unread high: %v", got)
+	}
+	if got := ids(get("state=archived&priority=high"), "high"); !slices.Equal(got, wantHigh[3:]) {
+		t.Fatalf("archived high: %v", got)
+	}
+	if got := ids(get("state=all&priority=high"), "high"); !slices.Equal(got, wantHigh[:3]) {
+		t.Fatalf("all high: %v", got)
+	}
+	if got := ids(get("state=unread&priority=high&limit=1"), "high"); !slices.Equal(got, wantHigh[1:2]) {
+		t.Fatalf("unread high, first page: %v", got)
+	}
+	a.problemOf(t, alice, http.MethodGet, "/api/v1/inbox?priority=urgent", nil, http.StatusBadRequest)
 }
 
 type deliveriesJSON struct {

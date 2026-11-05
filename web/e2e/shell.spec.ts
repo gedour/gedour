@@ -100,6 +100,8 @@ test("menus, tooltips and the drawer open without CSP violations", async ({ page
   await expect(page.getByRole("menu")).toBeHidden();
 
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  // Hovering during the width transition would leave the pointer past the link once it ends.
+  await expect(sidebar(page)).toHaveCSS("width", "64px");
   await page.getByRole("link", { name: "Watches" }).hover();
   await expect(page.getByRole("tooltip", { name: "Watches" })).toBeVisible();
 

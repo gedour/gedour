@@ -73,7 +73,7 @@ if [[ "$(printf '%s\n' "${MIN_KIND}" "${kind_version#v}" | sort -V | head -1)" !
   fail "${KIND} is ${kind_version}: its node runs Kubernetes < 1.30 (no preStop sleep action); need kind >= v${MIN_KIND} (KIND=<path>)"
 fi
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || fail "missing image ${IMAGE}: run 'make docker-build'"
-if "${KIND}" get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
+if "${KIND}" get clusters 2>/dev/null | grep -x "${CLUSTER}" >/dev/null; then
   fail "kind cluster ${CLUSTER} already exists: delete it or set K8S_SMOKE_CLUSTER"
 fi
 for port in "${WEB_PORT}" "${FAKE_PORT}" "${COMPOSE_HTTP_PORT}" "${COMPOSE_METRICS_PORT}" "${COMPOSE_DB_PORT}"; do
@@ -112,7 +112,7 @@ kubectl apply -k "${ROOT}/deploy/k8s" --dry-run=server >/dev/null || fail "deplo
 # (checked with the restart count below).
 kubectl apply -k "${ROOT}/deploy/k8s/test" >/dev/null || fail "kubectl apply -k deploy/k8s/test failed"
 start=${SECONDS}
-db_wait() { kubectl logs deployment/gedour-web 2>/dev/null | grep -q '"msg":"db_unreachable"'; }
+db_wait() { kubectl logs deployment/gedour-web 2>/dev/null | grep '"msg":"db_unreachable"' >/dev/null; }
 for _ in $(seq 1 120); do
   db_wait && break
   sleep 1
@@ -264,10 +264,10 @@ fi
 readonly CBASE="http://127.0.0.1:${COMPOSE_HTTP_PORT}"
 ui_up() { curl -sf "${CBASE}/healthz" >/dev/null; }
 wait_for 60 ui_up || fail "compose gedour never answered /healthz"
-curl -sf "${CBASE}/" | grep -q '<div id="root">' || fail "compose gedour does not serve the UI"
+curl -sf "${CBASE}/" | grep '<div id="root">' >/dev/null || fail "compose gedour does not serve the UI"
 who="$(curl -sf "${CBASE}/api/v1/me" | jq -r .email)" || fail "compose GET /api/v1/me failed"
 [[ "${who}" == "dev@local" ]] || fail "compose dev mode user is ${who}, want dev@local"
-curl -sf "http://127.0.0.1:${COMPOSE_METRICS_PORT}/metrics" | grep -q '^gedour_build_info' || fail "compose /metrics has no gedour_build_info"
+curl -sf "http://127.0.0.1:${COMPOSE_METRICS_PORT}/metrics" | grep '^gedour_build_info' >/dev/null || fail "compose /metrics has no gedour_build_info"
 echo "compose: UI served, signed in as ${who}"
 
 echo "k8s-smoke: OK"

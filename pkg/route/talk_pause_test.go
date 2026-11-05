@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,6 +162,74 @@ func TestTalkPauseBurst(t *testing.T) {
 	e.rounds(t, 2)
 	if n := hits.Load(); n != 1 {
 		t.Errorf("%d requests, want 1", n)
+	}
+}
+
+// 003-AC8: a send cut before the 401 keeps its one attempt, then waits behind the pause: one 401, no more
+// requests, whichever delivery got the failure.
+func TestTalkPauseAfterFailedSend(t *testing.T) {
+	for _, tt := range []struct {
+		name, want string
+		fail       func(t *testing.T, w http.ResponseWriter)
+	}{
+		{"connection reset", "connection reset by peer", func(t *testing.T, w http.ResponseWriter) {
+			t.Helper()
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.(*net.TCPConn).SetLinger(0) // Close sends RST, not FIN
+			_ = conn.Close()
+		}},
+		{"server error", "HTTP 500", func(_ *testing.T, w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newTalkEnv(t)
+			var hits, refused atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if hits.Add(1) == 1 {
+					tt.fail(t, w)
+					return
+				}
+				refused.Add(1)
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			defer srv.Close()
+			e.url = srv.URL
+			ch := e.channel(t, "room", wrongTalkSecret)
+			e.events(t, 2, ch)
+			// No makeDue: the failed delivery stays in its backoff, as on the real clock.
+			for range 200 {
+				if _, err := e.d.DeliverOnce(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if e.status(t, ch, "dead") == 1 {
+					break
+				}
+				time.Sleep(e.d.poll)
+			}
+			var failed, dead int64
+			e.scalar(t, &failed, `SELECT id FROM deliveries WHERE channel_id = $1 AND status = 'failed'`, ch)
+			e.scalar(t, &dead, `SELECT id FROM deliveries WHERE channel_id = $1 AND status = 'dead'`, ch)
+			got := e.delivery(t, failed)
+			if got.attempts != 1 || !strings.Contains(*got.lastErr, tt.want) {
+				t.Errorf("failed send: %d attempts, %q", got.attempts, *got.lastErr)
+			}
+			if got := e.delivery(t, dead); got.attempts != 1 || !strings.HasSuffix(*got.lastErr, ": HTTP 401") {
+				t.Errorf("refused send: %d attempts, %q", got.attempts, *got.lastErr)
+			}
+			e.rounds(t, MaxAttempts+2)
+			if got := e.delivery(t, failed); got.status != "failed" || got.attempts != 1 || *got.lastErr != talkPausedError {
+				t.Errorf("behind the pause: %s, %d attempts, %q", got.status, got.attempts, *got.lastErr)
+			}
+			if n := refused.Load(); n != 1 {
+				t.Errorf("%d requests refused, want 1", n)
+			}
+			if n := hits.Load(); n != 2 {
+				t.Errorf("%d requests, want the failed one and the refused one", n)
+			}
+		})
 	}
 }
 

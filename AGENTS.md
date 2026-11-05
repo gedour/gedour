@@ -64,6 +64,7 @@
   pushes, which publish `develop-<sha>-<run>` images).
   Actions are pinned to commit SHAs with a `# vX.Y.Z` comment; Dependabot bumps them.
 - Migrations: goose SQL files in `pkg/db/migrations`, embedded, applied at startup under a PG advisory lock.
+  Each lock wait stops at `lock_timeout` 5 s (`migrationLockTimeout`), then the pod restart retries. A large index build goes in its own NO TRANSACTION file with `CONCURRENTLY`, after a `DROP INDEX CONCURRENTLY IF EXISTS` for the retry; its wait on older transactions, on any table, counts too (`SET lock_timeout = 0` then `RESET lock_timeout` around it if it must outwait them).
   Never edit an applied migration; add a new numbered file.
 - Version vars are injected with `-X 'main.<Var>=…'` (never the import path).
 - Frontend: `fetch` only in `web/src/api/`; API resource types come from `schema.gen.ts` (via `types/api.ts`); UI primitives in `web/src/components/ui` (shadcn-style, Radix).

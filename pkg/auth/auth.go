@@ -6,8 +6,11 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -85,7 +88,7 @@ type Service struct {
 	// exchangeTimeout bounds the callback's calls to the provider (token, JWKS); a field for tests.
 	exchangeTimeout time.Duration
 
-	publicURL string
+	publicURLs []publicURL // the first one serves requests on an unlisted host
 
 	rolesClaim   string
 	requiredRole string
@@ -127,16 +130,37 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 		}
 		s.issuer = cfg.OIDCIssuer
 		s.stateKey = key
-		s.publicURL = strings.TrimRight(cfg.PublicURL, "/")
+		for _, raw := range cfg.PublicURLs() {
+			u, err := url.Parse(raw)
+			if err != nil || u.Host == "" {
+				return nil, fmt.Errorf("GEDOUR_PUBLIC_URL %q: must be an absolute URL", raw)
+			}
+			s.publicURLs = append(s.publicURLs, publicURL{host: u.Host, base: strings.TrimRight(raw, "/")})
+		}
+		if len(s.publicURLs) == 0 {
+			return nil, errors.New("GEDOUR_PUBLIC_URL is required with OIDC")
+		}
 		s.rolesClaim, s.requiredRole, s.adminRole = cfg.OIDCRolesClaim, cfg.OIDCRequiredRole, cfg.OIDCAdminRole
 		s.oauth = oauth2.Config{
 			ClientID:     cfg.OIDCClientID,
 			ClientSecret: cfg.OIDCClientSecret,
-			RedirectURL:  s.publicURL + "/auth/callback",
 			Scopes:       []string{oidc.ScopeOpenID, "email", "profile"},
 		}
 	}
 	return s, nil
+}
+
+type publicURL struct{ host, base string }
+
+// publicURL picks the configured base URL whose host:port is r.Host, else the first one.
+// Security: r.Host only selects among configured URLs, never builds one (host-header injection).
+func (s *Service) publicURL(r *http.Request) string {
+	for _, p := range s.publicURLs {
+		if strings.EqualFold(p.host, r.Host) {
+			return p.base
+		}
+	}
+	return s.publicURLs[0].base
 }
 
 func (s *Service) sessionCookieName() string {

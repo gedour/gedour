@@ -56,7 +56,7 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `GEDOUR_OIDC_ROLES_CLAIM` | `roles` | ID token claim holding the user's roles: a top-level key (`https://example.com/roles` works), else a dotted path (`realm_access.roles`) |
 | `GEDOUR_OIDC_REQUIRED_ROLE` | | Role needed to sign in; empty lets any authenticated user in |
 | `GEDOUR_OIDC_ADMIN_ROLE` | | Role that makes an admin, and also grants sign-in; empty means no admin |
-| `GEDOUR_PUBLIC_URL` | (required with OIDC) | Browser-facing base URL; the redirect URI is `<url>/auth/callback` |
+| `GEDOUR_PUBLIC_URL` | (required with OIDC) | Comma-separated browser-facing base URLs, one per host (e.g. `https://gedour.example.com,https://gedour.internal.example.com`). A request uses the entry whose `host:port` matches its `Host` header, else the first; the redirect URI is `<url>/auth/callback` |
 | `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
@@ -82,6 +82,8 @@ OIDC client settings at the provider (Keycloak: confidential client, standard fl
 - Valid redirect URIs: `<GEDOUR_PUBLIC_URL>/auth/callback`
 - Valid post logout redirect URIs: `<GEDOUR_PUBLIC_URL>/auth/signed-out` (without it, sign-out stops on
   the provider's error page)
+- With several `GEDOUR_PUBLIC_URL` entries, register both URIs for each of them. The reverse proxy must
+  pass the browser's `Host` header through, or every request gets the first entry.
 
 Without a session the UI shows a sign-in gate and calls nothing but `/api/v1/me`; "Sign in" goes to the
 provider and back to the page first asked for. A session that ends later (any 401, or the inbox stream

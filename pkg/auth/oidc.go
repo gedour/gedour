@@ -254,9 +254,12 @@ func (s *Service) discover() (*discovery, error) {
 	}, nil
 }
 
-func (s *Service) oauthConfig(d *discovery) oauth2.Config {
+// oauthConfig is a per-request copy: login and callback run on the same host (the state cookie is
+// host-bound), so both pick the same redirect URI.
+func (s *Service) oauthConfig(d *discovery, r *http.Request) oauth2.Config {
 	cfg := s.oauth
 	cfg.Endpoint = d.endpoint
+	cfg.RedirectURL = s.publicURL(r) + "/auth/callback"
 	return cfg
 }
 
@@ -284,8 +287,8 @@ func (s *Service) handleLogin(w http.ResponseWriter, r *http.Request) {
 	st := loginState{State: randomToken(), Nonce: randomToken(), Verifier: oauth2.GenerateVerifier(),
 		ReturnTo: returnTo, Expires: time.Now().Add(loginTTL).Unix()}
 	http.SetCookie(w, s.loginCookie(s.seal(st), int(loginTTL.Seconds())))
-	cfg := s.oauthConfig(d)
-	http.Redirect(w, r, cfg.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
+	cfg := s.oauthConfig(d, r)
+	http.Redirect(w, r, cfg.AuthCodeURL(st.State, oidc.Nonce(st.Nonce), oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound) //nolint:gosec // provider URL; r.Host only selects a configured redirect_uri
 }
 
 // handleCallback checks state, exchanges the code with the PKCE verifier, checks the nonce, then signs in.
@@ -342,7 +345,7 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		return reason
 	}
-	cfg := s.oauthConfig(d)
+	cfg := s.oauthConfig(d, r)
 	tok, err := cfg.Exchange(ctx, code, oauth2.VerifierOption(st.Verifier))
 	if err != nil {
 		fail(timedOut(exchangeReason(err)), "code exchange failed", err)
@@ -451,7 +454,7 @@ func exchangeReason(err error) string {
 
 // logoutRedirect is where the browser goes after sign-out: the provider's end-session endpoint
 // (RP-initiated logout, so the IdP session ends too), else the signed-out page.
-func (s *Service) logoutRedirect(sess *session) string {
+func (s *Service) logoutRedirect(r *http.Request, sess *session) string {
 	if s.DevMode() || sess == nil {
 		return SignedOutPath
 	}
@@ -467,7 +470,7 @@ func (s *Service) logoutRedirect(sess *session) string {
 	}
 	q := u.Query()
 	q.Set("client_id", s.oauth.ClientID)
-	q.Set("post_logout_redirect_uri", s.publicURL+SignedOutPath)
+	q.Set("post_logout_redirect_uri", s.publicURL(r)+SignedOutPath)
 	if sess.idToken != "" {
 		q.Set("id_token_hint", sess.idToken)
 	}
@@ -498,5 +501,5 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, s.sessionCookie("", -1))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]string{"redirect": s.logoutRedirect(sess)})
+	_ = json.NewEncoder(w).Encode(map[string]string{"redirect": s.logoutRedirect(r, sess)})
 }

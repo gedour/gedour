@@ -25,7 +25,8 @@ docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour w
 ```
 
 <http://localhost:8082> signs in through Keycloak's test realm (`deploy/keycloak/realm.json`): `alice`/`alice`
-(admin), `bob`/`bob` (user), `carol`/`carol` (no role, refused).
+(admin), `bob`/`bob` (user), `carol`/`carol` (no role, refused), `dave`/`dave` (user; the e2e suite
+purges it).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -130,6 +131,18 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   users they are shared with.
 - Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
 - Both are audited (`user.disable`, `user.enable`) with the status before and after.
+- Transfer (an account's watch count opens its watches): the watch goes to another active account. Its
+  credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
+  the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
+  those watches listed). The new owner's share on the watch is dropped, other users keep theirs. The old
+  owner loses access, and its rules targeting that watch are deleted. Audited as `watch.transfer` (owners, credential, deleted
+  rules; never the secret).
+- Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
+  scripts, credentials, shares and inbox, and blanks its email and name. Other users lose the watches it
+  shared with them and their rules on those watches; the confirmation lists both. The account row stays
+  as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
+  append-only and untouched: entries written before the purge (such as the account's creation) keep
+  what they recorded. Audited as `user.purge` with the deleted counts, never the email or name.
 
 ## Collection
 

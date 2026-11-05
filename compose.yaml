@@ -52,7 +52,8 @@ services:
       - "127.0.0.1:${GEDOUR_HTTP_PORT:-8080}:8080"
       - "127.0.0.1:${GEDOUR_METRICS_PORT:-9090}:9090"
 
-  # `--profile oidc`: Keycloak with the test realm (alice/alice admin, bob/bob user, carol/carol no role), and gedour
+  # `--profile oidc`: Keycloak with the test realm (alice/alice admin, bob/bob user, carol/carol no role, dave/dave user
+  # the e2e suite purges), and gedour
   # on :8082 signing in through it.
   keycloak:
     profiles: [oidc]

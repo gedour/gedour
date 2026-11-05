@@ -1,5 +1,6 @@
 import type {
   AdminUser,
+  AdminWatch,
   AuditActor,
   Channel,
   ChannelType,
@@ -17,6 +18,7 @@ import type {
   InboxPage,
   InboxState,
   PreviewItem,
+  PurgePreview,
   Rule,
   Script,
   ScriptSummary,
@@ -35,6 +37,7 @@ import type {
   Share,
   SharePermission,
   StateSnapshot,
+  TransferResult,
   UpdateWatchBody,
   VersionInfo,
   Watch,
@@ -342,6 +345,19 @@ export const dryRunScript = (target: { id: string } | { source: string }, on: Dr
 export async function listAdminUsers(): Promise<AdminUser[]> {
   return (await getJSON<{ items: AdminUser[] }>("/api/v1/admin/users")).items;
 }
+export async function listUserWatches(id: string): Promise<AdminWatch[]> {
+  const path = `/api/v1/admin/users/${encodeURIComponent(id)}/watches`;
+  return (await getJSON<{ items: AdminWatch[] }>(path)).items;
+}
+/** Moves a watch, and its credential unless another watch of the owner uses it, to another account. */
+export const transferWatch = (id: string, toUserId: string) =>
+  sendJSON<TransferResult>("POST", `/api/v1/admin/watches/${encodeURIComponent(id)}/transfer`, {
+    to_user_id: toUserId,
+  });
+export const getPurgePreview = (id: string) =>
+  getJSON<PurgePreview>(`/api/v1/admin/users/${encodeURIComponent(id)}/purge-preview`);
+export const purgeUser = (id: string) =>
+  sendJSON<undefined>("POST", `/api/v1/admin/users/${encodeURIComponent(id)}/purge`);
 /** Disabling revokes the account's sessions at once; enabling lets it sign in again. */
 export const setUserDisabled = (id: string, disabled: boolean) =>
   sendJSON<undefined>(

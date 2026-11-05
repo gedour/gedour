@@ -128,3 +128,6 @@ export type DryRunEvent = { event_id: number } | { sample: SampleEvent };
 // Spec 006 resources.
 export type AdminUser = Schemas["AdminUser"];
 export type AdminUserStatus = AdminUser["status"];
+export type AdminWatch = Schemas["AdminWatch"];
+export type TransferResult = Schemas["TransferResult"];
+export type PurgePreview = Schemas["PurgePreviewOutputBody"];

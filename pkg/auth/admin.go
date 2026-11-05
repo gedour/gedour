@@ -92,6 +92,8 @@ func (s *Service) registerAdmin(api huma.API) {
 	}, func(ctx context.Context, in *userIDPath) (*struct{}, error) {
 		return nil, s.setDisabled(ctx, in.ID, false)
 	})
+	s.registerTransfer(api, tags)
+	s.registerPurge(api, tags)
 }
 
 // apiFail passes API errors through and turns anything else into a logged, opaque 500.

@@ -146,8 +146,9 @@ func (s *Service) addShare(ctx context.Context, in *addShareInput) (*shareOutput
 		if err != nil {
 			return err
 		}
-		// Exact (case-insensitive) match only: no search, so the endpoint cannot enumerate users.
-		rows, err := tx.Query(ctx, `SELECT id::text FROM users WHERE email <> '' AND lower(email) = lower($1) LIMIT 2`, email)
+		// Exact (case-insensitive) match only: no search, so the endpoint cannot enumerate users. KEY SHARE waits
+		// for a purge in flight, then re-checks the row: a purged account (blank email) is no longer found.
+		rows, err := tx.Query(ctx, `SELECT id::text FROM users WHERE email <> '' AND lower(email) = lower($1) AND purged_at IS NULL LIMIT 2 FOR KEY SHARE`, email)
 		if err != nil {
 			return err
 		}

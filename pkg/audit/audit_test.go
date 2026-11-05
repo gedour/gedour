@@ -70,6 +70,8 @@ func TestRedaction(t *testing.T) {
 		// A reference to a credential row is not its secret; anything else named credential still is.
 		{"credential ids kept", map[string]any{"credential_id": "c1", "credentialId": "c2", "Credential-IDs": []any{"c3"}},
 			`{"Credential-IDs":["c3"],"credentialId":"c2","credential_id":"c1"}`},
+		{"credential facts kept", map[string]any{"credential_name": "n", "credential_moved": true, "credential_count": 2, "credential_names_secret": "s"},
+			`{"credential_count":2,"credential_moved":true,"credential_name":"n","credential_names_secret":"[redacted]"}`},
 		{"credential content redacted", map[string]any{"credential": "x", "credential_secret": "y", "credentials": "z", "credential_id_secret": "w"},
 			`{"credential":"[redacted]","credential_id_secret":"[redacted]","credential_secret":"[redacted]","credentials":"[redacted]"}`},
 		{"credentials, passphrase, dsn", map[string]any{"credentials": []any{"u"}, "sshPassphrase": "p", "database_dsn": "postgres://h/db", "name": "n"},

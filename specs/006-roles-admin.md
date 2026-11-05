@@ -1,6 +1,6 @@
 # 006 — Roles from the identity provider and account administration
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-05
 
@@ -65,42 +65,42 @@ a banner and every change audited under the admin's name.
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given `GEDOUR_OIDC_REQUIRED_ROLE=gedour-user`, a user whose ID token lacks it is sent to
+- [x] **AC1** Given `GEDOUR_OIDC_REQUIRED_ROLE=gedour-user`, a user whose ID token lacks it is sent to
   the sign-in gate with reason `forbidden`, gets no session, and a `user.login_denied` audit entry is
   written.
-- [ ] **AC2** Given the required role is unset, any authenticated user signs in as today.
-- [ ] **AC3** The roles claim is read as a flat array (`roles`, Entra and Keycloak with mapper) and
+- [x] **AC2** Given the required role is unset, any authenticated user signs in as today.
+- [x] **AC3** The roles claim is read as a flat array (`roles`, Entra and Keycloak with mapper) and
   through a dotted path (`realm_access.roles`); a missing claim, a non-array value or a non-string
   item means no role, never an error page.
-- [ ] **AC4** A user holding the admin role and not the required role signs in, and `/api/v1/me` reports
+- [x] **AC4** A user holding the admin role and not the required role signs in, and `/api/v1/me` reports
   `is_admin: true`; any other user gets `false`.
-- [ ] **AC5** A non-admin calling any `/api/v1/admin/*` operation gets 403, and the Administration entry
+- [x] **AC5** A non-admin calling any `/api/v1/admin/*` operation gets 403, and the Administration entry
   is not shown in the navigation.
-- [ ] **AC6** The admin account list shows every account with last sign-in, status and per-type
+- [x] **AC6** The admin account list shows every account with last sign-in, status and per-type
   counts, oldest sign-in first, never-signed-in accounts at the top.
-- [ ] **AC7** Disabling an account revokes all its sessions (its next API call gets 401) and its next
+- [x] **AC7** Disabling an account revokes all its sessions (its next API call gets 401) and its next
   sign-in is refused with reason `forbidden`.
-- [ ] **AC8** While an account is disabled, its rules produce no deliveries and it receives no inbox
+- [x] **AC8** While an account is disabled, its rules produce no deliveries and it receives no inbox
   items, while a watch it shares keeps producing events for the other users.
-- [ ] **AC9** Re-enabling an account restores sign-in and routing; no data was lost.
-- [ ] **AC10** Transferring a watch moves ownership and its credential to the target user. The watch
+- [x] **AC9** Re-enabling an account restores sign-in and routing; no data was lost.
+- [x] **AC10** Transferring a watch moves ownership and its credential to the target user. The watch
   keeps collecting, and the old owner loses access unless it was shared back.
-- [ ] **AC11** A transfer is refused (409, watch names listed) when the credential is also used by
+- [x] **AC11** A transfer is refused (409, watch names listed) when the credential is also used by
   another watch of the old owner; nothing changes.
-- [ ] **AC12** Purge is refused (409) on an active account.
-- [ ] **AC13** Purging a disabled account deletes its watches, channels, rules, scripts, credentials,
+- [x] **AC12** Purge is refused (409) on an active account.
+- [x] **AC13** Purging a disabled account deletes its watches, channels, rules, scripts, credentials,
   shares and inbox items in one transaction, blanks its email and name, keeps every audit row, and
   the account shows as purged.
-- [ ] **AC14** A purged account signing in again is refused with reason `forbidden`.
-- [ ] **AC15** While acting as a user, `/api/v1/me` returns the target user plus the admin's id, every
+- [x] **AC14** A purged account signing in again is refused with reason `forbidden`.
+- [x] **AC15** While acting as a user, `/api/v1/me` returns the target user plus the admin's id, every
   page shows that user's data, and a banner offers "Stop".
-- [ ] **AC16** A mutation made while acting as a user writes an audit entry with the admin as actor and
+- [x] **AC16** A mutation made while acting as a user writes an audit entry with the admin as actor and
   the target as `on_behalf_of`, visible in the target user's audit view.
-- [ ] **AC17** Act-as is refused for oneself and for a purged account; stopping returns the session to
+- [x] **AC17** Act-as is refused for oneself and for a purged account; stopping returns the session to
   the admin's own data.
-- [ ] **AC18** Every admin action (disable, enable, transfer, purge, act-as start/stop) is audited
+- [x] **AC18** Every admin action (disable, enable, transfer, purge, act-as start/stop) is audited
   with before and after state.
-- [ ] **AC19** In dev mode the dev user is admin.
+- [x] **AC19** In dev mode the dev user is admin.
 
 ## Phases
 

@@ -895,3 +895,19 @@ func TestLeaseUsesDatabaseClock(t *testing.T) {
 		t.Fatal("lease not on the database clock")
 	}
 }
+
+// 006-AC8: a disabled owner's watch keeps collecting, so the users it is shared with keep their events.
+func TestDisabledOwnerKeepsCollecting(t *testing.T) {
+	e := newEnv(t)
+	id := e.addWatch(t, "github_release", `{}`, "1m")
+	if _, err := e.pool.Exec(context.Background(), `UPDATE users SET disabled_at = now() WHERE id = $1`, e.user); err != nil {
+		t.Fatal(err)
+	}
+	f := newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	})
+	tick(t, e.worker(t, e.pool, map[string]collect.Collector{"github_release": f}))
+	if f.total()[`{}`] != 1 || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 1 {
+		t.Fatalf("runs %v", f.total())
+	}
+}

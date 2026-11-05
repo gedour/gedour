@@ -50,18 +50,26 @@ func hashToken(token string) []byte {
 // auditID names a session in the audit log without exposing the full key.
 func auditID(id []byte) string { return hex.EncodeToString(id[:8]) }
 
-// upsertUser creates or refreshes the user keyed by the provider's sub (001-AC1).
+// errAccountDisabled refuses the sign-in of a disabled or purged account.
+var errAccountDisabled = errors.New("account disabled")
+
+// upsertUser creates or refreshes the user keyed by the provider's sub (001-AC1). The upsert holds the
+// row lock until commit and reads the latest status, so a disable racing this login either commits first
+// (refused here) or waits and then revokes the new session (006-AC7).
 func upsertUser(ctx context.Context, tx pgx.Tx, who identity) (User, bool, error) {
 	var u User
-	var created bool
+	var created, disabled bool
 	// xmax = 0 only on a freshly inserted row: tells insert from update in one statement.
 	err := tx.QueryRow(ctx, `INSERT INTO users (oidc_sub, email, display_name, last_login_at)
 		VALUES ($1, $2, $3, now())
 		ON CONFLICT (oidc_sub) DO UPDATE SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, last_login_at = now()
-		RETURNING id::text, email, display_name, xmax = 0`, who.Sub, who.Email, who.DisplayName).
-		Scan(&u.ID, &u.Email, &u.DisplayName, &created)
+		RETURNING id::text, email, display_name, xmax = 0, disabled_at IS NOT NULL OR purged_at IS NOT NULL`, who.Sub, who.Email, who.DisplayName).
+		Scan(&u.ID, &u.Email, &u.DisplayName, &created, &disabled)
 	if err != nil {
 		return User{}, false, fmt.Errorf("upsert user: %w", err)
+	}
+	if disabled {
+		return User{}, false, errAccountDisabled
 	}
 	return u, created, nil
 }
@@ -176,7 +184,7 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	var stale bool
 	err = s.pool.QueryRow(ctx, `SELECT u.id::text, u.email, u.display_name, s.csrf_token, COALESCE(s.id_token, ''),
 			s.last_seen_at < now() - interval '1 minute', s.is_admin
-		FROM sessions s JOIN users u ON u.id = s.user_id
+		FROM sessions s JOIN users u ON u.id = s.user_id AND u.disabled_at IS NULL AND u.purged_at IS NULL
 		WHERE s.id = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval`, sess.id, s.idle).
 		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale, &sess.isAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -196,8 +204,14 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	return sess, nil
 }
 
-// auditDenied records a sign-in refused for a missing role, without creating or touching the user row.
-func (s *Service) auditDenied(ctx context.Context, sub string) error {
+// Reasons a user.login_denied entry records.
+const (
+	deniedMissingRole = "missing_role"
+	deniedDisabled    = "disabled"
+)
+
+// auditDenied records a refused sign-in, without creating or touching the user row.
+func (s *Service) auditDenied(ctx context.Context, sub, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var id string
 		err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE oidc_sub = $1`, sub).Scan(&id)
@@ -205,7 +219,7 @@ func (s *Service) auditDenied(ctx context.Context, sub string) error {
 			return fmt.Errorf("look up denied user: %w", err)
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: id, Action: "user.login_denied", TargetType: "user",
-			TargetID: cmp.Or(id, sub), After: map[string]string{"reason": "missing_role"}})
+			TargetID: cmp.Or(id, sub), After: map[string]string{"reason": reason}})
 	})
 }
 

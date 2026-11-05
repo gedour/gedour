@@ -24,6 +24,14 @@ export default defineConfig({
     {
       name: "chromium",
       dependencies: ["seed"],
+      testIgnore: /admin\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], storageState: AUTH_FILE },
+    },
+    // Disabling bob revokes the stored session the parallel specs sign in with: runs after them, alone.
+    {
+      name: "admin",
+      dependencies: ["chromium"],
+      testMatch: /admin\.spec\.ts/,
       use: { ...devices["Desktop Chrome"], storageState: AUTH_FILE },
     },
   ],

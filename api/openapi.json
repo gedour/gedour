@@ -60,6 +60,101 @@
         ],
         "type": "object"
       },
+      "AdminUser": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/AdminUserCounts"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "disabled_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_login_at": {
+            "description": "Null when the account never signed in",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled",
+              "purged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "created_at",
+          "last_login_at",
+          "status",
+          "disabled_at",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "AdminUserCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "credentials": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rules": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "scripts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "shared_watches": {
+            "description": "Owned watches shared with at least one other user, included in watches",
+            "format": "int64",
+            "type": "integer"
+          },
+          "watches": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "watches",
+          "shared_watches",
+          "channels",
+          "rules",
+          "scripts",
+          "credentials"
+        ],
+        "type": "object"
+      },
       "BuildInfo": {
         "additionalProperties": false,
         "properties": {
@@ -1368,6 +1463,24 @@
         ],
         "type": "object"
       },
+      "ListUsersOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListWatchesOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -2171,6 +2284,107 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "admin-list-users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListUsersOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Every account with its last sign-in, status and what it owns (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/disable": {
+      "post": {
+        "operationId": "admin-disable-user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/enable": {
+      "post": {
+        "operationId": "admin-enable-user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Enable a disabled account again (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "operationId": "list-audit",

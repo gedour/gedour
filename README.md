@@ -118,6 +118,19 @@ Keycloak:
 
 The compose realm (`deploy/keycloak/realm.json`) is set up this way.
 
+### Administration
+
+- Admins (`GEDOUR_OIDC_ADMIN_ROLE` at sign-in, or the dev user) get an Administration entry in the
+  navigation: every account with its last sign-in (never-signed-in first, then oldest), status (active,
+  disabled, purged) and what it owns (watches, shared ones apart, channels, rules, scripts, credentials).
+- Disable (not your own account): every session of the account ends at once (its next call gets 401),
+  its sign-in is refused with "No access to gedour" (`user.login_denied`, reason `disabled`), its rules
+  route nothing and it gets no inbox items. Deliveries already queued for its channels end unsent
+  ("not sent: the channel's owner is disabled"). Its data stays; watches it shares keep collecting for the
+  users they are shared with.
+- Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
+- Both are audited (`user.disable`, `user.enable`) with the status before and after.
+
 ## Collection
 
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
@@ -463,6 +476,10 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer
   read are hidden, and a rule's `watch_name` is null then.
+
+- `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/disable|enable` (204; 404 unknown account; 409
+  on your own account, a purged one, or one already in the asked state). Every `/api/v1/admin/` call needs
+  an admin session (403 otherwise).
 
 The full contract is `api/openapi.json` (also served at `/api/openapi.json`).
 

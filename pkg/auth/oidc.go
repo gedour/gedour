@@ -380,18 +380,29 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// 006-AC4: the admin role alone grants sign-in, so an admin cannot lock themselves out.
 	if s.requiredRole != "" && !who.Admin && !slices.Contains(roles, s.requiredRole) {
-		if err := s.auditDenied(r.Context(), who.Sub); err != nil {
-			s.log.Error("login_denied_audit_failed", zap.Error(err))
-		}
+		s.deny(r.Context(), who.Sub, deniedMissingRole)
 		fail(authForbidden, "required role missing", nil)
 		return
 	}
 	if _, err := s.login(r.Context(), w, r, who); err != nil {
+		// 006-AC7: checked in the login tx under the user row lock, so no session survives a racing disable.
+		if errors.Is(err, errAccountDisabled) {
+			s.deny(r.Context(), who.Sub, deniedDisabled)
+			fail(authForbidden, "account disabled", nil)
+			return
+		}
 		s.log.Error("login_failed", zap.Error(err))
 		seeOther(w, gateURL(returnTo, authFailed))
 		return
 	}
 	seeOther(w, returnTo)
+}
+
+// deny audits a refused sign-in; a failed audit is logged and the refusal stands.
+func (s *Service) deny(ctx context.Context, sub, reason string) {
+	if err := s.auditDenied(ctx, sub, reason); err != nil {
+		s.log.Error("login_denied_audit_failed", zap.Error(err))
+	}
 }
 
 // rolesFrom reads the roles claim: the name as a top-level key first (URL-shaped names hold dots), then

@@ -90,6 +90,9 @@ type Service struct {
 	devAccount *User // the dev user's row, upserted once
 }
 
+// AdminPrefix starts every /api path only an admin session may call.
+const AdminPrefix = "/api/v1/admin/"
+
 // SignedOutPath is the SPA page sign-out lands on; it never redirects to login by itself.
 const SignedOutPath = "/auth/signed-out"
 
@@ -216,6 +219,10 @@ func (s *Service) Guard(next http.Handler) http.Handler {
 		case !safeMethod(r.Method) && !csrfOK(r, sess):
 			writeCSRFProblem(w)
 			return
+		// 006-AC5: one check on the prefix covers every admin operation, whichever package registers it.
+		case strings.HasPrefix(r.URL.Path, AdminPrefix) && !sess.isAdmin:
+			writeProblem(w, http.StatusForbidden, "administrators only")
+			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
 	})
@@ -268,4 +275,5 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux) {
 		out.Body.CSRFToken, out.Body.DevMode, out.Body.IsAdmin = sess.csrf, s.DevMode(), sess.isAdmin
 		return out, nil
 	})
+	s.registerAdmin(api)
 }

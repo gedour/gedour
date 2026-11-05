@@ -4,6 +4,57 @@
  */
 
 export interface paths {
+  "/api/v1/admin/users": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Every account with its last sign-in, status and what it owns (admin only) */
+    get: operations["admin-list-users"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/disable": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only) */
+    post: operations["admin-disable-user"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/enable": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Enable a disabled account again (admin only) */
+    post: operations["admin-enable-user"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/audit": {
     parameters: {
       query?: never;
@@ -668,6 +719,41 @@ export interface components {
       /** @enum {string} */
       permission: "ro" | "rw";
     };
+    AdminUser: {
+      counts: components["schemas"]["AdminUserCounts"];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      disabled_at: string | null;
+      display_name: string;
+      email: string;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description Null when the account never signed in
+       */
+      last_login_at: string | null;
+      /** @enum {string} */
+      status: "active" | "disabled" | "purged";
+    };
+    AdminUserCounts: {
+      /** Format: int64 */
+      channels: number;
+      /** Format: int64 */
+      credentials: number;
+      /** Format: int64 */
+      rules: number;
+      /** Format: int64 */
+      scripts: number;
+      /**
+       * Format: int64
+       * @description Owned watches shared with at least one other user, included in watches
+       */
+      shared_watches: number;
+      /** Format: int64 */
+      watches: number;
+    };
     BuildInfo: {
       /** @description Build time, ISO 8601 */
       build_timestamp: string;
@@ -1168,6 +1254,9 @@ export interface components {
       /** @description Latest first; the first item is the current state */
       items: components["schemas"]["StateSnapshot"][] | null;
     };
+    ListUsersOutputBody: {
+      items: components["schemas"]["AdminUser"][] | null;
+    };
     ListWatchesOutputBody: {
       /** @description Sorted by name */
       items: components["schemas"]["Watch"][] | null;
@@ -1436,6 +1525,93 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  "admin-list-users": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListUsersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-disable-user": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-enable-user": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "list-audit": {
     parameters: {
       query?: {

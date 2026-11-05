@@ -124,3 +124,7 @@ export type DryRun = Schemas["DryRun"];
 export type DryRunFetch = Schemas["Fetch"];
 /** The event of a dry run: a real one the caller can read, or a made-up sample. */
 export type DryRunEvent = { event_id: number } | { sample: SampleEvent };
+
+// Spec 006 resources.
+export type AdminUser = Schemas["AdminUser"];
+export type AdminUserStatus = AdminUser["status"];

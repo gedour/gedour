@@ -4,6 +4,7 @@ import {
   ScrollText,
   Send,
   Settings,
+  ShieldCheck,
   Telescope,
   Workflow,
   type LucideIcon,
@@ -15,6 +16,8 @@ export interface NavItem {
   icon: LucideIcon;
   emptyTitle: string;
   emptyBody: string;
+  /** Shown to admins only (006-AC5). */
+  admin?: boolean;
 }
 
 export const NAV: NavItem[] = [
@@ -70,5 +73,13 @@ export const NAV: NavItem[] = [
     icon: Settings,
     emptyTitle: "Nothing to configure yet",
     emptyBody: "Credentials and account preferences.",
+  },
+  {
+    path: "/admin/users",
+    label: "Administration",
+    icon: ShieldCheck,
+    admin: true,
+    emptyTitle: "No accounts yet",
+    emptyBody: "Accounts appear here after their first sign-in.",
   },
 ];

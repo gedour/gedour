@@ -1,4 +1,5 @@
 import type {
+  AdminUser,
   AuditActor,
   Channel,
   ChannelType,
@@ -337,3 +338,13 @@ export const dryRunScript = (target: { id: string } | { source: string }, on: Dr
   "id" in target
     ? sendJSON<DryRun>("POST", `${scriptPath(target.id)}/dry-run`, on)
     : sendJSON<DryRun>("POST", "/api/v1/scripts/dry-run", { source: target.source, ...on });
+
+export async function listAdminUsers(): Promise<AdminUser[]> {
+  return (await getJSON<{ items: AdminUser[] }>("/api/v1/admin/users")).items;
+}
+/** Disabling revokes the account's sessions at once; enabling lets it sign in again. */
+export const setUserDisabled = (id: string, disabled: boolean) =>
+  sendJSON<undefined>(
+    "POST",
+    `/api/v1/admin/users/${encodeURIComponent(id)}/${disabled ? "disable" : "enable"}`,
+  );

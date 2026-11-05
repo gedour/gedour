@@ -62,7 +62,8 @@ func (r *Router) Run(ctx context.Context) {
 // logRefusedRules names the enabled rules that no longer compile, say after the cost model changed: each one
 // counts as no match on every event, which an owner would not notice otherwise.
 func (r *Router) logRefusedRules(ctx context.Context) {
-	rows, err := r.pool.Query(ctx, `SELECT id::text, owner_id::text, filter FROM rules WHERE enabled`)
+	rows, err := r.pool.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter FROM rules r JOIN users u ON u.id = r.owner_id
+		WHERE r.enabled AND `+activeOwner)
 	if err != nil {
 		if ctx.Err() == nil {
 			r.log.Error("rule_check_failed", zap.Error(err))
@@ -86,6 +87,10 @@ func (r *Router) logRefusedRules(ctx context.Context) {
 		}
 	}
 }
+
+// activeOwner keeps the users aliased u that are neither disabled nor purged: a disabled account's rules
+// route nothing, while its watches keep collecting for the users they are shared with (006-AC8).
+const activeOwner = "u.disabled_at IS NULL AND u.purged_at IS NULL"
 
 type routedEvent struct {
 	ev watch.Event
@@ -173,8 +178,8 @@ func (r *Router) RouteOnce(ctx context.Context) (int, error) {
 func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notify map[string]bool) error {
 	rows, err := tx.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter, r.priority,
 			COALESCE((SELECT array_agg(rc.channel_id::text) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}')
-		FROM rules r JOIN watches w ON w.id = $1
-		WHERE r.enabled AND (r.watch_id IS NULL OR r.watch_id = $1) AND `+watch.ReadableSQL("w", "r.owner_id")+`
+		FROM rules r JOIN watches w ON w.id = $1 JOIN users u ON u.id = r.owner_id
+		WHERE r.enabled AND `+activeOwner+` AND (r.watch_id IS NULL OR r.watch_id = $1) AND `+watch.ReadableSQL("w", "r.owner_id")+`
 		ORDER BY r.created_at, r.id`, x.w.ID)
 	if err != nil {
 		return err

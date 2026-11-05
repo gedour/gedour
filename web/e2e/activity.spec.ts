@@ -421,7 +421,6 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
     }[];
   for (const [name, status, reason] of [
     ["ok", "sent", null],
-    ["badsecret", "dead", "HTTP 401"],
     ["gone", "dead", "HTTP 404"],
     ["busy", "failed", "HTTP 429"],
   ] as const) {
@@ -433,6 +432,18 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
       if (reason) expect(d.last_error).toContain(reason);
     }
   }
+  // 003-AC8: the 401 pauses the channel: the other delivery waits without using an attempt.
+  await expect
+    .poll(async () => (await deliveries("badsecret")).map((d) => d.status).sort(), {
+      timeout: 20_000,
+    })
+    .toEqual(["dead", "failed"]);
+  const bad = await deliveries("badsecret");
+  expect(bad.map((d) => d.attempts).sort()).toEqual([0, 1]);
+  expect(bad.find((d) => d.status === "dead")?.last_error).toMatch(/: HTTP 401$/);
+  expect(bad.find((d) => d.status === "failed")?.last_error).toContain("paused");
+  const refused = (await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[];
+  expect(refused.filter((r) => r.endpoint === `talk-wrong${t}-rejected`)).toHaveLength(1);
 
   // 003-AC3: the UI shows the permanent failure with its reason, no retry scheduled.
   await page.goto("/channels");
@@ -440,9 +451,8 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
   const row = page
     .getByRole("table", { name: "Deliveries" })
     .getByRole("row")
-    .filter({ hasText: "v2.105.0 published" });
+    .filter({ hasText: "1 / 5" });
   await expect(row).toContainText("Failed");
-  await expect(row).toContainText("1 / 5");
   await expect(row).toContainText("HTTP 401");
   await expect(row).not.toContainText("Retrying");
   await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();

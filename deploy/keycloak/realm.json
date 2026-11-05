@@ -23,7 +23,24 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:18080/auth/signed-out##http://localhost:8082/auth/signed-out"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "gedour",
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "users": [
@@ -34,7 +51,10 @@
       "firstName": "Alice",
       "lastName": "Liddell",
       "enabled": true,
-      "credentials": [{ "type": "password", "value": "alice", "temporary": false }]
+      "credentials": [{ "type": "password", "value": "alice", "temporary": false }],
+      "clientRoles": {
+        "gedour": ["gedour-user", "gedour-admin"]
+      }
     },
     {
       "username": "bob",
@@ -43,7 +63,27 @@
       "firstName": "Bob",
       "lastName": "Builder",
       "enabled": true,
-      "credentials": [{ "type": "password", "value": "bob", "temporary": false }]
+      "credentials": [{ "type": "password", "value": "bob", "temporary": false }],
+      "clientRoles": {
+        "gedour": ["gedour-user"]
+      }
+    },
+    {
+      "username": "carol",
+      "email": "carol@example.test",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Nora",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "carol", "temporary": false }]
     }
-  ]
+  ],
+  "roles": {
+    "client": {
+      "gedour": [
+        { "name": "gedour-user", "description": "May sign in to gedour" },
+        { "name": "gedour-admin", "description": "Administers gedour" }
+      ]
+    }
+  }
 }

@@ -45,6 +45,11 @@ type Config struct {
 	DevUser            string
 	SessionTTL         time.Duration
 	SessionIdleTimeout time.Duration
+	// OIDCRolesClaim names the ID token claim holding the roles: a top-level key, else a dotted path.
+	OIDCRolesClaim string
+	// OIDCRequiredRole, when set, is needed to sign in; OIDCAdminRole, when set, makes an admin and also grants sign-in.
+	OIDCRequiredRole string
+	OIDCAdminRole    string
 
 	// EncryptionKey is base64 of the 32-byte AES key sealing credential secrets.
 	EncryptionKey string
@@ -124,6 +129,9 @@ func Load() (Config, error) {
 		DevUser:            os.Getenv("GEDOUR_DEV_USER"),
 		SessionTTL:         ttl,
 		SessionIdleTimeout: idle,
+		OIDCRolesClaim:     strings.TrimSpace(getEnv("GEDOUR_OIDC_ROLES_CLAIM", "roles")),
+		OIDCRequiredRole:   strings.TrimSpace(os.Getenv("GEDOUR_OIDC_REQUIRED_ROLE")),
+		OIDCAdminRole:      strings.TrimSpace(os.Getenv("GEDOUR_OIDC_ADMIN_ROLE")),
 		EncryptionKey:      os.Getenv("GEDOUR_ENCRYPTION_KEY"),
 		AllowHTTPHosts:     splitList(os.Getenv("GEDOUR_ALLOW_HTTP_HOSTS")),
 		AllowPrivateNets:   splitList(os.Getenv("GEDOUR_ALLOW_PRIVATE_NETS")),
@@ -218,6 +226,9 @@ func (c Config) validateAuth() []error {
 			errs = append(errs, errors.New("GEDOUR_PUBLIC_URL is required with OIDC"))
 		} else if err := absoluteURL(c.PublicURL); err != nil {
 			errs = append(errs, fmt.Errorf("GEDOUR_PUBLIC_URL: %w", err))
+		}
+		if strings.TrimSpace(c.OIDCRolesClaim) == "" {
+			errs = append(errs, errors.New("GEDOUR_OIDC_ROLES_CLAIM must not be blank"))
 		}
 	}
 	if c.SessionTTL <= 0 || c.SessionIdleTimeout <= 0 {

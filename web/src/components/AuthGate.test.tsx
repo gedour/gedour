@@ -138,6 +138,20 @@ describe("SignInGate", () => {
     expect(document.body).not.toHaveTextContent("<script>");
   });
 
+  // 006-AC1: the refusal says who can fix it, and offers no retry that would sign the same account back in.
+  it("tells a refused user to ask an administrator", async () => {
+    mockApi({ "/api/v1/me": unauthorized });
+    renderApp("/?auth=forbidden", null);
+    expect(await gate("No access to gedour")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your account is not allowed to use gedour. Ask an administrator for access.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
   // An encoded key is the same reason to the reader, and it is stripped from the return target too.
   it("reads an encoded reason key", async () => {
     mockApi({ "/api/v1/me": unauthorized });

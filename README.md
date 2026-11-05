@@ -24,8 +24,8 @@ UI on <http://localhost:8080> in dev single-user mode (signed in as `dev@local`)
 docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour with OIDC on :8082
 ```
 
-<http://localhost:8082> signs in through Keycloak's test realm (`alice`/`alice`, `bob`/`bob`,
-`deploy/keycloak/realm.json`).
+<http://localhost:8082> signs in through Keycloak's test realm (`deploy/keycloak/realm.json`): `alice`/`alice`
+(admin), `bob`/`bob` (user), `carol`/`carol` (no role, refused).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -52,6 +52,9 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `OIDC_ISSUER` | | OIDC provider issuer URL |
 | `OIDC_CLIENT_ID` | | OIDC client ID (confidential client, authorization code + PKCE) |
 | `OIDC_CLIENT_SECRET` | | OIDC client secret; also keys the short-lived login state cookie |
+| `GEDOUR_OIDC_ROLES_CLAIM` | `roles` | ID token claim holding the user's roles: a top-level key (`https://example.com/roles` works), else a dotted path (`realm_access.roles`) |
+| `GEDOUR_OIDC_REQUIRED_ROLE` | | Role needed to sign in; empty lets any authenticated user in |
+| `GEDOUR_OIDC_ADMIN_ROLE` | | Role that makes an admin, and also grants sign-in; empty means no admin |
 | `GEDOUR_PUBLIC_URL` | (required with OIDC) | Browser-facing base URL; the redirect URI is `<url>/auth/callback` |
 | `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
@@ -87,6 +90,34 @@ endpoint is on another host or port than the issuer); when it does not, or the c
 no answer within 10 s, the gate shows "Sign-in service unavailable". A rejected callback (state, code, ID token,
 session write) shows "Sign-in failed, try again". Dev mode signs in by itself and never renders the gate;
 a failed dev sign-in answers a plain 500.
+
+### Restricting access with roles
+
+- gedour reads the roles from the ID token's `GEDOUR_OIDC_ROLES_CLAIM`, a string array. A missing claim,
+  another type or non-string items count as no role.
+- With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
+  gate with "No access to gedour" and no retry button: no session, no account created, an audit entry
+  `user.login_denied`.
+- Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
+  Sessions opened before the upgrade that added roles are not admin until their next sign-in.
+- `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.
+
+Microsoft Entra ID:
+
+1. App registration → App roles: create e.g. `gedour-user` and `gedour-admin` (allowed member types: Users/Groups).
+2. Enterprise application → Users and groups: assign users or groups to those roles.
+3. The assigned app roles arrive in the ID token's `roles` claim: keep the default `GEDOUR_OIDC_ROLES_CLAIM`.
+
+Keycloak:
+
+1. Client → Roles: create `gedour-user` and `gedour-admin`; assign them to users or groups.
+2. Client → Client scopes → the dedicated scope → Add mapper → By configuration → "User Client Role": client
+   ID your client, token claim name `roles`, multivalued, "Add to ID token" on.
+3. Without that mapper, the built-in `resource_access.<client>.roles` claim is in the access token only:
+   turn "Add to ID token" on in the "client roles" mapper of the `roles` client scope, then set
+   `GEDOUR_OIDC_ROLES_CLAIM=resource_access.<client>.roles`.
+
+The compose realm (`deploy/keycloak/realm.json`) is set up this way.
 
 ## Collection
 
@@ -281,7 +312,7 @@ kubectl create secret generic gedour \
 ```
 
 Other settings (table in [Configuration](#configuration)) go into the ConfigMap from an overlay:
-`GEDOUR_PUBLIC_URL` (web, required with OIDC), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
+`GEDOUR_PUBLIC_URL` (web, required with OIDC), the `GEDOUR_OIDC_*` role settings (web), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
 (both roles: web validates watch URLs, the worker fetches), `GEDOUR_WORKER_POLL` and
 `GEDOUR_WORKER_CONCURRENCY` (worker), `GEDOUR_TELEGRAM_API_URL`, `GEDOUR_SMTP_TLS` and `GEDOUR_SMTP_PLAIN_NETS`
 (both). Telegram bot tokens belong to channels, in the database. Never set `GEDOUR_DEV_USER` in a cluster.

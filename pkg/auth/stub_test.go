@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,8 @@ type stubProvider struct {
 	email   string
 	name    string
 	nonceFn func(string) string // rewrites the nonce put in the ID token
+	// extra claims added to the ID token, like the roles a provider maps.
+	extra map[string]any
 	// noEndSession hides end_session_endpoint from discovery, like a provider without RP-initiated logout.
 	noEndSession bool
 	// discoveryDelay slows the metadata endpoint, like a sluggish IdP; discoveries counts its hits.
@@ -186,10 +189,12 @@ func (p *stubProvider) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	idToken, err := jwt.Signed(signer).Claims(map[string]any{
+	claims := map[string]any{
 		"iss": p.URL, "sub": p.sub, "aud": clientID, "iat": now.Unix(), "exp": now.Add(time.Minute).Unix(),
 		"nonce": p.nonceFn(req.nonce), "email": p.email, "name": p.name, "preferred_username": "alice",
-	}).Serialize()
+	}
+	maps.Copy(claims, p.extra)
+	idToken, err := jwt.Signed(signer).Claims(claims).Serialize()
 	if err != nil {
 		p.t.Error(err)
 		return

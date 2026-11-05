@@ -16,6 +16,7 @@ export interface Me {
   display_name: string;
   csrf_token: string;
   dev_mode: boolean;
+  is_admin: boolean;
 }
 
 // audit.Item (GET /api/v1/audit)

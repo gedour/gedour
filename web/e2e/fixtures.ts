@@ -2,6 +2,8 @@ import { expect, test as base, type Page } from "@playwright/test";
 
 export const ALICE = { username: "alice", password: "alice", name: "Alice Liddell" };
 export const BOB = { username: "bob", password: "bob", name: "Bob Builder" };
+/** Holds no gedour client role: the realm's refused user. */
+export const CAROL = { username: "carol", password: "carol", name: "Carol Nora" };
 
 // Every test fails on a CSP violation on our origin (the provider's pages carry their own policy).
 // Collected on the Node side so reloads and navigations cannot wipe them; the console listener is a

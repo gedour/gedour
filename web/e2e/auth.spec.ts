@@ -1,5 +1,14 @@
 import { CSRF_PROBLEM_TITLE } from "../src/api/client";
-import { ALICE, BOB, expect, gate, signInAtProvider, signInFromGate, test } from "./fixtures";
+import {
+  ALICE,
+  BOB,
+  CAROL,
+  expect,
+  gate,
+  signInAtProvider,
+  signInFromGate,
+  test,
+} from "./fixtures";
 
 test.describe("signed out", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -37,6 +46,16 @@ test.describe("signed out", () => {
     await signInFromGate(page, ALICE);
     await expect(page).toHaveURL(/\/audit\?from=x#top$/);
     await expect(page.getByRole("button", { name: `Account: ${ALICE.name}` })).toBeVisible();
+  });
+
+  // 006-AC1: a user without the required role comes back to the gate with the forbidden reason, signed out.
+  test("a user without the gedour role is refused at the gate", async ({ page }) => {
+    await page.goto("/inbox");
+    await signInFromGate(page, CAROL);
+    await expect(page).toHaveURL(/\/inbox\?auth=forbidden$/);
+    await expect(gate(page, "No access to gedour")).toBeVisible();
+    await expect(page.getByText("Ask an administrator for access.")).toBeVisible();
+    expect((await page.request.get("/api/v1/me")).status()).toBe(401);
   });
 
   // 001-AC3 / 001-AC21: sign-out needs the CSRF token, ends both the gedour and the provider

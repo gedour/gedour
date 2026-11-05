@@ -55,6 +55,7 @@ type session struct {
 	id      []byte
 	csrf    string
 	idToken string
+	isAdmin bool
 }
 
 // Service holds the auth configuration and the session store.
@@ -74,6 +75,10 @@ type Service struct {
 	exchangeTimeout time.Duration
 
 	publicURL string
+
+	rolesClaim   string
+	requiredRole string
+	adminRole    string
 
 	discoverOnce singleflight.Group
 	mu           sync.Mutex // guards the three disc* fields only, never held across I/O
@@ -109,6 +114,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 		s.issuer = cfg.OIDCIssuer
 		s.stateKey = key
 		s.publicURL = strings.TrimRight(cfg.PublicURL, "/")
+		s.rolesClaim, s.requiredRole, s.adminRole = cfg.OIDCRolesClaim, cfg.OIDCRequiredRole, cfg.OIDCAdminRole
 		s.oauth = oauth2.Config{
 			ClientID:     cfg.OIDCClientID,
 			ClientSecret: cfg.OIDCClientSecret,
@@ -237,6 +243,7 @@ type meOutput struct {
 		DisplayName string `json:"display_name"`
 		CSRFToken   string `json:"csrf_token" doc:"Send back in the X-CSRF-Token header on every non-GET request"`
 		DevMode     bool   `json:"dev_mode" doc:"Single-user mode: there is no real sign-out"`
+		IsAdmin     bool   `json:"is_admin" doc:"The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode"`
 	}
 }
 
@@ -258,7 +265,7 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux) {
 		}
 		out := &meOutput{}
 		out.Body.ID, out.Body.Email, out.Body.DisplayName = sess.ID, sess.Email, sess.DisplayName
-		out.Body.CSRFToken, out.Body.DevMode = sess.csrf, s.DevMode()
+		out.Body.CSRFToken, out.Body.DevMode, out.Body.IsAdmin = sess.csrf, s.DevMode(), sess.isAdmin
 		return out, nil
 	})
 }

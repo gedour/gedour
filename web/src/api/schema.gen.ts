@@ -1181,6 +1181,8 @@ export interface components {
       email: string;
       /** Format: uuid */
       id: string;
+      /** @description The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode */
+      is_admin: boolean;
     };
     PreviewInputBody: {
       filter: string;

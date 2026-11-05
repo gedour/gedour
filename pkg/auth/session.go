@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,6 +25,7 @@ type identity struct {
 	Email       string
 	DisplayName string
 	IDToken     string // raw, empty in dev mode
+	Admin       bool
 }
 
 func (s *Service) devIdentity() identity {
@@ -95,7 +97,7 @@ func (s *Service) devSession(ctx context.Context) (*session, error) {
 		s.devMu.Unlock()
 		u = &fresh
 	}
-	return &session{User: *u}, nil
+	return &session{User: *u, isAdmin: true}, nil
 }
 
 // purgeQuery removes a bounded batch of dead sessions; a variable so a test can make it fail.
@@ -107,7 +109,8 @@ var purgeQuery = `DELETE FROM sessions WHERE id IN (
 // and sets the session cookie.
 func (s *Service) login(ctx context.Context, w http.ResponseWriter, r *http.Request, who identity) (*session, error) {
 	token := randomToken()
-	sess := &session{id: hashToken(token), csrf: randomToken()}
+	// 006-AC19: dev admin lives in memory only, so a dev row never stays admin once the instance moves to OIDC.
+	sess := &session{id: hashToken(token), csrf: randomToken(), isAdmin: who.Admin || s.DevMode()}
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		u, err := upsertAudited(ctx, tx, who)
 		if err != nil {
@@ -124,8 +127,8 @@ func (s *Service) login(ctx context.Context, w http.ResponseWriter, r *http.Requ
 				return fmt.Errorf("drop previous session: %w", err)
 			}
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO sessions (id, user_id, csrf_token, id_token, expires_at) VALUES ($1, $2, $3, NULLIF($4, ''), now() + $5::interval)`,
-			sess.id, u.ID, sess.csrf, who.IDToken, s.ttl)
+		_, err = tx.Exec(ctx, `INSERT INTO sessions (id, user_id, csrf_token, id_token, expires_at, is_admin) VALUES ($1, $2, $3, NULLIF($4, ''), now() + $5::interval, $6)`,
+			sess.id, u.ID, sess.csrf, who.IDToken, s.ttl, who.Admin)
 		if err != nil {
 			return fmt.Errorf("insert session: %w", err)
 		}
@@ -172,16 +175,18 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 	sess := &session{id: hashToken(c.Value)}
 	var stale bool
 	err = s.pool.QueryRow(ctx, `SELECT u.id::text, u.email, u.display_name, s.csrf_token, COALESCE(s.id_token, ''),
-			s.last_seen_at < now() - interval '1 minute'
+			s.last_seen_at < now() - interval '1 minute', s.is_admin
 		FROM sessions s JOIN users u ON u.id = s.user_id
 		WHERE s.id = $1 AND s.expires_at > now() AND s.last_seen_at > now() - $2::interval`, sess.id, s.idle).
-		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale)
+		Scan(&sess.ID, &sess.Email, &sess.DisplayName, &sess.csrf, &sess.idToken, &stale, &sess.isAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lookup session: %w", err)
 	}
+	// 006-AC19: a dev session row from before 00009 holds false, and dev mode never signs in again.
+	sess.isAdmin = sess.isAdmin || s.DevMode()
 	// Idle clock moves at most once a minute: no write on every request.
 	if stale && touch {
 		if _, err := s.pool.Exec(ctx, `UPDATE sessions SET last_seen_at = now() WHERE id = $1`, sess.id); err != nil {
@@ -189,6 +194,19 @@ func (s *Service) lookup(r *http.Request, touch bool) (*session, error) {
 		}
 	}
 	return sess, nil
+}
+
+// auditDenied records a sign-in refused for a missing role, without creating or touching the user row.
+func (s *Service) auditDenied(ctx context.Context, sub string) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var id string
+		err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE oidc_sub = $1`, sub).Scan(&id)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("look up denied user: %w", err)
+		}
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: id, Action: "user.login_denied", TargetType: "user",
+			TargetID: cmp.Or(id, sub), After: map[string]string{"reason": "missing_role"}})
+	})
 }
 
 // logout deletes the session and audits it in one transaction.

@@ -32,6 +32,12 @@ repos:
         language: system
         files: ^web/
         pass_filenames: false
+      - id: no-grep-q-in-pipe
+        name: no grep -q at the end of a pipe
+        # With pipefail, grep -q exits on the first match and the writer's SIGPIPE fails the pipeline.
+        entry: '\|\s*grep\s+-[a-zA-Z]*q'
+        language: pygrep
+        files: \.(sh|bash)$
       - id: eslint
         name: eslint
         entry: pnpm --dir web lint

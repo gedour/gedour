@@ -68,6 +68,58 @@ func (s *Service) registerActivity(api huma.API) {
 		OperationID: "run-watch", Method: http.MethodPost, Path: "/api/v1/watches/{id}/run",
 		Summary: "Schedule a run now", Tags: tags, DefaultStatus: http.StatusAccepted,
 	}, s.runWatch)
+	huma.Register(api, huma.Operation{
+		OperationID: "run-all-watches", Method: http.MethodPost, Path: "/api/v1/watches/run",
+		Summary: "Schedule a run now of every watch the caller can run", Tags: tags, DefaultStatus: http.StatusAccepted,
+	}, s.runAll)
+}
+
+type runAllOutput struct {
+	Body struct {
+		Scheduled int `json:"scheduled" doc:"Watches made due now: owned or shared read-write, paused ones left out"`
+	}
+}
+
+// runAll is run-now on every watch the caller may run, in one statement and one audit row per watch.
+func (s *Service) runAll(ctx context.Context, _ *struct{}) (*runAllOutput, error) {
+	me, err := s.me(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &runAllOutput{}
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE watches w SET next_run_at = now()
+			WHERE NOT w.paused AND (w.owner_id = $1 OR EXISTS (SELECT 1 FROM watch_shares s
+				WHERE s.watch_id = w.id AND s.user_id = $1 AND s.permission = 'rw'))
+			RETURNING w.id::text`, me)
+		if err != nil {
+			return err
+		}
+		ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		// The same audit row as a single run-now: the watch's spec.
+		rows, err = tx.Query(ctx, watchSelect+" AND w.id::text = ANY(@ids)", pgx.NamedArgs{"viewer": me, "ids": ids})
+		if err != nil {
+			return err
+		}
+		ws, err := scanWatches(rows)
+		if err != nil {
+			return err
+		}
+		for _, w := range ws {
+			if err := audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.run_requested", TargetType: "watch", TargetID: w.ID, After: w.Spec}); err != nil {
+				return err
+			}
+		}
+		out.Body.Scheduled = len(ids)
+		return nil
+	})
+	if err != nil {
+		return nil, s.fail("run-all-watches", err)
+	}
+	return out, nil
 }
 
 func (s *Service) listEvents(ctx context.Context, in *listEventsInput) (*listEventsOutput, error) {

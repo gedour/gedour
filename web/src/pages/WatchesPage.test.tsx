@@ -7,6 +7,32 @@ import { renderApp } from "@/test/render";
 import { lastCall, pending, watch } from "@/test/watches";
 
 describe("WatchesPage", () => {
+  it("runs all watches and reports how many were scheduled", async () => {
+    let scheduled = 2;
+    const fn = mockApi({
+      "/api/v1/watches": { items: [watch()] },
+      "/api/v1/watches/run": () => Response.json({ scheduled }, { status: 202 }),
+    });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("button", { name: "Run all" }));
+    expect(await screen.findByText("2 watches scheduled to run")).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/watches/run", "POST")).toBeDefined();
+    scheduled = 0;
+    await userEvent.click(screen.getByRole("button", { name: "Run all" }));
+    expect(await screen.findByText("No watch to run")).toBeInTheDocument();
+  });
+
+  it("reports a failed run all", async () => {
+    mockApi({
+      "/api/v1/watches": { items: [watch()] },
+      "/api/v1/watches/run": () =>
+        Response.json({ title: "Internal Server Error", status: 500 }, { status: 500 }),
+    });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("button", { name: "Run all" }));
+    expect(await screen.findByText(/^Could not run the watches/)).toBeInTheDocument();
+  });
+
   it("shows each watch's run status and next run", async () => {
     const soon = new Date(Date.now() + 14.5 * 60_000).toISOString();
     mockApi({

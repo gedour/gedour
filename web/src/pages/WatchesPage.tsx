@@ -1,14 +1,16 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Clock, Plus, Search } from "lucide-react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Clock, Play, Plus, Search } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
-import { listWatches } from "@/api/client";
+import { listWatches, runAllWatches } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { inputClass } from "@/components/ui/field";
 import { KindIcon, PausedBadge, SharedBadge, StatusDot } from "@/components/WatchBits";
+import { useToast } from "@/hooks/toast";
+import { problemText } from "@/lib/problems";
 import { describeSchedule, KINDS, targetSummary } from "@/lib/watchKinds";
 import { nextRunLabel } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
@@ -28,6 +30,34 @@ export function NewWatchButton() {
         <Plus aria-hidden />
         New watch
       </Link>
+    </Button>
+  );
+}
+
+function RunAllButton() {
+  const client = useQueryClient();
+  const toast = useToast();
+  const run = useMutation({
+    mutationFn: runAllWatches,
+    onSuccess: ({ scheduled }) => {
+      toast(
+        scheduled === 0
+          ? "No watch to run"
+          : `${scheduled} watch${scheduled === 1 ? "" : "es"} scheduled to run`,
+      );
+      void client.invalidateQueries({ queryKey: ["watches"] });
+    },
+    onError: (err) => toast(`Could not run the watches: ${problemText(err)}`, "error"),
+  });
+  return (
+    <Button
+      variant="outline"
+      disabled={run.isPending}
+      title="Run every watch you can run now; paused ones are skipped"
+      onClick={() => run.mutate()}
+    >
+      <Play aria-hidden className={cn(run.isPending && "animate-pulse")} />
+      {run.isPending ? "Scheduling…" : "Run all"}
     </Button>
   );
 }
@@ -63,7 +93,10 @@ export function WatchesPage({ item }: { item: NavItem }) {
             Things gedour follows upstream for you, and those others share with you.
           </p>
         </div>
-        <NewWatchButton />
+        <div className="flex flex-wrap gap-2">
+          <RunAllButton />
+          <NewWatchButton />
+        </div>
       </div>
 
       <form

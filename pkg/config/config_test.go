@@ -90,6 +90,7 @@ func withOIDC(c *Config) {
 	c.DevUser = ""
 	c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret = "https://sso.example/realms/r", "gedour", "s"
 	c.PublicURL = "https://gedour.example"
+	c.OIDCRolesClaim = "roles"
 }
 
 // 001-AC2: exactly one of OIDC or dev user, OIDC complete with a public URL; workers need neither.
@@ -112,6 +113,8 @@ func TestValidateAuth(t *testing.T) {
 		{"ftp public url", func(c *Config) { withOIDC(c); c.PublicURL = "ftp://x" }, "GEDOUR_PUBLIC_URL"},
 		{"bad issuer", func(c *Config) { withOIDC(c); c.OIDCIssuer = "sso.example" }, "OIDC_ISSUER"},
 		{"unparsable issuer", func(c *Config) { withOIDC(c); c.OIDCIssuer = "http://[::1" }, "OIDC_ISSUER"},
+		{"blank roles claim", func(c *Config) { withOIDC(c); c.OIDCRolesClaim = " " }, "GEDOUR_OIDC_ROLES_CLAIM"},
+		{"dotted roles claim", func(c *Config) { withOIDC(c); c.OIDCRolesClaim = "realm_access.roles" }, ""},
 		{"zero ttl", func(c *Config) { c.SessionTTL = 0 }, "GEDOUR_SESSION_TTL"},
 		{"zero idle", func(c *Config) { c.SessionIdleTimeout = 0 }, "GEDOUR_SESSION_IDLE_TIMEOUT"},
 	}
@@ -218,6 +221,9 @@ func TestLoad(t *testing.T) {
 	if c.SessionTTL != 168*time.Hour || c.SessionIdleTimeout != 24*time.Hour {
 		t.Fatalf("session defaults: %v %v", c.SessionTTL, c.SessionIdleTimeout)
 	}
+	if c.OIDCRolesClaim != "roles" || c.OIDCRequiredRole != "" || c.OIDCAdminRole != "" {
+		t.Fatalf("role defaults: %+v", c)
+	}
 
 	t.Setenv("OIDC_ISSUER", "https://i")
 	t.Setenv("OIDC_CLIENT_ID", "id")
@@ -226,6 +232,9 @@ func TestLoad(t *testing.T) {
 	t.Setenv("GEDOUR_DEV_USER", "d")
 	t.Setenv("GEDOUR_SESSION_TTL", "2h")
 	t.Setenv("GEDOUR_SESSION_IDLE_TIMEOUT", "30m")
+	t.Setenv("GEDOUR_OIDC_ROLES_CLAIM", " realm_access.roles ")
+	t.Setenv("GEDOUR_OIDC_REQUIRED_ROLE", "\tgedour-user ")
+	t.Setenv("GEDOUR_OIDC_ADMIN_ROLE", " gedour-admin\n")
 	t.Setenv("GEDOUR_ENCRYPTION_KEY", "k")
 	t.Setenv("GEDOUR_ALLOW_HTTP_HOSTS", " Localhost , ,127.0.0.1")
 	t.Setenv("GEDOUR_ALLOW_PRIVATE_NETS", "127.0.0.0/8, 10.0.0.0/8")
@@ -255,6 +264,15 @@ func TestLoad(t *testing.T) {
 		c.DevUser != "d" || c.SessionTTL != 2*time.Hour || c.SessionIdleTimeout != 30*time.Minute {
 		t.Fatalf("auth env not read: %+v", c)
 	}
+	if c.OIDCRolesClaim != "realm_access.roles" || c.OIDCRequiredRole != "gedour-user" || c.OIDCAdminRole != "gedour-admin" {
+		t.Fatalf("role env not read or not trimmed: %+v", c)
+	}
+	t.Run("blank roles claim", func(t *testing.T) {
+		t.Setenv("GEDOUR_OIDC_ROLES_CLAIM", "  ")
+		if c, err := Load(); err != nil || c.OIDCRolesClaim != "" {
+			t.Fatalf("want a blank claim left for Validate, got %q %v", c.OIDCRolesClaim, err)
+		}
+	})
 
 	for _, key := range []string{"GEDOUR_SHUTDOWN_TIMEOUT", "GEDOUR_SESSION_TTL", "GEDOUR_SESSION_IDLE_TIMEOUT", "GEDOUR_WORKER_POLL", "GEDOUR_WORKER_CONCURRENCY"} {
 		t.Run(key, func(t *testing.T) {

@@ -18,8 +18,8 @@ var (
 		"authorization", "authheader", "bearer", "cookie", "credential", "dsn",
 	}
 	secretSuffixes = []string{"key", "auth", "pass"}
-	// Exact names that only look secret: references to a credential row, never its content.
-	notSecret = map[string]bool{"credentialid": true, "credentialids": true}
+	// Exact names that only look secret: references to a credential row or facts about it, never its content.
+	notSecret = map[string]bool{"credentialid": true, "credentialids": true, "credentialname": true, "credentialmoved": true, "credentialcount": true}
 )
 
 // IsSecretKey reports whether a field, header or parameter name looks like it holds a secret.

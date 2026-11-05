@@ -35,6 +35,9 @@ const talkPausedError = "held: channel paused after Nextcloud Talk answered HTTP
 // errUnreadable ends a delivery without sending: its channel's owner lost access to the watch.
 var errUnreadable = errors.New("not sent: the channel's owner can no longer read this watch")
 
+// errOwnerDisabled ends a delivery queued before its channel's owner was disabled (006-AC8).
+var errOwnerDisabled = errors.New("not sent: the channel's owner is disabled")
+
 // Backoff is the wait after the n-th failed attempt (n from 1).
 var Backoff = []time.Duration{30 * time.Second, 2 * time.Minute, 10 * time.Minute, 30 * time.Minute}
 
@@ -165,16 +168,20 @@ func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify
 		return ch, nd, err
 	}
 	e := &nd.Event
+	var active bool
 	// The channel owner must still read the watch: a share revoked after routing sends nothing more.
-	err = d.pool.QueryRow(ctx, `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind
-		FROM events e JOIN watches w ON w.id = e.watch_id JOIN channels c ON c.id = $2
+	err = d.pool.QueryRow(ctx, `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind, `+activeOwner+`
+		FROM events e JOIN watches w ON w.id = e.watch_id JOIN channels c ON c.id = $2 JOIN users u ON u.id = c.owner_id
 		WHERE e.id = $1 AND `+watch.ReadableSQL("w", "c.owner_id"), j.eventID, j.channelID).
-		Scan(&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &nd.Watch.ID, &nd.Watch.Name, &nd.Watch.Kind)
+		Scan(&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &nd.Watch.ID, &nd.Watch.Name, &nd.Watch.Kind, &active)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ch, nd, errUnreadable
 	}
 	if err != nil {
 		return ch, nd, fmt.Errorf("load event: %w", err)
+	}
+	if !active {
+		return ch, nd, errOwnerDisabled
 	}
 	if j.ruleID != nil {
 		var name string
@@ -309,7 +316,7 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *
 		lastErr = &msg
 		status = "failed"
 		delay = retryDelay(attempt)
-		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, notify.ErrPermanent) {
+		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, errOwnerDisabled) || errors.Is(sendErr, notify.ErrPermanent) {
 			status = "dead"
 			// A dead delivery's next_attempt_at is when it died: the Talk pause compares it to channel edits.
 			delay = 0

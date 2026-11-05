@@ -5,9 +5,11 @@ import { NavLink } from "react-router";
 import { getVersion } from "@/api/client";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useInboxCount } from "@/hooks/useInbox";
+import { useMe } from "@/hooks/useMe";
 import { SIDEBAR_MAX, SIDEBAR_MIN } from "@/hooks/useSidebar";
 import { cn } from "@/lib/utils";
 import { NAV } from "@/nav";
+import type { Me } from "@/types/api";
 
 export const COLLAPSED_WIDTH = 64;
 const KEY_STEP = 16;
@@ -33,6 +35,9 @@ export function Sidebar({
 }: SidebarProps) {
   const iconOnly = collapsed && !mobile;
   const unread = useInboxCount().data ?? 0;
+  const me = useMe().data as Me;
+  // 006-AC15: admin pages answer 409 while acting as someone, so they are not offered.
+  const isAdmin = me.is_admin && !me.acting_as;
   const drag = useRef<{ x: number; width: number } | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -83,7 +88,7 @@ export function Sidebar({
     >
       <nav aria-label="Main" className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-3">
         <ul className="flex flex-col gap-0.5">
-          {NAV.map(({ path, label, icon: Icon }) => {
+          {NAV.filter((item) => isAdmin || !item.admin).map(({ path, label, icon: Icon }) => {
             const count = path === "/inbox" ? unread : 0;
             const name = count ? `${label}, ${count} unread` : label;
             return (

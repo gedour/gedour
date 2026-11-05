@@ -277,7 +277,12 @@ function AuditRow({
             </time>
           </Tooltip>
         </td>
-        <td className="max-w-48 truncate px-4 py-3">{item.actor_name || "System"}</td>
+        <td className="max-w-48 truncate px-4 py-3">
+          {item.actor_name || "System"}
+          {item.on_behalf_of && (
+            <span className="text-muted"> for {item.on_behalf_of_name || "a purged account"}</span>
+          )}
+        </td>
         <td className="px-4 py-3">
           <span
             className={cn(

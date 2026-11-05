@@ -139,7 +139,7 @@ func TestEnvOfDefaults(t *testing.T) {
 }
 
 // A saved filter the model no longer accepts is named at Error when the router starts: not a disabled rule, not a
-// rule that still compiles.
+// rule that still compiles, not a rule of a disabled account.
 func TestRouterLogsRefusedRules(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user(t, "alice")
@@ -152,6 +152,10 @@ func TestRouterLogsRefusedRules(t *testing.T) {
 	if _, err := e.pool.Exec(context.Background(), `UPDATE rules SET enabled = false WHERE id = $1`, off); err != nil {
 		t.Fatal(err)
 	}
+	// 006-AC8: a disabled owner's rules route nothing, so they are not worth a log line either.
+	carol := e.user(t, "carol")
+	e.rule(t, carol, nil, refused)
+	e.setInactive(t, carol, "disabled_at")
 	core, logs := observer.New(zap.ErrorLevel)
 	r := NewRouter(e.pool, zap.New(core), e.m, time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())

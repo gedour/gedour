@@ -14,6 +14,10 @@ const REASONS: Record<string, { title: string; body: string }> = {
     title: "Sign-in failed, try again",
     body: "The sign-in did not complete. Start it again from here.",
   },
+  forbidden: {
+    title: "No access to gedour",
+    body: "Your account is not allowed to use gedour. Ask an administrator for access.",
+  },
 };
 
 const ACTION =

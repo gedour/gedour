@@ -121,6 +121,7 @@ describe("SignInGate", () => {
   it.each([
     ["unavailable", "Sign-in service unavailable", "Try again"],
     ["failed", "Sign-in failed, try again", "Try again"],
+    ["forbidden", "No access to gedour", "Try again"],
     ["<script>", "Sign in to continue", "Sign in"],
     ["constructor", "Sign in to continue", "Sign in"],
     ["toString", "Sign in to continue", "Sign in"],
@@ -136,6 +137,22 @@ describe("SignInGate", () => {
       "/auth/login?return_to=%2Finbox",
     );
     expect(document.body).not.toHaveTextContent("<script>");
+  });
+
+  // 006-AC1: the refusal says who can fix it, and still offers a retry for a role granted later.
+  it("tells a refused user to ask an administrator", async () => {
+    mockApi({ "/api/v1/me": unauthorized });
+    renderApp("/?auth=forbidden", null);
+    expect(await gate("No access to gedour")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your account is not allowed to use gedour. Ask an administrator for access.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute(
+      "href",
+      "/auth/login?return_to=%2F",
+    );
   });
 
   // An encoded key is the same reason to the reader, and it is stripped from the return target too.

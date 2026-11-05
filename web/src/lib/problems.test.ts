@@ -27,6 +27,15 @@ describe("fieldErrors", () => {
     expect(fieldErrors(new Error("boom"))).toEqual({});
   });
 
+  it("puts an error without location at the top, and names one without message invalid", () => {
+    expect(
+      fieldErrors(new ApiError(400, "x", "bad", [{ location: "body.name" }, { message: "m" }])),
+    ).toEqual({
+      name: "invalid",
+      "": "m",
+    });
+  });
+
   it("problemText prefers the detail", () => {
     expect(problemText(new ApiError(409, "p: HTTP 409", "in use"))).toBe("in use");
     expect(problemText(new ApiError(500, "p: HTTP 500"))).toBe("p: HTTP 500");

@@ -16,16 +16,18 @@ import (
 
 // Item is one audit_log row as the API returns it.
 type Item struct {
-	ID          int64           `json:"id"`
-	At          time.Time       `json:"at"`
-	ActorUserID *string         `json:"actor_user_id" doc:"Null for system actions"`
-	ActorName   string          `json:"actor_name" doc:"Actor's display name, or email when it has none"`
-	Action      string          `json:"action"`
-	TargetType  string          `json:"target_type"`
-	TargetID    string          `json:"target_id"`
-	Before      json.RawMessage `json:"before" doc:"State before the change, secrets redacted; null on create"`
-	After       json.RawMessage `json:"after" doc:"State after the change, secrets redacted; null on delete"`
-	RequestID   string          `json:"request_id"`
+	ID             int64           `json:"id"`
+	At             time.Time       `json:"at"`
+	ActorUserID    *string         `json:"actor_user_id" doc:"Null for system actions"`
+	ActorName      string          `json:"actor_name" doc:"Actor's display name, or email when it has none"`
+	OnBehalfOf     *string         `json:"on_behalf_of" doc:"User the actor was acting as; null otherwise"`
+	OnBehalfOfName string          `json:"on_behalf_of_name" doc:"That user's display name, or email; empty when on_behalf_of is null"`
+	Action         string          `json:"action"`
+	TargetType     string          `json:"target_type"`
+	TargetID       string          `json:"target_id"`
+	Before         json.RawMessage `json:"before" doc:"State before the change, secrets redacted; null on create"`
+	After          json.RawMessage `json:"after" doc:"State after the change, secrets redacted; null on delete"`
+	RequestID      string          `json:"request_id"`
 }
 
 // Query selects entries newest first; zero fields do not filter.
@@ -38,10 +40,10 @@ type Query struct {
 	Limit      int
 }
 
-// visible is the one visibility rule (001-AC22): entries the viewer made, or on a watch they can read
+// visible is the one visibility rule (001-AC22): entries the viewer made or someone made acting as them (006-AC16), or on a watch they can read
 // now, or on a credential, channel, rule or delivery (via its channel) they own. Share entries (target "<watch>:<user>") go to the watch owner, and
 // to a sharee only for their own current share. Losing access to a watch hides its history.
-const visible = `(a.actor_user_id = @viewer
+const visible = `(a.actor_user_id = @viewer OR a.on_behalf_of = @viewer
 	OR (a.target_type = 'watch' AND a.target_id IN (
 		SELECT id::text FROM watches WHERE owner_id = @viewer
 		UNION ALL SELECT watch_id::text FROM watch_shares WHERE user_id = @viewer))
@@ -134,8 +136,9 @@ func List(ctx context.Context, pool *pgxpool.Pool, q Query) ([]Item, string, err
 		args["cursor_at"], args["cursor_id"] = at, id
 	}
 	rows, err := pool.Query(ctx, `SELECT a.id, a.at, a.actor_user_id::text, COALESCE(NULLIF(u.display_name, ''), u.email, ''),
-			a.action, a.target_type, a.target_id, a.before, a.after, a.request_id
-		FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id
+			a.action, a.target_type, a.target_id, a.before, a.after, a.request_id,
+			a.on_behalf_of::text, COALESCE(NULLIF(b.display_name, ''), b.email, '')
+		FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id LEFT JOIN users b ON b.id = a.on_behalf_of
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY a.at DESC, a.id DESC LIMIT @limit`, args)
 	if err != nil {
@@ -144,7 +147,7 @@ func List(ctx context.Context, pool *pgxpool.Pool, q Query) ([]Item, string, err
 	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Item, error) {
 		var it Item
 		err := r.Scan(&it.ID, &it.At, &it.ActorUserID, &it.ActorName, &it.Action, &it.TargetType, &it.TargetID,
-			&it.Before, &it.After, &it.RequestID)
+			&it.Before, &it.After, &it.RequestID, &it.OnBehalfOf, &it.OnBehalfOfName)
 		return it, err
 	})
 	if err != nil {

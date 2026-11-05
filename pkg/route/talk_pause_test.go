@@ -468,3 +468,23 @@ func TestTalkHoldCheckFails(t *testing.T) {
 		t.Errorf("%d claims left", n)
 	}
 }
+
+// 006-AC8: a disabled owner's delivery to a Talk channel paused after a 401 ends dead with the reason, not held.
+func TestTalkPauseDisabledOwner(t *testing.T) {
+	e := newTalkEnv(t)
+	bad := e.channel(t, "bad", wrongTalkSecret)
+	e.events(t, 2, bad)
+	e.rounds(t, 1)
+	e.rounds(t, 1)
+	if n := e.count(t, `SELECT count(*) FROM deliveries WHERE channel_id = $1 AND status = 'failed' AND last_error = $2`, bad, talkPausedError); n != 1 {
+		t.Fatalf("%d held, want 1 behind the pause", n)
+	}
+	e.setInactive(t, e.alice, "disabled_at")
+	e.rounds(t, 1)
+	if n := e.count(t, `SELECT count(*) FROM deliveries WHERE channel_id = $1 AND status = 'dead' AND last_error = $2`, bad, errOwnerDisabled.Error()); n != 1 {
+		t.Fatalf("%d dead for the disabled owner, want 1", n)
+	}
+	if n := e.requests("talk-bad-rejected"); n != 1 {
+		t.Fatalf("%d requests, want 1", n)
+	}
+}

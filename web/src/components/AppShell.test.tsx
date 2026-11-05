@@ -1,10 +1,11 @@
+import { focusManager } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MOBILE_QUERY } from "@/components/AppShell";
 import { COLLAPSED_KEY, SIDEBAR_MAX, SIDEBAR_MIN, WIDTH_KEY } from "@/hooks/useSidebar";
-import { mockApi } from "@/test/api";
+import { ME, mockApi } from "@/test/api";
 import { setMedia } from "@/test/media";
 import { renderApp } from "@/test/render";
 
@@ -182,6 +183,36 @@ describe("AppShell", () => {
     renderApp();
     expect(sidebar()).toHaveAttribute("data-collapsed", "true");
     expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+  });
+  // Act-as started or stopped in another tab, seen on focus: nothing typed or cached for the previous
+  // account may stay, or a draft would be saved as the new one.
+  it("drops the page and cached data when the effective user changes", async () => {
+    const fn = mockApi({ "/api/v1/watches": { items: [] } });
+    const { router, client } = renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "Alice draft");
+    client.setQueryData(["sentinel"], "alice's");
+    const after = mockApi({
+      "/api/v1/watches": { items: [] },
+      "/api/v1/me": {
+        ...ME,
+        id: "b",
+        display_name: "Bob",
+        acting_as: { id: ME.id, email: ME.email, display_name: ME.display_name },
+      },
+    });
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    focusManager.setFocused(undefined);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/inbox"));
+    expect(screen.queryByDisplayValue("Alice draft")).toBeNull();
+    expect(client.getQueryData(["sentinel"])).toBeUndefined();
+    expect(client.getQueryData(["me"])).toMatchObject({ id: "b" });
+    const sent = [...fn.mock.calls, ...after.mock.calls].map(([, init]) =>
+      String(init?.body ?? ""),
+    );
+    expect(sent.some((b) => b.includes("Alice draft"))).toBe(false);
   });
 });
 

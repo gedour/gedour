@@ -3,6 +3,7 @@ import { Navigate, type RouteObject } from "react-router";
 
 import { AuthGate } from "@/components/AuthGate";
 import { NAV, type NavItem } from "@/nav";
+import { AdminUsersPage } from "@/pages/AdminUsersPage";
 import { AuditPage } from "@/pages/AuditPage";
 import { ChannelsPage } from "@/pages/ChannelsPage";
 import { CredentialsPage } from "@/pages/CredentialsPage";
@@ -27,6 +28,7 @@ const PAGES: Record<string, (item: NavItem) => ReactNode> = {
   "/audit": (item) => <AuditPage item={item} />,
   "/watches": (item) => <WatchesPage item={item} />,
   "/settings": (item) => <SettingsPage item={item} />,
+  "/admin/users": (item) => <AdminUsersPage item={item} />,
 };
 
 export const routes: RouteObject[] = [

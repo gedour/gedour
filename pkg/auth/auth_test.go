@@ -54,8 +54,8 @@ func newPool(t *testing.T) *pgxpool.Pool {
 }
 
 // setup serves Guard + Register on a TLS test server (the cookie jar only sends Secure cookies over https),
-// plus a POST /api/v1/echo mutation to probe CSRF.
-func setup(t *testing.T, dev bool) *env {
+// plus a POST /api/v1/echo mutation to probe CSRF. opts adjust the config before the service is built.
+func setup(t *testing.T, dev bool, opts ...func(*config.Config)) *env {
 	t.Helper()
 	e := &env{pool: newPool(t)}
 	var h http.Handler
@@ -67,6 +67,9 @@ func setup(t *testing.T, dev bool) *env {
 	} else {
 		e.stub = newStub(t)
 		cfg.OIDCIssuer, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.PublicURL = e.stub.URL, "gedour", "s3cret", e.app.URL
+	}
+	for _, o := range opts {
+		o(&cfg)
 	}
 	svc, err := New(cfg, e.pool, zap.NewNop())
 	if err != nil {
@@ -156,6 +159,7 @@ type me struct {
 	DisplayName string `json:"display_name"`
 	CSRFToken   string `json:"csrf_token"`
 	DevMode     bool   `json:"dev_mode"`
+	IsAdmin     bool   `json:"is_admin"`
 }
 
 func (e *env) me(t *testing.T) (int, me) {
@@ -547,7 +551,8 @@ func TestDevMode(t *testing.T) {
 		t.Fatalf("dev cookie: %+v", c)
 	}
 	code, m := e.me(t)
-	if code != http.StatusOK || !m.DevMode || m.Email != "dev@local" || m.DisplayName != "dev@local" {
+	// 006-AC19: the dev user is admin.
+	if code != http.StatusOK || !m.DevMode || !m.IsAdmin || m.Email != "dev@local" || m.DisplayName != "dev@local" {
 		t.Fatalf("me: %d %+v", code, m)
 	}
 	if n := e.count(t, `SELECT count(*) FROM users WHERE oidc_sub = 'dev:dev@local'`); n != 1 {
@@ -555,6 +560,13 @@ func TestDevMode(t *testing.T) {
 	}
 	if n := e.count(t, `SELECT count(*) FROM sessions`); n != 1 {
 		t.Fatalf("the cookie must be reused, got %d sessions", n)
+	}
+	// 006-AC19: a dev session row from before migration 00009 still reports admin.
+	if _, err := e.pool.Exec(t.Context(), `UPDATE sessions SET is_admin = false`); err != nil {
+		t.Fatal(err)
+	}
+	if code, m := e.me(t); code != http.StatusOK || !m.IsAdmin {
+		t.Fatalf("pre-00009 dev session: %d %+v", code, m)
 	}
 	if resp := e.do(t, http.MethodPost, "/api/v1/echo", nil); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("dev mutation without CSRF: %d", resp.StatusCode)

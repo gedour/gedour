@@ -60,6 +60,157 @@
         ],
         "type": "object"
       },
+      "Admin": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "AdminUser": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/AdminUserCounts"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "disabled_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_login_at": {
+            "description": "Null when the account never signed in",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled",
+              "purged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "created_at",
+          "last_login_at",
+          "status",
+          "disabled_at",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "AdminUserCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "credentials": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "rules": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "scripts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "shared_watches": {
+            "description": "Owned watches shared with at least one other user, included in watches",
+            "format": "int64",
+            "type": "integer"
+          },
+          "watches": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "watches",
+          "shared_watches",
+          "channels",
+          "rules",
+          "scripts",
+          "credentials"
+        ],
+        "type": "object"
+      },
+      "AdminWatch": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_name": {
+            "description": "Null when the watch uses no credential",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shares": {
+            "description": "Users the watch is shared with",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "credential_name",
+          "shares"
+        ],
+        "type": "object"
+      },
       "BuildInfo": {
         "additionalProperties": false,
         "properties": {
@@ -1065,6 +1216,17 @@
             "format": "int64",
             "type": "integer"
           },
+          "on_behalf_of": {
+            "description": "User the actor was acting as; null otherwise",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_behalf_of_name": {
+            "description": "That user's display name, or email; empty when on_behalf_of is null",
+            "type": "string"
+          },
           "request_id": {
             "type": "string"
           },
@@ -1080,6 +1242,8 @@
           "at",
           "actor_user_id",
           "actor_name",
+          "on_behalf_of",
+          "on_behalf_of_name",
           "action",
           "target_type",
           "target_id",
@@ -1368,6 +1532,43 @@
         ],
         "type": "object"
       },
+      "ListUserWatchesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/AdminWatch"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListUsersOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ListWatchesOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -1390,6 +1591,10 @@
       "MeOutputBody": {
         "additionalProperties": false,
         "properties": {
+          "acting_as": {
+            "$ref": "#/components/schemas/Admin",
+            "description": "The admin who signed in, while this session acts as the user above; null otherwise"
+          },
           "csrf_token": {
             "description": "Send back in the X-CSRF-Token header on every non-GET request",
             "type": "string"
@@ -1407,6 +1612,10 @@
           "id": {
             "format": "uuid",
             "type": "string"
+          },
+          "is_admin": {
+            "description": "The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1414,7 +1623,31 @@
           "email",
           "display_name",
           "csrf_token",
-          "dev_mode"
+          "dev_mode",
+          "is_admin",
+          "acting_as"
+        ],
+        "type": "object"
+      },
+      "OtherRule": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "description": "Its owner's name, or email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "owner"
         ],
         "type": "object"
       },
@@ -1475,6 +1708,101 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "PurgeCounts": {
+        "additionalProperties": false,
+        "properties": {
+          "acting_sessions": {
+            "description": "Admin sessions acting as the account, sent back to their admin's own data",
+            "format": "int64",
+            "type": "integer"
+          },
+          "channels": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "credential_count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "inbox_items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "other_users_rules": {
+            "description": "Other users' rules targeting the account's watches",
+            "format": "int64",
+            "type": "integer"
+          },
+          "rules": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "scripts": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sessions": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "shares_received": {
+            "description": "Watches of other users shared with the account",
+            "format": "int64",
+            "type": "integer"
+          },
+          "watches": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "watches",
+          "channels",
+          "rules",
+          "other_users_rules",
+          "scripts",
+          "credential_count",
+          "shares_received",
+          "inbox_items",
+          "sessions",
+          "acting_sessions"
+        ],
+        "type": "object"
+      },
+      "PurgePreviewOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/PurgeCounts"
+          },
+          "other_rules": {
+            "description": "Sorted by owner, then name",
+            "items": {
+              "$ref": "#/components/schemas/OtherRule"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "shared_watches": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/SharedWatch"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "counts",
+          "shared_watches",
+          "other_rules"
         ],
         "type": "object"
       },
@@ -1837,6 +2165,34 @@
         ],
         "type": "object"
       },
+      "SharedWatch": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shared_with": {
+            "description": "Names (or emails) of the users it is shared with",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "shared_with"
+        ],
+        "type": "object"
+      },
       "StateSnapshot": {
         "additionalProperties": false,
         "properties": {
@@ -1882,6 +2238,57 @@
         },
         "required": [
           "ok"
+        ],
+        "type": "object"
+      },
+      "TransferInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "to_user_id": {
+            "description": "The new owner, an active account",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to_user_id"
+        ],
+        "type": "object"
+      },
+      "TransferResult": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_moved": {
+            "type": "boolean"
+          },
+          "credential_name": {
+            "description": "Its name at the new owner, suffixed on a clash",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dropped_share": {
+            "description": "The new owner's share on the watch was removed",
+            "type": "boolean"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "credential_id",
+          "credential_moved",
+          "credential_name",
+          "dropped_share"
         ],
         "type": "object"
       },
@@ -2166,6 +2573,337 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/admin/act-as": {
+      "delete": {
+        "operationId": "admin-act-as-stop",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Return this session to the admin's own account",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "admin-list-users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListUsersOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Every account with its last sign-in, status and what it owns (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/act-as": {
+      "post": {
+        "operationId": "admin-act-as-start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Run this session as another account until stopped; audited on both sides (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/disable": {
+      "post": {
+        "operationId": "admin-disable-user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/enable": {
+      "post": {
+        "operationId": "admin-enable-user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Enable a disabled account again (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/purge": {
+      "post": {
+        "operationId": "admin-purge-user",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete a disabled account's data and blank its email and name; the audit log stays (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/purge-preview": {
+      "get": {
+        "operationId": "admin-purge-preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgePreviewOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What purging an account deletes, other users' shared watches and rules included (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/watches": {
+      "get": {
+        "operationId": "admin-list-user-watches",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListUserWatchesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The watches an account owns, for a transfer (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/watches/{id}/transfer": {
+      "post": {
+        "operationId": "admin-transfer-watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferResult"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Give a watch, and its credential, to another active account (admin only)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "operationId": "list-audit",

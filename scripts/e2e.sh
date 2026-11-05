@@ -80,6 +80,8 @@ env -u GEDOUR_DEV_USER \
   OIDC_ISSUER="http://localhost:${KC_PORT}/realms/gedour-test" \
   OIDC_CLIENT_ID=gedour \
   OIDC_CLIENT_SECRET=gedour-test-secret \
+  GEDOUR_OIDC_REQUIRED_ROLE=gedour-user \
+  GEDOUR_OIDC_ADMIN_ROLE=gedour-admin \
   GEDOUR_ENCRYPTION_KEY="$(printf 'dev-only-gedour-key-32-bytes-!!!' | base64)" \
   GEDOUR_ALLOW_PRIVATE_NETS=127.0.0.0/8 \
   GEDOUR_ALLOW_HTTP_HOSTS=127.0.0.1 \

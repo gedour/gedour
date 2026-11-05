@@ -24,8 +24,9 @@ UI on <http://localhost:8080> in dev single-user mode (signed in as `dev@local`)
 docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour with OIDC on :8082
 ```
 
-<http://localhost:8082> signs in through Keycloak's test realm (`alice`/`alice`, `bob`/`bob`,
-`deploy/keycloak/realm.json`).
+<http://localhost:8082> signs in through Keycloak's test realm (`deploy/keycloak/realm.json`): `alice`/`alice`
+(admin), `bob`/`bob` (user), `carol`/`carol` (no role, refused), `dave`/`dave` (user; the e2e suite
+purges it).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -52,6 +53,9 @@ for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same chang
 | `OIDC_ISSUER` | | OIDC provider issuer URL |
 | `OIDC_CLIENT_ID` | | OIDC client ID (confidential client, authorization code + PKCE) |
 | `OIDC_CLIENT_SECRET` | | OIDC client secret; also keys the short-lived login state cookie |
+| `GEDOUR_OIDC_ROLES_CLAIM` | `roles` | ID token claim holding the user's roles: a top-level key (`https://example.com/roles` works), else a dotted path (`realm_access.roles`) |
+| `GEDOUR_OIDC_REQUIRED_ROLE` | | Role needed to sign in; empty lets any authenticated user in |
+| `GEDOUR_OIDC_ADMIN_ROLE` | | Role that makes an admin, and also grants sign-in; empty means no admin |
 | `GEDOUR_PUBLIC_URL` | (required with OIDC) | Browser-facing base URL; the redirect URI is `<url>/auth/callback` |
 | `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
@@ -87,6 +91,72 @@ endpoint is on another host or port than the issuer); when it does not, or the c
 no answer within 10 s, the gate shows "Sign-in service unavailable". A rejected callback (state, code, ID token,
 session write) shows "Sign-in failed, try again". Dev mode signs in by itself and never renders the gate;
 a failed dev sign-in answers a plain 500.
+
+### Restricting access with roles
+
+- gedour reads the roles from the ID token's `GEDOUR_OIDC_ROLES_CLAIM`, a string array. A missing claim,
+  another type or non-string items count as no role.
+- With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
+  gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
+- Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
+  Sessions opened before the upgrade that added roles are not admin until their next sign-in.
+- `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.
+
+Microsoft Entra ID:
+
+1. App registration → App roles: create e.g. `gedour-user` and `gedour-admin` (allowed member types: Users/Groups).
+2. Enterprise application → Users and groups: assign users or groups to those roles.
+3. The assigned app roles arrive in the ID token's `roles` claim: keep the default `GEDOUR_OIDC_ROLES_CLAIM`.
+
+Keycloak:
+
+1. Client → Roles: create `gedour-user` and `gedour-admin`; assign them to users or groups.
+2. Client → Client scopes → the dedicated scope → Add mapper → By configuration → "User Client Role": client
+   ID your client, token claim name `roles`, multivalued, "Add to ID token" on.
+3. Without that mapper, the built-in `resource_access.<client>.roles` claim is in the access token only:
+   turn "Add to ID token" on in the "client roles" mapper of the `roles` client scope, then set
+   `GEDOUR_OIDC_ROLES_CLAIM=resource_access.<client>.roles`.
+
+The compose realm (`deploy/keycloak/realm.json`) is set up this way.
+
+### Administration
+
+- Admins (`GEDOUR_OIDC_ADMIN_ROLE` at sign-in, or the dev user) get an Administration entry in the
+  navigation: every account with its last sign-in (never-signed-in first, then oldest), status (active,
+  disabled, purged) and what it owns (watches, shared ones apart, channels, rules, scripts, credentials).
+- Disable (not your own account): every session of the account ends at once (its next call gets 401),
+  its sign-in is refused with "No access to gedour" (`user.login_denied`, reason `disabled`), its rules
+  route nothing and it gets no inbox items. Deliveries already queued for its channels end unsent
+  ("not sent: the channel's owner is disabled"). Its data stays; watches it shares keep collecting for the
+  users they are shared with.
+- Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
+- Both are audited (`user.disable`, `user.enable`) with the status before and after.
+- Transfer (an account's watch count opens its watches): the watch goes to another active account. Its
+  credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
+  the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
+  those watches listed). The new owner's share on the watch is dropped, other users keep theirs. The old
+  owner loses access; its rules targeting that watch stay and route nothing while it cannot read the watch
+  (a share or a transfer back restores routing).
+  Audited as `watch.transfer` (owners, credential; never the secret).
+- Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
+  scripts, credentials, shares and inbox, and blanks its email and name. Other users lose the watches it
+  shared with them and their rules on those watches; the confirmation lists both. The account row stays
+  as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
+  append-only and untouched: entries written before the purge (such as the account's creation) keep
+  what they recorded. Audited as `user.purge` with the deleted counts, never the email or name.
+
+#### Acting as a user
+
+- "Act as" on an account row (not your own, not a purged one; a disabled one is fine, to fix it before
+  enabling it): your session runs as that user. Every page shows their data, inbox included, under a
+  banner with "Stop". Stop returns the session to your own data. Signing out ends your session.
+- While acting, the Administration pages are hidden and every admin API call answers 409, except
+  `DELETE /api/v1/admin/act-as` (stop).
+- Audit: every change made while acting records you as actor and the user as `on_behalf_of`. The user
+  sees those entries in their audit view as "<you> for <them>", plus the start and the stop
+  (`session.act_as_start`, `session.act_as_stop`); you see them in yours.
+- Purging an account sends every admin session acting as it back to its admin (`acting_sessions` in the
+  preview and the audit).
 
 ## Collection
 
@@ -281,7 +351,7 @@ kubectl create secret generic gedour \
 ```
 
 Other settings (table in [Configuration](#configuration)) go into the ConfigMap from an overlay:
-`GEDOUR_PUBLIC_URL` (web, required with OIDC), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
+`GEDOUR_PUBLIC_URL` (web, required with OIDC), the `GEDOUR_OIDC_*` role settings (web), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
 (both roles: web validates watch URLs, the worker fetches), `GEDOUR_WORKER_POLL` and
 `GEDOUR_WORKER_CONCURRENCY` (worker), `GEDOUR_TELEGRAM_API_URL`, `GEDOUR_SMTP_TLS` and `GEDOUR_SMTP_PLAIN_NETS`
 (both). Telegram bot tokens belong to channels, in the database. Never set `GEDOUR_DEV_USER` in a cluster.
@@ -433,6 +503,10 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer
   read are hidden, and a rule's `watch_name` is null then.
+
+- `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/disable|enable` (204; 404 unknown account; 409
+  on your own account, a purged one, or one already in the asked state). Every `/api/v1/admin/` call needs
+  an admin session (403 otherwise).
 
 The full contract is `api/openapi.json` (also served at `/api/openapi.json`).
 

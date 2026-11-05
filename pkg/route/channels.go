@@ -666,11 +666,13 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 			return err
 		}
 		var waitMS float64
-		// The actor index, bounded to the interval, finds the user's last test.
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM (max(at) + make_interval(secs => $2) - now())) * 1000, 0)
-			FROM audit_log WHERE actor_user_id = $1 AND at > now() - make_interval(secs => $2) AND action = 'channel.tested'`,
+		// The account's last test, its own or an admin's acting as it: one index per branch (on_behalf_of, actor).
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM (GREATEST(
+				(SELECT max(at) FROM audit_log WHERE on_behalf_of = $1 AND at > now() - make_interval(secs => $2) AND action = 'channel.tested'),
+				(SELECT max(at) FROM audit_log WHERE actor_user_id = $1 AND on_behalf_of IS NULL AND at > now() - make_interval(secs => $2) AND action = 'channel.tested')
+			) + make_interval(secs => $2) - now())) * 1000, 0)`,
 			me, TestInterval.Seconds()).Scan(&waitMS); err != nil {
-			return err
+			return fmt.Errorf("last channel test: %w", err)
 		}
 		if waitMS > 0 {
 			return errTooSoon{time.Duration(waitMS) * time.Millisecond}

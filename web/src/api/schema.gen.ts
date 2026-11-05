@@ -4,6 +4,159 @@
  */
 
 export interface paths {
+  "/api/v1/admin/act-as": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Return this session to the admin's own account */
+    delete: operations["admin-act-as-stop"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Every account with its last sign-in, status and what it owns (admin only) */
+    get: operations["admin-list-users"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/act-as": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Run this session as another account until stopped; audited on both sides (admin only) */
+    post: operations["admin-act-as-start"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/disable": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only) */
+    post: operations["admin-disable-user"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/enable": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Enable a disabled account again (admin only) */
+    post: operations["admin-enable-user"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/purge": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Delete a disabled account's data and blank its email and name; the audit log stays (admin only) */
+    post: operations["admin-purge-user"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/purge-preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** What purging an account deletes, other users' shared watches and rules included (admin only) */
+    get: operations["admin-purge-preview"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/users/{id}/watches": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The watches an account owns, for a transfer (admin only) */
+    get: operations["admin-list-user-watches"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/watches/{id}/transfer": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Give a watch, and its credential, to another active account (admin only) */
+    post: operations["admin-transfer-watch"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/audit": {
     parameters: {
       query?: never;
@@ -668,6 +821,60 @@ export interface components {
       /** @enum {string} */
       permission: "ro" | "rw";
     };
+    Admin: {
+      display_name: string;
+      email: string;
+      /** Format: uuid */
+      id: string;
+    };
+    AdminUser: {
+      counts: components["schemas"]["AdminUserCounts"];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      disabled_at: string | null;
+      display_name: string;
+      email: string;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description Null when the account never signed in
+       */
+      last_login_at: string | null;
+      /** @enum {string} */
+      status: "active" | "disabled" | "purged";
+    };
+    AdminUserCounts: {
+      /** Format: int64 */
+      channels: number;
+      /** Format: int64 */
+      credentials: number;
+      /** Format: int64 */
+      rules: number;
+      /** Format: int64 */
+      scripts: number;
+      /**
+       * Format: int64
+       * @description Owned watches shared with at least one other user, included in watches
+       */
+      shared_watches: number;
+      /** Format: int64 */
+      watches: number;
+    };
+    AdminWatch: {
+      /** @description Null when the watch uses no credential */
+      credential_name: string | null;
+      /** Format: uuid */
+      id: string;
+      kind: string;
+      name: string;
+      /**
+       * Format: int64
+       * @description Users the watch is shared with
+       */
+      shares: number;
+    };
     BuildInfo: {
       /** @description Build time, ISO 8601 */
       build_timestamp: string;
@@ -1060,6 +1267,10 @@ export interface components {
       before: unknown;
       /** Format: int64 */
       id: number;
+      /** @description User the actor was acting as; null otherwise */
+      on_behalf_of: string | null;
+      /** @description That user's display name, or email; empty when on_behalf_of is null */
+      on_behalf_of_name: string;
       request_id: string;
       target_id: string;
       target_type: string;
@@ -1168,11 +1379,20 @@ export interface components {
       /** @description Latest first; the first item is the current state */
       items: components["schemas"]["StateSnapshot"][] | null;
     };
+    ListUserWatchesOutputBody: {
+      /** @description Sorted by name */
+      items: components["schemas"]["AdminWatch"][] | null;
+    };
+    ListUsersOutputBody: {
+      items: components["schemas"]["AdminUser"][] | null;
+    };
     ListWatchesOutputBody: {
       /** @description Sorted by name */
       items: components["schemas"]["Watch"][] | null;
     };
     MeOutputBody: {
+      /** @description The admin who signed in, while this session acts as the user above; null otherwise */
+      acting_as: components["schemas"]["Admin"];
       /** @description Send back in the X-CSRF-Token header on every non-GET request */
       csrf_token: string;
       /** @description Single-user mode: there is no real sign-out */
@@ -1181,6 +1401,15 @@ export interface components {
       email: string;
       /** Format: uuid */
       id: string;
+      /** @description The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode */
+      is_admin: boolean;
+    };
+    OtherRule: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** @description Its owner's name, or email */
+      owner: string;
     };
     PreviewInputBody: {
       filter: string;
@@ -1197,6 +1426,44 @@ export interface components {
     PreviewOutputBody: {
       /** @description The last 20 events in scope, newest first */
       items: components["schemas"]["PreviewItem"][] | null;
+    };
+    PurgeCounts: {
+      /**
+       * Format: int64
+       * @description Admin sessions acting as the account, sent back to their admin's own data
+       */
+      acting_sessions: number;
+      /** Format: int64 */
+      channels: number;
+      /** Format: int64 */
+      credential_count: number;
+      /** Format: int64 */
+      inbox_items: number;
+      /**
+       * Format: int64
+       * @description Other users' rules targeting the account's watches
+       */
+      other_users_rules: number;
+      /** Format: int64 */
+      rules: number;
+      /** Format: int64 */
+      scripts: number;
+      /** Format: int64 */
+      sessions: number;
+      /**
+       * Format: int64
+       * @description Watches of other users shared with the account
+       */
+      shares_received: number;
+      /** Format: int64 */
+      watches: number;
+    };
+    PurgePreviewOutputBody: {
+      counts: components["schemas"]["PurgeCounts"];
+      /** @description Sorted by owner, then name */
+      other_rules: components["schemas"]["OtherRule"][] | null;
+      /** @description Sorted by name */
+      shared_watches: components["schemas"]["SharedWatch"][] | null;
     };
     Ref: {
       /** @description Functions; date() takes at most 2 arguments */
@@ -1312,6 +1579,13 @@ export interface components {
       /** Format: uuid */
       user_id: string;
     };
+    SharedWatch: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      /** @description Names (or emails) of the users it is shared with */
+      shared_with: string[] | null;
+    };
     StateSnapshot: {
       /** Format: int64 */
       id: number;
@@ -1326,6 +1600,23 @@ export interface components {
       /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
       logs?: string[] | null;
       ok: boolean;
+    };
+    TransferInputBody: {
+      /**
+       * Format: uuid
+       * @description The new owner, an active account
+       */
+      to_user_id: string;
+    };
+    TransferResult: {
+      credential_id: string | null;
+      credential_moved: boolean;
+      /** @description Its name at the new owner, suffixed on a clash */
+      credential_name: string | null;
+      /** @description The new owner's share on the watch was removed */
+      dropped_share: boolean;
+      /** Format: uuid */
+      owner_id: string;
     };
     UpdateChannelInputBody: {
       /** @description Replaces the whole config */
@@ -1434,6 +1725,275 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  "admin-act-as-stop": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-list-users": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListUsersOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-act-as-start": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-disable-user": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-enable-user": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-purge-user": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-purge-preview": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PurgePreviewOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-list-user-watches": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListUserWatchesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "admin-transfer-watch": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TransferInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TransferResult"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
   "list-audit": {
     parameters: {
       query?: {

@@ -52,7 +52,9 @@ services:
       - "127.0.0.1:${GEDOUR_HTTP_PORT:-8080}:8080"
       - "127.0.0.1:${GEDOUR_METRICS_PORT:-9090}:9090"
 
-  # `--profile oidc`: Keycloak with the test realm (alice/alice, bob/bob), and gedour on :8082 signing in through it.
+  # `--profile oidc`: Keycloak with the test realm (alice/alice admin, bob/bob user, carol/carol no role, dave/dave user
+  # the e2e suite purges), and gedour
+  # on :8082 signing in through it.
   keycloak:
     profiles: [oidc]
     image: quay.io/keycloak/keycloak:26.8.1
@@ -60,6 +62,9 @@ services:
     command: ["start-dev", "--import-realm", "--http-port=${GEDOUR_KC_PORT:-8081}", "--health-enabled=true"]
     volumes:
       - ./deploy/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
+    # --import-realm skips an existing realm: a throwaway DB re-imports realm.json on every (re)start.
+    tmpfs:
+      - /opt/keycloak/data/h2:uid=1000,gid=0,mode=0770
     ports:
       - "127.0.0.1:${GEDOUR_KC_PORT:-8081}:${GEDOUR_KC_PORT:-8081}"
       # gedour-oidc shares this network namespace, so its port is published here.
@@ -92,6 +97,9 @@ services:
       OIDC_CLIENT_ID: gedour
       # Test-realm secret from deploy/keycloak/realm.json, not a real one.
       OIDC_CLIENT_SECRET: gedour-test-secret
+      # Client roles of the test realm, sent in the ID token's `roles` claim.
+      GEDOUR_OIDC_REQUIRED_ROLE: gedour-user
+      GEDOUR_OIDC_ADMIN_ROLE: gedour-admin
       # Dev-only key, public in this file: never reuse it where real credentials are stored.
       GEDOUR_ENCRYPTION_KEY: ZGV2LW9ubHktZ2Vkb3VyLWtleS0zMi1ieXRlcy0hISE=
 

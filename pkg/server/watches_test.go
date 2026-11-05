@@ -684,6 +684,14 @@ func TestWatchAPIDatabaseFailure(t *testing.T) {
 			t.Errorf("%s %s: %d %s", r.method, r.path, code, raw)
 		}
 	}
+	// The delete's own events statement, past the authorization.
+	if _, err := a.pool.Exec(context.Background(), `ALTER TABLE watch_shares_gone RENAME TO watch_shares; ALTER TABLE credentials_gone RENAME TO credentials;
+		ALTER TABLE events RENAME TO events_gone`); err != nil {
+		t.Fatal(err)
+	}
+	if code, raw := a.call(t, alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil); code != http.StatusInternalServerError || bytes.Contains(raw, []byte("events_gone")) {
+		t.Errorf("delete without events: %d %s", code, raw)
+	}
 }
 
 // 001-AC5 / 001-AC6: a rw sharee cannot send the owner's token elsewhere; the stored target is untouched.

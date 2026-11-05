@@ -8,6 +8,8 @@ export const ME: Me = {
   display_name: "Alice Liddell",
   csrf_token: "csrf-1",
   dev_mode: false,
+  is_admin: false,
+  acting_as: null,
 };
 
 export const VERSION = {

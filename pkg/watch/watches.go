@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -375,9 +376,22 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		return nil, err
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Unlocked first: a caller who may not delete the watch gets its 404/403 without locking anything.
+		if _, err := authorize(ctx, tx, me, in.ID, levelOwner, false); err != nil {
+			return err
+		}
+		// Rules before the watch (lock order in AGENTS.md): a rule edit holds its rule, then wants the watch's KEY SHARE.
+		// NO KEY UPDATE lets the router's FK KEY SHARE through; TestWatchDeleteRacingRouter guards it.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE watch_id = $1 ORDER BY id FOR NO KEY UPDATE`, in.ID); err != nil {
+			return fmt.Errorf("lock rules: %w", err)
+		}
 		before, err := authorize(ctx, tx, me, in.ID, levelOwner, true)
 		if err != nil {
 			return err
+		}
+		// Not left to the cascade: its trigger order may delete rules first and wait on a router holding an event.
+		if _, err := tx.Exec(ctx, `DELETE FROM events WHERE watch_id = $1`, in.ID); err != nil {
+			return fmt.Errorf("delete events: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM watches WHERE id = $1`, in.ID); err != nil {
 			return err

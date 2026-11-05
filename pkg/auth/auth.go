@@ -19,6 +19,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/gedour/gedour/pkg/audit"
 	"github.com/gedour/gedour/pkg/config"
 )
 
@@ -55,6 +56,17 @@ type session struct {
 	id      []byte
 	csrf    string
 	idToken string
+	isAdmin bool
+	// admin is the signed-in user while the session acts as User (006-AC15); nil otherwise.
+	admin *User
+}
+
+// self is the user who signed in, whoever the session acts as.
+func (s *session) self() User {
+	if s.admin != nil {
+		return *s.admin
+	}
+	return s.User
 }
 
 // Service holds the auth configuration and the session store.
@@ -75,6 +87,10 @@ type Service struct {
 
 	publicURL string
 
+	rolesClaim   string
+	requiredRole string
+	adminRole    string
+
 	discoverOnce singleflight.Group
 	mu           sync.Mutex // guards the three disc* fields only, never held across I/O
 	disc         *discovery
@@ -84,6 +100,9 @@ type Service struct {
 	devMu      sync.Mutex
 	devAccount *User // the dev user's row, upserted once
 }
+
+// AdminPrefix starts every /api path only an admin session may call.
+const AdminPrefix = "/api/v1/admin/"
 
 // SignedOutPath is the SPA page sign-out lands on; it never redirects to login by itself.
 const SignedOutPath = "/auth/signed-out"
@@ -109,6 +128,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 		s.issuer = cfg.OIDCIssuer
 		s.stateKey = key
 		s.publicURL = strings.TrimRight(cfg.PublicURL, "/")
+		s.rolesClaim, s.requiredRole, s.adminRole = cfg.OIDCRolesClaim, cfg.OIDCRequiredRole, cfg.OIDCAdminRole
 		s.oauth = oauth2.Config{
 			ClientID:     cfg.OIDCClientID,
 			ClientSecret: cfg.OIDCClientSecret,
@@ -210,8 +230,20 @@ func (s *Service) Guard(next http.Handler) http.Handler {
 		case !safeMethod(r.Method) && !csrfOK(r, sess):
 			writeCSRFProblem(w)
 			return
+		// 006-AC5: one check on the prefix covers every admin operation, whichever package registers it.
+		case strings.HasPrefix(r.URL.Path, AdminPrefix) && !sess.isAdmin:
+			writeProblem(w, http.StatusForbidden, "administrators only")
+			return
+		// Admin pages act on other accounts: never from inside one, but the way out stays open.
+		case sess.admin != nil && strings.HasPrefix(r.URL.Path, AdminPrefix) && (r.Method != http.MethodDelete || r.URL.Path != actAsPath):
+			writeProblem(w, http.StatusConflict, "stop acting as "+label(sess.User)+" first")
+			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess)))
+		ctx := context.WithValue(r.Context(), ctxKey{}, sess)
+		if sess.admin != nil {
+			ctx = audit.WithActing(ctx, sess.admin.ID, sess.ID)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -237,6 +269,8 @@ type meOutput struct {
 		DisplayName string `json:"display_name"`
 		CSRFToken   string `json:"csrf_token" doc:"Send back in the X-CSRF-Token header on every non-GET request"`
 		DevMode     bool   `json:"dev_mode" doc:"Single-user mode: there is no real sign-out"`
+		IsAdmin     bool   `json:"is_admin" doc:"The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode"`
+		ActingAs    *Admin `json:"acting_as" doc:"The admin who signed in, while this session acts as the user above; null otherwise"`
 	}
 }
 
@@ -252,13 +286,17 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux) {
 		Summary:     "The signed-in user and the session's CSRF token",
 		Tags:        []string{"auth"},
 	}, func(ctx context.Context, _ *struct{}) (*meOutput, error) {
-		sess, ok := ctx.Value(ctxKey{}).(*session)
-		if !ok {
-			return nil, huma.Error401Unauthorized("not signed in")
+		sess, err := sessionOf(ctx)
+		if err != nil {
+			return nil, err
 		}
 		out := &meOutput{}
 		out.Body.ID, out.Body.Email, out.Body.DisplayName = sess.ID, sess.Email, sess.DisplayName
-		out.Body.CSRFToken, out.Body.DevMode = sess.csrf, s.DevMode()
+		out.Body.CSRFToken, out.Body.DevMode, out.Body.IsAdmin = sess.csrf, s.DevMode(), sess.isAdmin
+		if a := sess.admin; a != nil {
+			out.Body.ActingAs = &Admin{ID: a.ID, Email: a.Email, DisplayName: a.DisplayName}
+		}
 		return out, nil
 	})
+	s.registerAdmin(api)
 }

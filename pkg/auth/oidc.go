@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,6 +109,7 @@ func safeReturnTo(raw string) string {
 const (
 	authUnavailable = "unavailable"
 	authFailed      = "failed"
+	authForbidden   = "forbidden"
 )
 
 // gateURL is returnTo (already safe) with the gate's reason in its query. Path, other query pairs and
@@ -365,16 +367,69 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 		fail(authFailed, "invalid ID token claims", err)
 		return
 	}
-	who := identity{Sub: idt.Subject, Email: claims.Email, DisplayName: claims.Name, IDToken: rawID}
+	var all map[string]any
+	if err := idt.Claims(&all); err != nil {
+		fail(authFailed, "invalid ID token claims", err)
+		return
+	}
+	roles := rolesFrom(all, s.rolesClaim)
+	who := identity{Sub: idt.Subject, Email: claims.Email, DisplayName: claims.Name, IDToken: rawID,
+		Admin: s.adminRole != "" && slices.Contains(roles, s.adminRole)}
 	if who.DisplayName == "" {
 		who.DisplayName = claims.PreferredUsername
 	}
+	// 006-AC4: the admin role alone grants sign-in, so an admin cannot lock themselves out.
+	if s.requiredRole != "" && !who.Admin && !slices.Contains(roles, s.requiredRole) {
+		s.deny(r.Context(), who.Sub, deniedMissingRole)
+		fail(authForbidden, "required role missing", nil)
+		return
+	}
 	if _, err := s.login(r.Context(), w, r, who); err != nil {
+		// 006-AC7: checked in the login tx under the user row lock, so no session survives a racing disable.
+		if errors.Is(err, errAccountDisabled) {
+			s.deny(r.Context(), who.Sub, deniedDisabled)
+			fail(authForbidden, "account disabled", nil)
+			return
+		}
 		s.log.Error("login_failed", zap.Error(err))
 		seeOther(w, gateURL(returnTo, authFailed))
 		return
 	}
 	seeOther(w, returnTo)
+}
+
+// deny audits a refused sign-in; a failed audit is logged and the refusal stands.
+func (s *Service) deny(ctx context.Context, sub, reason string) {
+	if err := s.auditDenied(ctx, sub, reason); err != nil {
+		s.log.Error("login_denied_audit_failed", zap.Error(err))
+	}
+}
+
+// rolesFrom reads the roles claim: the name as a top-level key first (URL-shaped names hold dots), then
+// as a dotted path. Anything but an array yields no role, and non-string items are skipped (006-AC3).
+func rolesFrom(claims map[string]any, name string) []string {
+	v, ok := claims[name]
+	if !ok {
+		var cur any = claims
+		for part := range strings.SplitSeq(name, ".") {
+			obj, isObj := cur.(map[string]any)
+			if !isObj {
+				return nil
+			}
+			if cur, ok = obj[part]; !ok {
+				return nil
+			}
+		}
+		v = cur
+	}
+	items, _ := v.([]any)
+	var roles []string
+	for _, it := range items {
+		if role, isStr := it.(string); isStr {
+			roles = append(roles, role)
+		}
+	}
+	return roles
 }
 
 // exchangeReason calls the exchange an outage only when the token endpoint could not answer (transport

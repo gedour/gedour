@@ -16,6 +16,9 @@ export interface Me {
   display_name: string;
   csrf_token: string;
   dev_mode: boolean;
+  is_admin: boolean;
+  /** The admin who signed in, while the session acts as the user above (006-AC15); null otherwise. */
+  acting_as: { id: string; email: string; display_name: string } | null;
 }
 
 // audit.Item (GET /api/v1/audit)
@@ -30,6 +33,9 @@ export interface AuditItem {
   before: unknown;
   after: unknown;
   request_id: string;
+  /** User the actor was acting as (006-AC16). */
+  on_behalf_of: string | null;
+  on_behalf_of_name: string;
 }
 
 export interface AuditPage {
@@ -123,3 +129,10 @@ export type DryRun = Schemas["DryRun"];
 export type DryRunFetch = Schemas["Fetch"];
 /** The event of a dry run: a real one the caller can read, or a made-up sample. */
 export type DryRunEvent = { event_id: number } | { sample: SampleEvent };
+
+// Spec 006 resources.
+export type AdminUser = Schemas["AdminUser"];
+export type AdminUserStatus = AdminUser["status"];
+export type AdminWatch = Schemas["AdminWatch"];
+export type TransferResult = Schemas["TransferResult"];
+export type PurgePreview = Schemas["PurgePreviewOutputBody"];

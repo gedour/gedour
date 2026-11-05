@@ -88,9 +88,10 @@ func (s *Service) runAll(ctx context.Context, _ *struct{}) (*runAllOutput, error
 	}
 	out := &runAllOutput{}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Locked in id order (AGENTS.md), as a purge locks the owner's watches.
 		rows, err := tx.Query(ctx, `UPDATE watches w SET next_run_at = now()
-			WHERE NOT w.paused AND (w.owner_id = $1 OR EXISTS (SELECT 1 FROM watch_shares s
-				WHERE s.watch_id = w.id AND s.user_id = $1 AND s.permission = 'rw'))
+			WHERE w.id IN (SELECT x.id FROM watches x WHERE NOT x.paused AND (x.owner_id = $1 OR EXISTS (SELECT 1 FROM watch_shares s
+				WHERE s.watch_id = x.id AND s.user_id = $1 AND s.permission = 'rw')) ORDER BY x.id FOR NO KEY UPDATE)
 			RETURNING w.id::text`, me)
 		if err != nil {
 			return err

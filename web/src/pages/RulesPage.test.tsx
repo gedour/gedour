@@ -59,6 +59,23 @@ describe("RulesPage", () => {
     expect(await screen.findByText("Tags enabled")).toBeInTheDocument();
   });
 
+  // 005-AC7: a high rule says so in the list, by text; a normal one shows nothing.
+  it("marks high rules in the list", async () => {
+    mockApi({
+      "/api/v1/rules": {
+        items: [rule(), rule({ id: "r2", name: "Urgent", priority: "high" })],
+      },
+      "/api/v1/channels": { items: [channel()] },
+    });
+    renderApp("/rules");
+    const list = await screen.findByRole("list", { name: "Rules" });
+    const items = within(list)
+      .getAllByRole("listitem")
+      .filter((li) => li.parentElement === list);
+    expect(items[0]).not.toHaveTextContent("High priority");
+    expect(items[1]).toHaveTextContent("High priority");
+  });
+
   // 001-AC24
   it("has loading, empty and error states", async () => {
     mockApi({ "/api/v1/rules": pending });
@@ -201,8 +218,55 @@ describe("RuleFormPage", () => {
       name: "New",
       filter: 'watch.kind == "oci_tags"',
       enabled: true,
+      priority: "normal",
       channel_ids: ["c2"],
     });
+  });
+
+  // 005-AC1: the form creates and edits a rule's priority, and shows the one stored.
+  it("sets the priority", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(rule({ id: "r9", priority: "high" }), { status: 201 })
+          : Response.json({ items: [] }),
+      "/api/v1/rules/r1": () => Response.json(rule({ priority: "high" })),
+    });
+    const { router } = renderApp("/rules/new");
+    const select = await screen.findByRole("combobox", { name: "Priority" });
+    expect(select).toHaveValue("normal");
+    await userEvent.type(screen.getByLabelText("Name"), "New");
+    await userEvent.selectOptions(select, "high");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
+    expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({ priority: "high" });
+
+    await router.navigate("/rules/r1");
+    const stored = await screen.findByRole("combobox", { name: "Priority" });
+    expect(stored).toHaveValue("high");
+    await userEvent.selectOptions(stored, "normal");
+    await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/rules/r1", "PATCH")?.body).toMatchObject({ priority: "normal" }),
+    );
+  });
+
+  // 005-AC1: a refused priority shows on its field, not in the form's general errors.
+  it("shows a priority error on its field", async () => {
+    mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": () =>
+        problem(400, "invalid rule", [{ location: "body.priority", message: "unknown level" }]),
+    });
+    renderApp("/rules/new");
+    await userEvent.click(await screen.findByRole("button", { name: "Create rule" }));
+    expect(await screen.findByText("unknown level")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Priority" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows save errors on their fields", async () => {
@@ -246,6 +310,7 @@ describe("RuleFormPage", () => {
         name: "Releases",
         filter: 'event.type == "release.published"',
         enabled: false,
+        priority: "normal",
         channel_ids: ["c1"],
         watch_id: "",
       }),

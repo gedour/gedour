@@ -33,8 +33,13 @@ function inboxServer(initial: InboxItem[]) {
   const fn = mockApi({
     "/api/v1/inbox": (url: URL) => {
       const state = url.searchParams.get("state");
-      const list = items.filter((i) =>
-        state === "archived" ? i.archived_at : !i.archived_at && (state !== "unread" || !i.read_at),
+      const priority = url.searchParams.get("priority");
+      const list = items.filter(
+        (i) =>
+          (state === "archived"
+            ? i.archived_at
+            : !i.archived_at && (state !== "unread" || !i.read_at)) &&
+          (!priority || i.priority === priority),
       );
       return Response.json({ items: list });
     },
@@ -318,6 +323,124 @@ describe("InboxPage", () => {
     act(() => es.emit("signed_out", {}));
     expect(screen.getByRole("heading", { level: 1, name: "Sign in to continue" })).toBeVisible();
     expect(screen.queryByRole("complementary", { name: "Sidebar" })).not.toBeInTheDocument();
+  });
+
+  // 005-AC5: the badge says high in text, in the row and the side panel, and only on high items.
+  it("badges high items in the list and the panel", async () => {
+    inboxServer([inboxItem(2, { priority: "high" }), inboxItem(1)]);
+    renderApp("/inbox");
+    const high = await screen.findByRole("button", { name: /v2\.0\.0 published/ });
+    expect(high).toHaveTextContent("High priority");
+    expect(screen.getByRole("button", { name: /v1\.0\.0 published/ })).not.toHaveTextContent(
+      "High priority",
+    );
+    await userEvent.click(high);
+    expect(screen.getByRole("complementary", { name: "v2.0.0 published" })).toHaveTextContent(
+      "High priority",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /v1\.0\.0 published/ }));
+    expect(screen.getByRole("complementary", { name: "v1.0.0 published" })).not.toHaveTextContent(
+      "High priority",
+    );
+  });
+
+  // 005-AC5: the detail dialog of narrow screens has the badge too.
+  it("badges high items in the dialog", async () => {
+    setMedia(WIDE, false);
+    inboxServer([inboxItem(1, { priority: "high" })]);
+    renderApp("/inbox");
+    await userEvent.click(await screen.findByRole("button", { name: /v1\.0\.0 published/ }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("High priority");
+  });
+
+  // 005-AC5: the filter asks for high items, lives in the URL with the state, and survives the tabs.
+  it("filters on high priority", async () => {
+    const srv = inboxServer([
+      inboxItem(3, { priority: "high" }),
+      inboxItem(2),
+      inboxItem(1, { priority: "high", read_at: yesterday() }),
+    ]);
+    const { router } = renderApp("/inbox?state=unread");
+    await screen.findByText("v3.0.0 published");
+    const filter = screen.getByRole("button", { name: "High priority", pressed: false });
+    await userEvent.click(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(screen.queryByText("v2.0.0 published")).not.toBeInTheDocument());
+    expect(new URLSearchParams(router.state.location.search).get("state")).toBe("unread");
+    expect(new URLSearchParams(router.state.location.search).get("priority")).toBe("high");
+    expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.get("priority")).toBe("high");
+    expect(screen.queryByText("v1.0.0 published")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+    expect(router.state.location.search).toBe("?priority=high");
+    expect(screen.queryByText("v2.0.0 published")).not.toBeInTheDocument();
+
+    await userEvent.click(filter);
+    expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
+    expect(router.state.location.search).toBe("");
+    expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.has("priority")).toBe(false);
+  });
+
+  // 005-AC5: a deep link applies the filter, and an unknown level does not.
+  it("reads the filter from the URL", async () => {
+    const srv = inboxServer([inboxItem(2, { priority: "high" }), inboxItem(1)]);
+    const first = renderApp("/inbox?priority=high");
+    expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "High priority", pressed: true })).toBeVisible();
+    expect(screen.queryByText("v1.0.0 published")).not.toBeInTheDocument();
+    first.unmount();
+    renderApp("/inbox?priority=urgent");
+    expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "High priority", pressed: false })).toBeVisible();
+    expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.has("priority")).toBe(false);
+  });
+
+  // 005-AC5: Load more stays within the filter, and the order is the server's, newest first.
+  it("paginates within the filter", async () => {
+    const fn = mockApi({
+      "/api/v1/inbox": (url: URL) =>
+        Response.json(
+          url.searchParams.get("cursor") === "3"
+            ? { items: [inboxItem(1, { priority: "high" })] }
+            : {
+                items: [inboxItem(5, { priority: "high" }), inboxItem(3, { priority: "high" })],
+                next_cursor: "3",
+              },
+        ),
+    });
+    renderApp("/inbox?priority=high");
+    await screen.findByText("v5.0.0 published");
+    await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("v1.0.0 published");
+    const url = lastCall(fn, "/api/v1/inbox")?.url;
+    expect(url?.searchParams.get("priority")).toBe("high");
+    expect(url?.searchParams.get("cursor")).toBe("3");
+    expect(rows().map((r) => within(r).getAllByRole("button")[0]?.textContent)).toEqual([
+      expect.stringContaining("v5.0.0"),
+      expect.stringContaining("v3.0.0"),
+      expect.stringContaining("v1.0.0"),
+    ]);
+  });
+
+  // Switching the filter shows a list, not arrivals: only new items animate.
+  it("does not play the arrival animation when the filter changes", async () => {
+    inboxServer([inboxItem(2, { priority: "high" }), inboxItem(1)]);
+    renderApp("/inbox?priority=high");
+    await screen.findByText("v2.0.0 published");
+    await userEvent.click(screen.getByRole("button", { name: "High priority", pressed: true }));
+    const shown = await screen.findByText("v1.0.0 published");
+    expect(shown.closest("li")).not.toHaveClass("animate-arrive");
+  });
+
+  // 005-AC5: the empty filter says what is empty.
+  it("has its own empty state", async () => {
+    inboxServer([inboxItem(1)]);
+    renderApp("/inbox?priority=high");
+    expect(
+      await screen.findByRole("region", { name: "Nothing high priority here" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "High priority", pressed: true })).toBeVisible();
   });
 
   // In the Unread tab, opening an item reads it and the refetch drops it: the panel must stay.

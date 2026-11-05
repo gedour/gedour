@@ -6,6 +6,7 @@ import { listChannels, listRules, updateRule } from "@/api/client";
 import { ChannelIcon } from "@/components/ChannelBits";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { PriorityBadge } from "@/components/PriorityBadge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/toast";
 import { problemText } from "@/lib/problems";
@@ -101,6 +102,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
         >
           {rule.name}
         </Link>
+        {rule.priority === "high" && <PriorityBadge />}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
           <span>
             {rule.watch_id ? (rule.watch_name ?? "A watch you can no longer read") : "All watches"}

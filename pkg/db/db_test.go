@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -86,6 +87,73 @@ func TestTalkMigration(t *testing.T) {
 	}
 	if _, err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("up again: %v", err)
+	}
+}
+
+// 005-AC1: rules and items of before the migration read normal, only the two levels pass, and the down and a
+// new up both apply.
+func TestPriorityMigration(t *testing.T) {
+	ctx := context.Background()
+	pool, err := Connect(ctx, testpg.NewDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	sub, _ := fs.Sub(migrations, "migrations")
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = sqlDB.Close() }()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 7); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT priority FROM rules`); err == nil {
+		t.Fatal("after the down, rules must have no priority")
+	}
+	if _, err := pool.Exec(ctx, `SELECT priority FROM inbox_items`); err == nil {
+		t.Fatal("after the down, inbox items must have no priority")
+	}
+	for _, sql := range []string{
+		`INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`,
+		`INSERT INTO rules (owner_id, name) SELECT id, 'r' FROM users`,
+		`INSERT INTO watches (owner_id, name, kind, config) SELECT id, 'w', 'github_release', '{}' FROM users`,
+		`INSERT INTO events (watch_id, type, payload, dedup_key) SELECT id, 'release.published', '{}', 'k' FROM watches`,
+		`INSERT INTO inbox_items (user_id, event_id) SELECT u.id, e.id FROM users u, events e`,
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	if _, err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	for _, table := range []string{"rules", "inbox_items"} {
+		var p string
+		if err := pool.QueryRow(ctx, `SELECT priority FROM `+table).Scan(&p); err != nil || p != "normal" {
+			t.Fatalf("existing row of %s: %q, %v", table, p, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE `+table+` SET priority = 'high'`); err != nil {
+			t.Fatalf("%s refuses high: %v", table, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE `+table+` SET priority = 'urgent'`); err == nil {
+			t.Fatalf("%s accepts an unknown priority", table)
+		}
+	}
+	var def string
+	if err := pool.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE indexname = 'inbox_items_user_high_idx'`).Scan(&def); err != nil {
+		t.Fatalf("high items index: %v", err)
+	}
+	if !strings.Contains(def, "WHERE (priority = 'high'") {
+		t.Fatalf("not partial on high items: %s", def)
+	}
+	// archived_at between the two is no equality for the sort: the list would scan a user's high items, then sort.
+	if !strings.Contains(def, "(user_id, id DESC)") {
+		t.Fatalf("does not serve a user's items newest first: %s", def)
 	}
 }
 

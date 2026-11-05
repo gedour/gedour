@@ -802,6 +802,11 @@ export interface components {
       enabled?: boolean;
       filter?: string;
       name: string;
+      /**
+       * @default normal
+       * @enum {string}
+       */
+      priority: "normal" | "high";
       /** @description A watch the caller can read; empty for all of them */
       watch_id?: string;
     };
@@ -1015,6 +1020,11 @@ export interface components {
       event: components["schemas"]["Event"];
       /** Format: int64 */
       id: number;
+      /**
+       * @description Set once, when the event was routed
+       * @enum {string}
+       */
+      priority: "normal" | "high";
       /** Format: date-time */
       read_at: string | null;
       watch: components["schemas"]["WatchRef"];
@@ -1196,6 +1206,11 @@ export interface components {
       /** Format: uuid */
       id: string;
       name: string;
+      /**
+       * @description high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs
+       * @enum {string}
+       */
+      priority: "normal" | "high";
       /** Format: date-time */
       updated_at: string;
       /**
@@ -1303,6 +1318,8 @@ export interface components {
       enabled?: boolean;
       filter?: string;
       name?: string;
+      /** @enum {string} */
+      priority?: "normal" | "high";
       /** @description Empty string: all readable watches */
       watch_id?: string;
     };
@@ -1941,6 +1958,8 @@ export interface operations {
       query?: {
         /** @description unread: not read, not archived; all: not archived */
         state?: "unread" | "all" | "archived";
+        /** @description Only items of this priority; absent: all */
+        priority?: "normal" | "high";
         /** @description next_cursor of the previous page */
         cursor?: string;
         limit?: number;

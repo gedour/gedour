@@ -70,8 +70,12 @@ export const UPSTREAM = process.env.E2E_UPSTREAM_URL ?? "http://127.0.0.1:18091"
 /** The shared secret of the fake upstream's Talk bot (testupstream.TalkSecret). */
 export const TALK_SECRET = "fake-talk-bot-shared-secret-0123456789abcdef";
 
-/** Bob's seeded watch and rule (seed.setup.ts); their 3 events are in his inbox. */
-export const SEED = { watch: "Seeded CLI releases", rule: "Seeded inbox rule" };
+/** Bob's seeded watch and rules (seed.setup.ts); 3 events in his inbox, the 2 with CVE ids high. */
+export const SEED = {
+  watch: "Seeded CLI releases",
+  rule: "Seeded inbox rule",
+  highRule: "Seeded CVE rule",
+};
 
 /** Calls the API as the page's user, with the session's CSRF token. */
 export async function api(page: Page) {

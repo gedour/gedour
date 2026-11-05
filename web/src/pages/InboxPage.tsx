@@ -3,6 +3,7 @@ import {
   Archive,
   ArchiveRestore,
   ExternalLink,
+  Flag,
   Mail,
   MailOpen,
   Telescope,
@@ -15,6 +16,7 @@ import { Link, useSearchParams } from "react-router";
 import { inboxAction, listInbox } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { PriorityBadge } from "@/components/PriorityBadge";
 import { Timestamp } from "@/components/Timestamp";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
@@ -65,9 +67,10 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
   const [params, setParams] = useSearchParams();
   const raw = params.get("state");
   const state: InboxState = raw === "unread" || raw === "archived" ? raw : "all";
+  const highOnly = params.get("priority") === "high";
   const query = useInfiniteQuery({
-    queryKey: [...LIST_KEY, state],
-    queryFn: ({ pageParam }) => listInbox(state, pageParam),
+    queryKey: [...LIST_KEY, state, highOnly],
+    queryFn: ({ pageParam }) => listInbox(state, pageParam, highOnly),
     initialPageParam: "",
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -90,14 +93,15 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
 
   // Items new since the last render of this tab play the arrival animation.
   const ids = items.map((i) => i.id).join(",");
-  const [seen, setSeen] = useState<{ state: InboxState; ids: string } | null>(null);
+  const view = `${state}/${highOnly}`;
+  const [seen, setSeen] = useState<{ view: string; ids: string } | null>(null);
   const [arrived, setArrived] = useState<Set<number>>(new Set());
-  if (query.isSuccess && (seen?.state !== state || seen.ids !== ids)) {
-    const before = seen?.state === state ? new Set(seen.ids.split(",").map(Number)) : null;
+  if (query.isSuccess && (seen?.view !== view || seen.ids !== ids)) {
+    const before = seen?.view === view ? new Set(seen.ids.split(",").map(Number)) : null;
     setArrived(
       before ? new Set(items.filter((i) => !before.has(i.id)).map((i) => i.id)) : new Set(),
     );
-    setSeen({ state, ids });
+    setSeen({ view, ids });
     // Selection and focus follow the list: gone items drop out.
     setSelected((s) => new Set([...s].filter((id) => items.some((i) => i.id === id))));
     setFocus((f) => Math.min(f, Math.max(items.length - 1, 0)));
@@ -188,8 +192,20 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  const show = (next: InboxState, nextHighOnly: boolean) => {
+    setParams({
+      ...(next !== "all" && { state: next }),
+      ...(nextHighOnly && { priority: "high" }),
+    });
+    setSelected(new Set());
+    setOpened(null);
+    setFocus(0);
+  };
+
   const chosen = [...selected];
-  const empty = EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody };
+  const empty = highOnly
+    ? { title: "Nothing high priority here", body: "High priority rules bring their events here." }
+    : (EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody });
   const allSelected = items.length > 0 && selected.size === items.length;
   const tabsId = useId();
 
@@ -208,36 +224,42 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
             </span>
           </p>
         </div>
-        <div
-          role="group"
-          aria-label="Show"
-          id={tabsId}
-          className="inline-flex h-9 rounded-md border border-line bg-surface p-0.5 shadow-xs"
-        >
-          {TABS.map((t) => (
-            <button
-              key={t.state}
-              type="button"
-              aria-pressed={state === t.state}
-              onClick={() => {
-                setParams(t.state === "all" ? {} : { state: t.state });
-                setSelected(new Set());
-                setOpened(null);
-                setFocus(0);
-              }}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded px-3 text-sm font-medium whitespace-nowrap text-muted transition-colors hover:text-ink",
-                state === t.state && "bg-beacon-soft text-ink",
-              )}
-            >
-              {t.label}
-              {t.state === "unread" && unread ? (
-                <span className="rounded-full bg-beacon px-1.5 text-[11px] text-surface tabular-nums">
-                  {unread}
-                </span>
-              ) : null}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            role="group"
+            aria-label="Show"
+            id={tabsId}
+            className="inline-flex h-9 rounded-md border border-line bg-surface p-0.5 shadow-xs"
+          >
+            {TABS.map((t) => (
+              <button
+                key={t.state}
+                type="button"
+                aria-pressed={state === t.state}
+                onClick={() => show(t.state, highOnly)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded px-3 text-sm font-medium whitespace-nowrap text-muted transition-colors hover:text-ink",
+                  state === t.state && "bg-beacon-soft text-ink",
+                )}
+              >
+                {t.label}
+                {t.state === "unread" && unread ? (
+                  <span className="rounded-full bg-beacon px-1.5 text-[11px] text-surface tabular-nums">
+                    {unread}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            aria-pressed={highOnly}
+            onClick={() => show(state, !highOnly)}
+            className={cn(highOnly && "bg-beacon-soft hover:bg-beacon-soft")}
+          >
+            <Flag aria-hidden />
+            High priority
+          </Button>
         </div>
       </div>
 
@@ -489,7 +511,8 @@ function InboxRow({
             {unread && <span className="sr-only">Unread: </span>}
             {s.text}
           </span>
-          <span className="flex min-w-0 items-center gap-2 text-xs text-muted">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+            {item.priority === "high" && <PriorityBadge />}
             <span className={cn("rounded px-1.5 py-px ring-1 ring-inset", TONE_CLASS[s.tone])}>
               {s.badge}
             </span>
@@ -593,6 +616,7 @@ function DetailBody({
   const notes = item.event.payload.body;
   return (
     <div className="flex flex-col gap-4">
+      {item.priority === "high" && <PriorityBadge />}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
         <dt className="text-muted">Watch</dt>
         <dd className="min-w-0 truncate">

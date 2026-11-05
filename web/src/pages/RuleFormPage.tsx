@@ -102,6 +102,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
   const [watchId, setWatchId] = useState(initial?.watch_id ?? "");
   const [filter, setFilter] = useState(initial?.filter ?? "");
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [priority, setPriority] = useState<Rule["priority"]>(initial?.priority ?? "normal");
   const [channelIds, setChannelIds] = useState<string[]>(initial?.channel_ids ?? []);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPreview, setShowPreview] = useState(false);
@@ -129,7 +130,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { name, filter, enabled, channel_ids: channelIds };
+      const body = { name, filter, enabled, priority, channel_ids: channelIds };
       return initial
         ? updateRule(initial.id, { ...body, watch_id: watchId })
         : createRule({ ...body, watch_id: watchId || undefined });
@@ -184,7 +185,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
   return (
     <Page title={initial ? `Edit ${initial.name}` : "New rule"}>
       <form noValidate onSubmit={submit} aria-label="Rule" className="flex flex-col gap-6">
-        {unplaced(errors, ["name", "watch_id", "filter", "channel_ids"]).map((m) => (
+        {unplaced(errors, ["name", "watch_id", "priority", "filter", "channel_ids"]).map((m) => (
           <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
             {m}
           </p>
@@ -220,6 +221,23 @@ function RuleForm({ initial }: { initial?: Rule }) {
                     {w.permission === "owner" ? "" : ` (shared by ${w.owner_name})`}
                   </option>
                 ))}
+              </select>
+            )}
+          </Field>
+          <Field
+            label="Priority"
+            error={errors.priority}
+            hint="High marks the inbox items of new matching events. Existing items keep their level."
+          >
+            {(p) => (
+              <select
+                {...p}
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as Rule["priority"])}
+                className={inputClass}
+              >
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
               </select>
             )}
           </Field>

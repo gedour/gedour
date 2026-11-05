@@ -24,6 +24,11 @@ const MaxRuleChannels = 20
 // previewEvents is how many recent events a preview evaluates.
 const previewEvents = 20
 
+const (
+	priorityNormal = "normal"
+	priorityHigh   = "high"
+)
+
 // Rule is a routing rule: events of its scope that pass its filter go to the owner's inbox and channels.
 type Rule struct {
 	ID         string    `json:"id" format:"uuid"`
@@ -32,6 +37,7 @@ type Rule struct {
 	WatchName  *string   `json:"watch_name" nullable:"true" doc:"Null with a watch_id: the owner can no longer read that watch"`
 	Filter     string    `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
 	Enabled    bool      `json:"enabled"`
+	Priority   string    `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
 	ChannelIDs []string  `json:"channel_ids" doc:"Channels besides the inbox, which is always on"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -53,6 +59,7 @@ type createRuleInput struct {
 		WatchID    string   `json:"watch_id,omitempty" doc:"A watch the caller can read; empty for all of them"`
 		Filter     string   `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty" doc:"Defaults to true"`
+		Priority   string   `json:"priority,omitempty" enum:"normal,high" default:"normal"`
 		ChannelIDs []string `json:"channel_ids,omitempty" maxItems:"20" doc:"The caller's channels"`
 	}
 }
@@ -64,6 +71,7 @@ type updateRuleInput struct {
 		WatchID    *string  `json:"watch_id,omitempty" doc:"Empty string: all readable watches"`
 		Filter     *string  `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty"`
+		Priority   *string  `json:"priority,omitempty" enum:"normal,high"`
 		ChannelIDs []string `json:"channel_ids,omitempty" maxItems:"20" doc:"Replaces the list; [] keeps the inbox only"`
 	}
 }
@@ -101,7 +109,7 @@ type previewOutput struct {
 }
 
 // ruleSelect names a rule's watch only while the owner can read it.
-var ruleSelect = `SELECT r.id::text, r.name, r.watch_id::text, w.name, r.filter, r.enabled,
+var ruleSelect = `SELECT r.id::text, r.name, r.watch_id::text, w.name, r.filter, r.enabled, r.priority,
 		COALESCE((SELECT array_agg(rc.channel_id::text ORDER BY rc.channel_id) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}'),
 		r.created_at, r.updated_at
 	FROM rules r LEFT JOIN watches w ON w.id = r.watch_id AND ` + watch.ReadableSQL("w", "@owner") + `
@@ -110,7 +118,7 @@ var ruleSelect = `SELECT r.id::text, r.name, r.watch_id::text, w.name, r.filter,
 func scanRules(rows pgx.Rows) ([]Rule, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Rule, error) {
 		var x Rule
-		err := r.Scan(&x.ID, &x.Name, &x.WatchID, &x.WatchName, &x.Filter, &x.Enabled, &x.ChannelIDs, &x.CreatedAt, &x.UpdatedAt)
+		err := r.Scan(&x.ID, &x.Name, &x.WatchID, &x.WatchName, &x.Filter, &x.Enabled, &x.Priority, &x.ChannelIDs, &x.CreatedAt, &x.UpdatedAt)
 		return x, err
 	})
 }
@@ -301,8 +309,8 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 			watchID = &b.WatchID
 		}
 		var id string
-		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, watch_id, filter, enabled) VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
-			me, name, watchID, src, enabled).Scan(&id)
+		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, watch_id, filter, enabled, priority) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
+			me, name, watchID, src, enabled, b.Priority).Scan(&id)
 		if isUniqueViolation(err) {
 			return ruleNameError(name)
 		}
@@ -351,6 +359,9 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 		if b.Enabled != nil {
 			next.Enabled = *b.Enabled
 		}
+		if b.Priority != nil {
+			next.Priority = *b.Priority
+		}
 		if len(errs) > 0 {
 			return huma.Error400BadRequest("invalid rule", errs...)
 		}
@@ -363,8 +374,8 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 				next.WatchID = b.WatchID
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, watch_id = $3, filter = $4, enabled = $5, updated_at = now() WHERE id = $1`,
-			in.ID, next.Name, next.WatchID, next.Filter, next.Enabled)
+		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, watch_id = $3, filter = $4, enabled = $5, priority = $6, updated_at = now() WHERE id = $1`,
+			in.ID, next.Name, next.WatchID, next.Filter, next.Enabled, next.Priority)
 		if isUniqueViolation(err) {
 			return ruleNameError(next.Name)
 		}

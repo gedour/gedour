@@ -258,8 +258,14 @@ export const rotateCredentialSecret = (id: string, secret: string) =>
   sendJSON<Credential>("PUT", `${credentialPath(id)}/secret`, { secret });
 export const deleteCredential = (id: string) => sendJSON<undefined>("DELETE", credentialPath(id));
 
-export function listInbox(state: InboxState, cursor: string, limit = 50): Promise<InboxPage> {
+export function listInbox(
+  state: InboxState,
+  cursor: string,
+  highOnly = false,
+  limit = 50,
+): Promise<InboxPage> {
   const q = new URLSearchParams({ state, limit: String(limit) });
+  if (highOnly) q.set("priority", "high");
   if (cursor) q.set("cursor", cursor);
   return getJSON<InboxPage>(`/api/v1/inbox?${q}`);
 }

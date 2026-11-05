@@ -1,7 +1,13 @@
+<p align="center"><img src=".github/banner.svg" alt="gedour: All the upstream. None of the noise." width="100%"></p>
+
 # gedour
 
 Self-hosted watch service: follows upstream releases, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
+
+The name is Breton: *gedour* (pronounced like *get* + *door*, hard G, /ˈɡeː.dur/) means lookout,
+watchman. It comes from *ged*, "watch", plus the agent suffix *-our*, and is attested as *guedour* in 1499
+([Wiktionnaire](https://fr.wiktionary.org/wiki/gedour), [Devri](https://devri.bzh/dictionnaire/g/gedour/)).
 
 Status: phase 6 (script callbacks). Spec: `specs/001-gedour-v0.md`.
 

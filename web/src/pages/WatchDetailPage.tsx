@@ -114,7 +114,7 @@ function WatchDetail({ watch }: { watch: Watch }) {
                 onClick={() => pause.mutate(!watch.paused)}
                 className={cn(
                   "relative h-6 w-11 rounded-full border border-line transition-colors disabled:opacity-60",
-                  watch.paused ? "bg-beacon" : "bg-line",
+                  watch.paused ? "bg-beacon" : "bg-muted",
                 )}
               >
                 <span

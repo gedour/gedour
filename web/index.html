@@ -18,6 +18,41 @@
         } catch (e) {}
       })();
     </script>
+    <script>
+      // During a rollout each pod serves only its own hashed assets: reload until index and assets match.
+      (function () {
+        var KEY = "gedour.assetReloads";
+        var failed = false;
+        function onError(e) {
+          var el = e.target;
+          if (failed || (el.tagName !== "LINK" && el.tagName !== "SCRIPT")) return;
+          if ((el.href || el.src || "").indexOf(location.origin + "/assets/") !== 0) return;
+          failed = true;
+          try {
+            var reloads = Number(sessionStorage.getItem(KEY)) || 0;
+            if (reloads >= 4) return;
+            sessionStorage.setItem(KEY, String(reloads + 1));
+          } catch (err) {
+            // No counter means nothing would stop a permanent 404 from reloading forever.
+            return;
+          }
+          setTimeout(
+            function () {
+              location.reload();
+            },
+            2000 * Math.pow(2, reloads),
+          );
+        }
+        addEventListener("error", onError, true);
+        addEventListener("load", function () {
+          removeEventListener("error", onError, true);
+          if (failed) return;
+          try {
+            sessionStorage.removeItem(KEY);
+          } catch (err) {}
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

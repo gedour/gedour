@@ -67,10 +67,12 @@
   Never edit an applied migration; add a new numbered file.
 - Version vars are injected with `-X 'main.<Var>=…'` (never the import path).
 - Frontend: `fetch` only in `web/src/api/`; API resource types come from `schema.gen.ts` (via `types/api.ts`); UI primitives in `web/src/components/ui` (shadcn-style, Radix).
-- Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`.
+- Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`; `gedour.assetReloads` in `sessionStorage`.
 - One auth state: a 401 from `request()` or the stream's `signed_out` sets `auth` (`api/client.ts`) and
   `AuthGate` swaps the app for `SignInGate`. Only `api/client.ts` may navigate by script; app code
-  signs out with `signOut()`, `navigation` is a test seam (ESLint `no-restricted-*`, see `src/lint.test.ts`). `renderApp(path, me)` starts signed in as `me`; `null` boots through the gate.
+  signs out with `signOut()`, `navigation` is a test seam (ESLint `no-restricted-*`, see `src/lint.test.ts`).
+  One exception out of ESLint's reach: the reload in `index.html` when a hashed asset fails before `window.load`
+  (`e2e/asset-recovery.spec.ts`). `renderApp(path, me)` starts signed in as `me`; `null` boots through the gate.
 - Auth: `auth.Guard` puts every `/api` path behind a session, except those in its `publicAPI` set; mutations
   need `X-CSRF-Token`. Frontend calls go through `web/src/api/client.ts`, which adds it.
 - `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.

@@ -177,3 +177,41 @@ func TestRetargetResetsBaseline(t *testing.T) {
 		t.Fatalf("schedule change: states=%d next=%v", n, w.NextRunAt)
 	}
 }
+
+// Run all: every watch the caller owns or shares read-write, paused ones left out, one audit row each.
+func TestRunAllWatches(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob, dave := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "dave")
+	var w1, w2, w3 activityWatch
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w1)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &w2)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[2], http.StatusCreated, &w3)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w1.ID+"/shares", map[string]any{"email": dave.email, "permission": "rw"}, http.StatusCreated, nil)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w2.ID+"/shares", map[string]any{"email": dave.email, "permission": "ro"}, http.StatusCreated, nil)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w3.ID+"/pause", nil, http.StatusOK, nil)
+	later := func() { a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days'`) }
+	due := func() int {
+		return a.countRows(t, `SELECT count(*) FROM watches WHERE next_run_at < now() + interval '1 minute'`)
+	}
+	var got struct {
+		Scheduled int `json:"scheduled"`
+	}
+
+	later()
+	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches/run", nil, http.StatusAccepted, &got)
+	if got.Scheduled != 1 || due() != 1 || a.countRows(t, `SELECT count(*) FROM watches WHERE id = $1 AND next_run_at < now() + interval '1 minute'`, w1.ID) != 1 {
+		t.Fatalf("rw sharee: scheduled %d, due %d", got.Scheduled, due())
+	}
+	later()
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches/run", nil, http.StatusAccepted, &got)
+	if got.Scheduled != 0 || due() != 0 {
+		t.Fatalf("stranger: scheduled %d, due %d", got.Scheduled, due())
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/run", nil, http.StatusAccepted, &got)
+	if got.Scheduled != 2 || due() != 2 {
+		t.Fatalf("owner: scheduled %d, due %d (paused must stay)", got.Scheduled, due())
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'watch.run_requested' AND after->>'name' <> ''`); n != 3 {
+		t.Fatalf("run audit rows %d", n)
+	}
+}

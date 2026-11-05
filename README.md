@@ -391,7 +391,8 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `rate_limited`), `last_error`, `consecutive_failures`.
 - `GET /api/v1/watches/{id}/events?cursor=&limit=`: events, newest first. `GET /api/v1/watches/{id}/states?limit=`:
   state history, latest first. `POST /api/v1/watches/{id}/run` (read-write share or owner, 409 when paused):
-  runs at the next poll. Resume also runs at once.
+  runs at the next poll. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
+  watch the caller owns or shares read-write and answers `{scheduled}`.
 - `/api/v1/watches/{id}/shares` (`GET`, `POST {email, permission}`), `/api/v1/watches/{id}/shares/{user_id}`
   (`PUT {permission}`, `DELETE`). Shares are `ro` (read) or `rw` (edit, pause; not credential, sharing or
   delete; not the config of a watch that uses the owner's credential). A sharee lists only their own

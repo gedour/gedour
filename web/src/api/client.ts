@@ -222,6 +222,7 @@ export const setWatchPaused = (id: string, paused: boolean) =>
   sendJSON<Watch>("POST", `${watchPath(id)}/${paused ? "pause" : "resume"}`);
 export const deleteWatch = (id: string) => sendJSON<undefined>("DELETE", watchPath(id));
 export const runWatch = (id: string) => sendJSON<Watch>("POST", `${watchPath(id)}/run`);
+export const runAllWatches = () => sendJSON<{ scheduled: number }>("POST", "/api/v1/watches/run");
 
 export function listWatchEvents(id: string, cursor: string, limit = 20): Promise<EventsPage> {
   const q = new URLSearchParams({ limit: String(limit) });

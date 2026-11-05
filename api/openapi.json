@@ -1633,6 +1633,20 @@
         ],
         "type": "object"
       },
+      "RunAllOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "scheduled": {
+            "description": "Watches made due now: owned or shared read-write, paused ones left out",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scheduled"
+        ],
+        "type": "object"
+      },
       "SampleEvent": {
         "additionalProperties": false,
         "properties": {
@@ -3908,6 +3922,37 @@
           }
         },
         "summary": "Create a watch",
+        "tags": [
+          "watches"
+        ]
+      }
+    },
+    "/api/v1/watches/run": {
+      "post": {
+        "operationId": "run-all-watches",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAllOutputBody"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Schedule a run now of every watch the caller can run",
         "tags": [
           "watches"
         ]

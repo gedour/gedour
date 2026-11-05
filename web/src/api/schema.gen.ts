@@ -492,6 +492,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/watches/run": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Schedule a run now of every watch the caller can run */
+    post: operations["run-all-watches"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/watches/{id}": {
     parameters: {
       query?: never;
@@ -1225,6 +1242,13 @@ export interface components {
       /** Format: uuid */
       id: string;
       name: string;
+    };
+    RunAllOutputBody: {
+      /**
+       * Format: int64
+       * @description Watches made due now: owned or shared read-write, paused ones left out
+       */
+      scheduled: number;
     };
     SampleEvent: {
       /** Format: date-time */
@@ -2681,6 +2705,35 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Watch"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "run-all-watches": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RunAllOutputBody"];
         };
       };
       /** @description Error */

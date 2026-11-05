@@ -4,8 +4,8 @@
 set -euo pipefail
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly PROJECT="gedour-e2e"
-# 18080 is registered as a redirect URI in deploy/keycloak/realm.json; another port needs a realm change.
+# Parallel runs need their own project: `down -v` and `up` act on every container of a project.
+readonly PROJECT="${E2E_PROJECT:-gedour-e2e}"
 readonly HTTP_PORT="${E2E_PORT:-18080}"
 readonly METRICS_PORT="${E2E_METRICS_PORT:-19090}"
 readonly DB_PORT="${E2E_DB_PORT:-55433}"
@@ -25,7 +25,7 @@ readonly UPSTREAM_LOG="${ROOT}/bin/e2e-upstream.log"
 readonly BASE_URL="http://localhost:${HTTP_PORT}"
 
 compose() {
-  GEDOUR_DB_PORT="${DB_PORT}" GEDOUR_KC_PORT="${KC_PORT}" GEDOUR_OIDC_PORT="${OIDC_APP_PORT}" \
+  GEDOUR_E2E_PORT="${HTTP_PORT}" GEDOUR_DB_PORT="${DB_PORT}" GEDOUR_KC_PORT="${KC_PORT}" GEDOUR_OIDC_PORT="${OIDC_APP_PORT}" \
     GEDOUR_MAILPIT_SMTP_PORT="${SMTP_PORT}" GEDOUR_MAILPIT_PORT="${MAILPIT_PORT}" \
     docker compose -f "${ROOT}/compose.yaml" -p "${PROJECT}" --profile oidc "$@"
 }
@@ -43,7 +43,6 @@ cleanup() {
   # Separate compose project: `down -v` never touches the `make dev` volume.
   compose down -v >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
 
 if [[ ! -x "${BIN}" ]]; then
   echo "missing ${BIN}: run 'make build' first" >&2
@@ -51,10 +50,13 @@ if [[ ! -x "${BIN}" ]]; then
 fi
 for port in "${HTTP_PORT}" "${METRICS_PORT}" "${DB_PORT}" "${KC_PORT}" "${OIDC_APP_PORT}" "${UPSTREAM_PORT}" "${SMTP_PORT}" "${MAILPIT_PORT}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
-    echo "port ${port} in use: set E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT / E2E_UPSTREAM_PORT / E2E_SMTP_PORT / E2E_MAILPIT_PORT" >&2
+    echo "port ${port} in use: set E2E_PROJECT and E2E_PORT / E2E_METRICS_PORT / E2E_DB_PORT / E2E_KC_PORT / E2E_OIDC_APP_PORT / E2E_UPSTREAM_PORT / E2E_SMTP_PORT / E2E_MAILPIT_PORT" >&2
     exit 1
   fi
 done
+
+# Armed after the port check: a run refused for a busy port must not `down -v` the run holding it.
+trap cleanup EXIT
 
 if ! go -C "${ROOT}" build -o "${UPSTREAM_BIN}" ./cmd/fakeupstream; then
   echo "could not build cmd/fakeupstream" >&2

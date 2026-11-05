@@ -22,9 +22,10 @@
 
 - Go DB tests fail when Docker is down; `GEDOUR_SKIP_DB_TESTS=1` turns that into skips (never in CI).
 - `make e2e` signs in through Keycloak (compose `oidc` profile, `deploy/keycloak/realm.json`) as `alice`;
-  ports `E2E_PORT` (18080, a realm redirect URI: change both), `E2E_METRICS_PORT`, `E2E_DB_PORT`,
+  ports `E2E_PORT` (18080), `E2E_METRICS_PORT`, `E2E_DB_PORT`,
   `E2E_KC_PORT`, `E2E_OIDC_APP_PORT`, `E2E_UPSTREAM_PORT` (`cmd/fakeupstream`, `POST /_fixture/a|b` switches it),
   `E2E_SMTP_PORT`/`E2E_MAILPIT_PORT` (Mailpit). The base URL is `localhost`, never `127.0.0.1` (cookie origin).
+- Parallel `make e2e`: one worktree per run, each with its own `E2E_PROJECT` (compose project, default `gedour-e2e`) and all these ports.
 - The fake upstream also serves Telegram (`/tg/bot<token>/sendMessage`) and webhook receivers
   (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got. Its Talk endpoint checks
   the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.

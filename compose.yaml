@@ -60,6 +60,9 @@ services:
     image: quay.io/keycloak/keycloak:26.8.1
     # Same port inside and out: the issuer URL (http://localhost:<port>/...) must read the same to the browser and to gedour.
     command: ["start-dev", "--import-realm", "--http-port=${GEDOUR_KC_PORT:-8081}", "--health-enabled=true"]
+    environment:
+      # Keycloak fills this placeholder of realm.json at import.
+      GEDOUR_E2E_PORT: ${GEDOUR_E2E_PORT:-18080}
     volumes:
       - ./deploy/keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
     # --import-realm skips an existing realm: a throwaway DB re-imports realm.json on every (re)start.

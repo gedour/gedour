@@ -61,7 +61,7 @@ no notification).
   `GEDOUR_ALLOW_PRIVATE_NETS`, with the same error as webhooks.
 - [x] **AC7** A message longer than the cap is shortened to its title and link, never rejected; a URL
   over 30000 characters once encoded is always left out.
-- [x] **AC8** After a 401 on a Talk delivery, the channel sends nothing for 30 minutes or until the channel is
+- [x] **AC8** After a 401 on a Talk delivery, the channel sends nothing for 2h15 or until the channel is
   edited (name, config or secret), whichever comes first, and at most one Talk request per channel is in
   flight, about one message per `GEDOUR_WORKER_POLL`. Held deliveries keep their attempts and go out afterwards. A
   429 or 404 starts no pause, other channels on the server keep sending, and "Send test" and a manual retry of the
@@ -110,8 +110,11 @@ no notification).
   caught server exception (BotController::sendMessage), and it does not count for the throttler.
 - AC8: Nextcloud records a `bot` bruteforce attempt per IP on every 401 and a success resets nothing. Since
   Nextcloud 32, over 10 failures in 30 minutes answer 429 to all bot posts from that IP; before that, 7 failures
-  in 12 hours slow each post past gedour's 10 s timeout. The pause limits one bad channel to about 2 failing
-  requests per hour. It reads `next_attempt_at` of `dead` deliveries, the time they died, and the 401 from
+  in 12 hours slow each post past gedour's 10 s timeout. The pause limits one bad channel to 6 failing
+  requests in any 12 hours (12 h / 2h15 = 5.33, so 5 more after the first), one short of the limit: a 6.4 s slowdown on
+  31 and older, under the timeout. It reads `next_attempt_at` of `dead` deliveries, the time they died, and the 401 from
   `last_error`: no new column. Read from the Talk source, not observed on a live server.
-- AC8 limit: at 2 failures per hour a bad channel reaches the 12-hour limit of Nextcloud 31 and older after about
-  3.5 hours, so the pause only delays the slowdown there. Only a pause of 2h15 or more stays under it.
+- AC8 limit: the pause is per channel, Nextcloud's count is per IP. On 31 and older, two broken channels on one IP
+  reach 7 failures in about 7 hours, and each refused "Send test" or manual retry counts too. On 32 and later it takes
+  11 broken channels failing within 30 minutes.
+- AC8: a repair made only on the Nextcloud side can wait up to 2h15; editing the channel lifts the pause at once.

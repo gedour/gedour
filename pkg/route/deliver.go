@@ -25,9 +25,9 @@ const (
 	DeliveryLease = 2 * time.Minute
 	maxErrorLen   = 1024
 	sendTimeout   = 45 * time.Second
-	// talkPause holds a Talk channel after a 401: Nextcloud throttles every bot of the sending IP past
-	// 10 failures in 30 min, and a success resets nothing.
-	talkPause = 30 * time.Minute
+	// talkPause holds a Talk channel after a 401. Nextcloud 31 and older slow every bot of the sending IP
+	// past SendTimeout at 7 failures in 12 h, and a success resets nothing: 2h15 allows 6 per channel.
+	talkPause = 2*time.Hour + 15*time.Minute
 )
 
 const talkPausedError = "held: channel paused after Nextcloud Talk answered HTTP 401; it resumes on its own or when the channel is edited"

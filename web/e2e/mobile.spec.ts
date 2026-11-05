@@ -59,6 +59,48 @@ test("main views fit 375 px", async ({ page }) => {
   await expectNoHorizontalScroll(page);
 });
 
+// 004-AC7: the panel at 375 px, with the longest notes and id list a release can carry: one unbreakable word.
+test("the inbox panel fits 375 px with 64 KiB of notes", async ({ page }) => {
+  await page.route("**/api/v1/inbox?*", async (route) => {
+    const res = await route.fetch();
+    const body = (await res.json()) as { items: { event: { payload: object } }[] };
+    for (const it of body.items) {
+      it.event.payload = {
+        ...it.event.payload,
+        body: "x".repeat(64 << 10),
+        cves: Array.from({ length: 200 }, (_, i) => `CVE-2026-${10000 + i}`),
+      };
+    }
+    await route.fulfill({ response: res, json: body });
+  });
+  await page.goto("/inbox?state=all");
+  await page
+    .getByRole("list", { name: /^Inbox, / })
+    .getByRole("button")
+    .first()
+    .tap();
+  const notes = page.getByText("Release notes").first();
+  await expect(notes).toBeVisible();
+  await expect(page.getByRole("region", { name: "Details" }).first()).toContainText(
+    "CVE-2026-10199",
+  );
+  await expectNoHorizontalScroll(page);
+  // The notes stay collapsed until asked for: the buttons below are a short scroll away.
+  const closed = await page
+    .locator("details")
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().height);
+  expect(closed).toBeLessThan(100);
+  await notes.tap();
+  await expect(page.locator("details[open] pre").first()).toBeVisible();
+  const details = await page
+    .locator("details[open]")
+    .first()
+    .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(details.scroll).toBeLessThanOrEqual(details.client);
+  await expectNoHorizontalScroll(page);
+});
+
 // 003-AC5: the Talk form, with its long setup commands, fits 375 px and Silent is reachable by touch.
 test("the Nextcloud Talk form fits 375 px", async ({ page }) => {
   await page.goto("/channels");

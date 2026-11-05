@@ -62,6 +62,8 @@ export const FILTER_FIELDS: FilterField[] = [
   { expr: "event.payload.from", hint: "PR/MR changes: previous value" },
   { expr: "event.payload.to", hint: "PR/MR changes: new value" },
   { expr: "event.payload.title", hint: "PR/MR title" },
+  { expr: "event.payload.body", hint: "releases: the notes, up to 64 KiB" },
+  { expr: "event.payload.cves", hint: "releases: CVE ids found in the notes, uppercased" },
   { expr: "event.occurred_at", hint: "upstream time (else when gedour saw it)" },
   { expr: "watch.name", hint: "the watch's name" },
   { expr: "watch.kind", hint: '"github_release", "oci_tags"…' },
@@ -71,4 +73,7 @@ export const FILTER_FIELDS: FilterField[] = [
     hint: "regular expression: a small string literal, at most 3, not inside any()/all()…",
   },
   { expr: 'event.occurred_at > now() - duration("24h")', hint: "time arithmetic" },
+  { expr: "len(event.payload.cves) > 0", hint: "a release that cites a CVE" },
+  { expr: '"CVE-2026-1234" in event.payload.cves', hint: "a release that cites this CVE" },
+  { expr: 'event.payload.body matches "(?i)breaking.change"', hint: "a pattern on the notes" },
 ];

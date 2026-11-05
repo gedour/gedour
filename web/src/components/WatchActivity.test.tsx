@@ -403,3 +403,22 @@ describe("StatePanel", () => {
     expect(await screen.findByText("The state could not be loaded.")).toBeInTheDocument();
   });
 });
+
+// 004-AC7: the timeline summarizes a release, it does not print its notes.
+describe("WatchActivity with release notes", () => {
+  it("keeps the notes off the timeline", async () => {
+    const w = watch();
+    mockApi({
+      ...routes(w),
+      [`/api/v1/watches/${w.id}/events`]: {
+        items: [
+          event(1, "release.published", { tag: "v1", body: "NOTES-TEXT", cves: ["CVE-2026-1"] }),
+        ],
+      },
+    });
+    renderApp(`/watches/${w.id}`);
+    expect(await screen.findByText(/v1 published/)).toBeVisible();
+    expect(screen.queryByText(/NOTES-TEXT/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/CVE-2026-1/)).not.toBeInTheDocument();
+  });
+});

@@ -318,7 +318,7 @@ func (w *Worker) finish(ctx context.Context, j job, state json.RawMessage, f *co
 		switch {
 		case runErr == nil || errors.Is(runErr, collect.ErrNotModified):
 			if runErr == nil {
-				if inserted, err = w.store(ctx, tx, j, state, now); err != nil {
+				if inserted, err = w.store(ctx, tx, j, state, f.Notes, now); err != nil {
 					return err
 				}
 			}
@@ -393,7 +393,7 @@ const scheduleNext = `next_run_at = CASE WHEN next_run_at <> $4 THEN LEAST(next_
 
 // store saves a changed state and the events of the change. The first state of a watch is its
 // baseline and emits nothing (001-AC8).
-func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMessage, now time.Time) ([]string, error) {
+func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMessage, notes map[string]string, now time.Time) ([]string, error) {
 	state, err := collect.StripNUL(state)
 	if err != nil {
 		return nil, err
@@ -417,6 +417,7 @@ func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMess
 		if events, err = w.collectors[j.kind].Diff(prev, state); err != nil {
 			return nil, err
 		}
+		collect.WithNotes(events, notes)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO watch_states (watch_id, observed_at, state, state_hash) VALUES ($1, $2, $3, $4)`,
 		j.id, now, state, hash); err != nil {

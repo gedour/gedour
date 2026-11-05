@@ -90,6 +90,9 @@
 
 - Recorded upstream fixtures live in `internal/testupstream/fixtures` (`<kind>_a.json`, `<kind>_b.json`), shared
   by the collector tests and the e2e fake. A changed collector needs both fixtures and the expected events updated.
+- Release notes never reach `watch_states`: `Fetcher.Notes` carries them for one run, `WithNotes` adds them to
+  the events. Fixtures: `cli/cli` fires 3 events a→b (CVEs, breaking change, both), its routine and no-notes
+  releases stay in the baseline; `gitlab-runner` fires all 5 cases.
 - e2e watches must target `E2E_UPSTREAM_URL`: `scripts/e2e.sh` fails when a run log lists a real forge host.
 - Collector HTTP goes through the `pkg/netguard` client: tests against `httptest` (127.0.0.1) allowlist
   `127.0.0.0/8` and list `127.0.0.1` as a plain-http host.

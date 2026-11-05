@@ -69,7 +69,7 @@ type deliveryPath struct {
 // deliverySelect lists the owner's deliveries of events on watches they can still read.
 var deliverySelect = `SELECT d.id, d.status, d.attempts, CASE WHEN d.status IN ('pending', 'failed') THEN d.next_attempt_at END,
 		d.last_error, d.logs, d.sent_at, d.created_at, c.id::text, c.name, c.type, r.id::text, r.name,
-		e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind
+		e.id, e.type, e.occurred_at, e.observed_at, e.payload - 'body', w.id::text, w.name, w.kind
 	FROM deliveries d JOIN channels c ON c.id = d.channel_id
 	JOIN events e ON e.id = d.event_id JOIN watches w ON w.id = e.watch_id
 	LEFT JOIN rules r ON r.id = d.rule_id

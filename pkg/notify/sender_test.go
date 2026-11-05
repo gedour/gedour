@@ -94,6 +94,25 @@ func TestWebhook(t *testing.T) {
 	}
 }
 
+// 004-AC8: a webhook carries both fields, whole.
+func TestWebhookCarriesNotes(t *testing.T) {
+	srv, got := receiver(t, http.StatusNoContent)
+	s := newSender(t, "127.0.0.0/8")
+	d := sample
+	notes := strings.Repeat("n", 64<<10)
+	d.Event.Payload = map[string]any{"tag": "v1", "body": notes, "cves": []any{"CVE-2026-1"}}
+	if err := s.Send(context.Background(), webhookChannel(srv.URL+"/hook"), d); err != nil {
+		t.Fatal(err)
+	}
+	var body WebhookBody
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Event.Payload["body"] != notes || fmt.Sprint(body.Event.Payload["cves"]) != "[CVE-2026-1]" {
+		t.Fatalf("payload %.100v", body.Event.Payload)
+	}
+}
+
 // 001-AC15/001-AC16: a non-2xx answer, a redirect (never followed) and a private target all fail.
 func TestWebhookFailures(t *testing.T) {
 	for _, tt := range []struct {

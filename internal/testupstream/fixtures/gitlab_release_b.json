@@ -2,7 +2,7 @@
   {
     "name": "v19.4.0",
     "tag_name": "v19.4.0",
-    "description": "See the changelog",
+    "description": "## BREAKING CHANGES\n\n- The `docker+machine` executor is removed. Move your configuration to the `instance` executor before you upgrade.\n- `[[runners]].token` no longer accepts registration tokens; use an authentication token.\n\n## New features\n\n- Add native step output variables\n",
     "created_at": "2026-11-20T00:00:00.000Z",
     "released_at": "2026-11-20T00:00:00.000Z",
     "upcoming_release": true,
@@ -20,9 +20,69 @@
     }
   },
   {
+    "name": "v19.3.8",
+    "tag_name": "v19.3.8",
+    "description": "## Security fixes\n\n- Fixes CVE-2099-61205.\n\n## Breaking changes\n\n- BREAKING CHANGE: the cache key now includes the project ID, so existing caches are rebuilt on the first job.\n\n## Bug fixes\n\n- Report the exit code of `after_script` in the job log\n",
+    "created_at": "2026-11-03T12:00:00.000Z",
+    "released_at": "2026-11-03T12:00:00.000Z",
+    "upcoming_release": false,
+    "author": {
+      "id": 1,
+      "username": "gitlab-runner-bot"
+    },
+    "commit": {
+      "id": "abc",
+      "short_id": "abc"
+    },
+    "_links": {
+      "closed_issues_url": "https://gitlab.com/gitlab-org/gitlab-runner/-/issues?release_tag=v19.3.8&scope=all&state=closed",
+      "self": "https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.8"
+    }
+  },
+  {
+    "name": "v19.3.7",
+    "tag_name": "v19.3.7",
+    "description": "",
+    "created_at": "2026-11-02T12:00:00.000Z",
+    "released_at": "2026-11-02T12:00:00.000Z",
+    "upcoming_release": false,
+    "author": {
+      "id": 1,
+      "username": "gitlab-runner-bot"
+    },
+    "commit": {
+      "id": "abc",
+      "short_id": "abc"
+    },
+    "_links": {
+      "closed_issues_url": "https://gitlab.com/gitlab-org/gitlab-runner/-/issues?release_tag=v19.3.7&scope=all&state=closed",
+      "self": "https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.7"
+    }
+  },
+  {
+    "name": "v19.3.6",
+    "tag_name": "v19.3.6",
+    "description": "## New features\n\n- Add a `--wait-timeout` option to `verify`\n\n## Bug fixes\n\n- Keep the build log order when two sections end in the same millisecond\n- Fix a typo in the `config.toml` reference\n",
+    "created_at": "2026-11-01T12:00:00.000Z",
+    "released_at": "2026-11-01T12:00:00.000Z",
+    "upcoming_release": false,
+    "author": {
+      "id": 1,
+      "username": "gitlab-runner-bot"
+    },
+    "commit": {
+      "id": "abc",
+      "short_id": "abc"
+    },
+    "_links": {
+      "closed_issues_url": "https://gitlab.com/gitlab-org/gitlab-runner/-/issues?release_tag=v19.3.6&scope=all&state=closed",
+      "self": "https://gitlab.com/gitlab-org/gitlab-runner/-/releases/v19.3.6"
+    }
+  },
+  {
     "name": "v19.3.5",
     "tag_name": "v19.3.5",
-    "description": "See the changelog",
+    "description": "## Security fixes\n\n- Fix cve-2099-4242.\n- This release addresses CVE-2099-50113, see the advisory for the affected versions.\n- Rotate the cache credentials, as advised for CVE-2099-4242.\n\n## Bug fixes\n\n- Retry artifact uploads on a 502 response\n- Fix the Kubernetes pod cleanup when the job is cancelled during image pull\n",
     "created_at": "2026-10-29T12:11:02.832Z",
     "released_at": "2026-10-29T12:11:02.832Z",
     "upcoming_release": false,
@@ -42,7 +102,7 @@
   {
     "name": "v19.3.4",
     "tag_name": "v19.3.4",
-    "description": "See the changelog",
+    "description": "## Bug fixes\n\n- Fix the shell escaping of multi-line variables in Bash\n- Show the runner name in the job trace header\n",
     "created_at": "2026-10-15T12:00:00.000Z",
     "released_at": "2026-10-15T12:00:00.000Z",
     "upcoming_release": false,
@@ -62,7 +122,7 @@
   {
     "name": "v19.3.3",
     "tag_name": "v19.3.3",
-    "description": "See the changelog",
+    "description": "## Bug fixes\n\n- Fix the shell escaping of multi-line variables in PowerShell\n- Show the runner name in the job trace header\n",
     "created_at": "2026-10-01T12:00:00.000Z",
     "released_at": "2026-10-01T12:00:00.000Z",
     "upcoming_release": false,

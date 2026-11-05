@@ -51,7 +51,7 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 		{"github_pr", map[string]any{"repo": "cli/cli", "number": 14925, "api_url": srv.URL},
 			[]string{"pr.draft_changed", "pr.review_changed", "pr.ci_changed"}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner"},
-			[]string{"release.published", "release.published"}},
+			[]string{"release.published", "release.published", "release.published", "release.published", "release.published"}},
 		{"gitlab_mr", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner", "iid": 7764},
 			[]string{"mr.state_changed", "mr.approval_changed", "mr.pipeline_changed"}},
 		{"oci_tags", map[string]any{"registry": host, "repository": "library/postgres", "tag_regex": `^\d+(\.\d+)?$`, "semver_only": true},
@@ -65,9 +65,14 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 				t.Fatal(err)
 			}
 			up.SetFixture("b")
-			b, err := c.Collect(t.Context(), fetcher(t), cfgJSON(t, tt.cfg), nil)
+			f := fetcher(t)
+			b, err := c.Collect(t.Context(), f, cfgJSON(t, tt.cfg), nil)
 			if err != nil {
 				t.Fatal(err)
+			}
+			// 004-AC1: only the release kinds hand notes over, and they reach the state nowhere.
+			if isRelease := strings.HasSuffix(tt.kind, "_release"); isRelease != (f.Notes != nil) || strings.Contains(string(b), "## ") {
+				t.Fatalf("notes %v in the state %.80s", f.Notes != nil, b)
 			}
 			events, err := c.Diff(a, b)
 			if err != nil {

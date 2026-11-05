@@ -121,11 +121,19 @@ a failed dev sign-in answers a plain 500.
   holds no other predicate and reads only its item (`#`, `#.field`; compare `event`/`watch` fields outside
   it), in 200 expression nodes at most. On top, a static cost model prices every filter before it is saved
   (each operation 32 units, times 200 inside a predicate; string work a unit per byte, 3 for
-  `lower`/`upper`, 12 for `semver_gt`; a field counts 4 KiB, `#` 64 KiB over all items) and refuses one
-  above 1,000,000 units, about 5 ms on the worst payloads; the error gives the computed cost; `date()` takes no time zone argument; the second argument of `trim`, `trimPrefix` and `trimSuffix` is a
+  `lower`/`upper`, 12 for `semver_gt`; a field counts 4 KiB, `event.payload.body` 64 KiB, `#` 64 KiB over all
+  items) and refuses one above 4,000,000 units, about 45 ms on the worst payloads (about 4.5 s for a user's 100 rules), so a pattern on
+  `body` holds 61 instructions at most; the error gives the computed cost; `date()` takes no time zone argument; the second argument of `trim`, `trimPrefix` and `trimSuffix` is a
   string literal, for `trim` ASCII and at most 16 bytes. `GET /api/v1/filters/reference`
-  serves this list and its limits, as the rule editor shows them. Filters see payload strings cut to 4 KiB (64 KiB in all) and arrays/maps to
-  200 entries. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
+  serves this list and its limits, as the rule editor shows them. Filters see payload strings cut to 4 KiB (64 KiB in all), `event.payload.body`
+  to 64 KiB on top (128 KiB in all), and arrays/maps to 200 entries. A predicate on a string fails at evaluation.
+  Release events of GitHub and GitLab carry the notes in `payload.body` (cut to 64 KiB) and the CVE ids of the
+  whole notes in `payload.cves` (uppercased, deduplicated, 200 at most, each 32 bytes at most; `[]` without any). For example:
+  `len(event.payload.cves) > 0`, `"CVE-2026-1234" in event.payload.cves`,
+  `event.payload.body matches "(?i)breaking.change"`. On an event without them, filters read `cves` as `[]` and
+  `body` as `""`; the stored and delivered payload stays as it is. So `len(event.payload.cves) == 0` and
+  `event.payload.body == ""` also match non-release events: a rule meant for releases adds a check on
+  `event.type` or targets a watch. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule whose owner can
   read the watch now (own or shared) is evaluated; a match adds one inbox item per user and one delivery

@@ -45,15 +45,22 @@ const (
 	maxArray = 50
 	// maxCutset caps the ASCII cutset literal of trim().
 	maxCutset = 16
+	// maxEvalError caps an evaluation error's message.
+	maxEvalError = 1 << 10
 )
 
 // Payload bounds applied by Sanitize before evaluation.
 const (
 	MaxString = 4 << 10
+	// MaxBody is what a filter reads of the top-level string payload.body, the one long field.
+	MaxBody   = collect.MaxNotes
 	MaxItems  = 200
 	maxValues = 2000
-	// maxBytes bounds the strings of a whole payload: an equality or a string() over it stays cheap.
-	maxBytes = 64 << 10
+	// maxRest bounds the strings of a payload apart from body, so an equality or a string() over them
+	// stays cheap and a long body cannot crowd them out.
+	maxRest = 64 << 10
+	// maxBytes bounds the strings of a whole payload.
+	maxBytes = MaxBody + maxRest
 	maxDepth = 8
 )
 
@@ -79,6 +86,7 @@ type Limits struct {
 	MaxArray        int `json:"max_array" doc:"Items of an array literal"`
 	PredicateDepth  int `json:"predicate_depth" doc:"Predicates cannot hold another predicate"`
 	MaxString       int `json:"max_string" doc:"Bytes of one payload string a filter sees"`
+	MaxBody         int `json:"max_body" doc:"Bytes a filter sees of event.payload.body"`
 	MaxItems        int `json:"max_items" doc:"Entries of one payload array or map a filter sees"`
 }
 
@@ -91,6 +99,7 @@ type CostRef struct {
 	Date           int64 `json:"date" doc:"Each date() parse"`
 	DeepValue      int64 `json:"deep_value" doc:"Per value of a map or array compared with == or in"`
 	FieldBytes     int64 `json:"field_bytes" doc:"Bytes assumed for an event or watch field"`
+	BodyBytes      int64 `json:"body_bytes" doc:"Bytes assumed for event.payload.body, or for a payload key computed at run time"`
 	ItemBytes      int64 `json:"item_bytes" doc:"Bytes assumed for # summed over all items, paid once per use"`
 	PredicateItems int64 `json:"predicate_items" doc:"Items a predicate is assumed to run over"`
 }
@@ -111,13 +120,17 @@ func Reference() Ref {
 		Predicates: keys(predicateBuiltins),
 		Limits: Limits{MaxLength: MaxLen, MaxNodes: maxNodes, MaxMatches: maxMatches, MaxRegexInsts: maxRegexInsts,
 			MaxRegexRepeats: maxRegexRepeats, MaxRange: maxRange, MaxArray: maxArray, PredicateDepth: 1,
-			MaxString: MaxString, MaxItems: MaxItems},
+			MaxString: MaxString, MaxBody: MaxBody, MaxItems: MaxItems},
 		Cost: CostRef{Budget: CostBudget, Node: nodeUnits, CaseMapping: caseFactor, Semver: semverUnits, Date: dateUnits,
-			DeepValue: valueUnits, FieldBytes: MaxString, ItemBytes: maxBytes, PredicateItems: MaxItems},
+			DeepValue: valueUnits, FieldBytes: MaxString, BodyBytes: MaxBody, ItemBytes: maxRest, PredicateItems: MaxItems},
 		Rules: []string{
 			fmt.Sprintf("A filter costs at most %d units: each operation %d (times %d inside a predicate), string work a unit per byte "+
-				"(%d for lower and upper, %d for semver_gt), a field counting %d bytes and # %d bytes over all items.",
-				CostBudget, nodeUnits, MaxItems, caseFactor, semverUnits, MaxString, maxBytes),
+				"(%d for lower and upper, %d for semver_gt), a field counting %d bytes, event.payload.body %d, and # %d bytes over all items.",
+				CostBudget, nodeUnits, MaxItems, caseFactor, semverUnits, MaxString, MaxBody, maxRest),
+			fmt.Sprintf("event.payload.body is read up to %d bytes, every other string up to %d; a pattern costs its instructions per byte, so at most %d instructions fit on body.",
+				MaxBody, MaxString, CostBudget/MaxBody),
+			"On the worst payloads a filter takes about 45 ms, and a user's 100 rules about 4.5 s.",
+			"A predicate takes an array: on a string it fails at evaluation, and the rule does not match.",
 			"A predicate body reads only its item: # and #.field, plus literals. Compare event or watch fields outside it.",
 			"Predicates do not nest.",
 			fmt.Sprintf("matches takes a string-literal pattern (at most %d instructions, repetitions up to %d), at most %d times, never inside a predicate.",
@@ -199,6 +212,37 @@ func scalarString(params ...any) (any, error) {
 	return nil, fmt.Errorf("string() takes a string, number, boolean or time, not %T", params[0])
 }
 
+// arrayOnlyFunc refuses a string where a predicate expects an array: expr would walk it byte by byte,
+// up to MaxBody iterations where the cost model prices MaxItems.
+func arrayOnlyFunc(params ...any) (any, error) {
+	if _, ok := params[0].(string); ok {
+		return nil, errors.New("a predicate takes an array, not a string")
+	}
+	return params[0], nil
+}
+
+// arrayGuard wraps every predicate's array in array_only. It runs after the allowlist walk, which refuses this
+// call in a source; ?: shares one node for its condition and result, so a node may come by twice.
+type arrayGuard struct{}
+
+func (arrayGuard) Visit(node *ast.Node) {
+	b, ok := (*node).(*ast.BuiltinNode)
+	if !ok || !predicateBuiltins[b.Name] {
+		return
+	}
+	if c, ok := b.Arguments[0].(*ast.CallNode); ok {
+		if id, ok := c.Callee.(*ast.IdentifierNode); ok && id.Value == "array_only" {
+			return
+		}
+	}
+	callee := &ast.IdentifierNode{Value: "array_only"}
+	callee.SetType(reflect.TypeFor[func(any) any]())
+	call := &ast.CallNode{Callee: callee, Arguments: []ast.Node{b.Arguments[0]}}
+	call.SetType(reflect.TypeFor[any]())
+	call.SetLocation(b.Arguments[0].Location())
+	b.Arguments[0] = call
+}
+
 var options = []expr.Option{
 	expr.Env(Env{}),
 	expr.AsBool(),
@@ -206,6 +250,7 @@ var options = []expr.Option{
 	expr.Function("semver_gt", semverGT, new(func(string, string) bool)),
 	expr.DisableBuiltin("string"),
 	expr.Function("string", scalarString, new(func(any) string)),
+	expr.Function("array_only", arrayOnlyFunc, new(func(any) any)),
 }
 
 var (
@@ -337,8 +382,8 @@ func isLiteral(n ast.Node) bool {
 // computed on the checked tree and refused above CostBudget, so the cost is known before the first
 // evaluation, whatever the payload holds within Sanitize's bounds.
 const (
-	// CostBudget is the most one filter may cost: about 5 ms of evaluation on the worst payloads.
-	CostBudget = 1_000_000
+	// CostBudget is the most one filter may cost: about 45 ms measured on the worst payloads, 4.5 s for a user's 100 rules.
+	CostBudget = 4_000_000
 	// nodeUnits is one VM step, worth about this many bytes of string work.
 	nodeUnits = 32
 	// caseFactor prices lower()/upper() per byte: multibyte case mapping is that much slower than a copy.
@@ -349,8 +394,10 @@ const (
 	semverUnits = 12
 	// valueUnits is the per-value overhead of a deep comparison (maps, arrays).
 	valueUnits = 16
-	// payloadSize bounds a whole sanitized payload, or any part of it, for deep comparisons.
+	// payloadSize bounds a whole sanitized payload, for deep comparisons.
 	payloadSize = maxBytes + valueUnits*maxValues
+	// fieldSize bounds any part of it: only the payload itself and body can hold body's bytes.
+	fieldSize = maxRest + valueUnits*maxValues
 )
 
 // val is what the walker knows about a node: its cost so far and bounds on its value.
@@ -359,6 +406,8 @@ type val struct {
 	bytes int64 // string bytes of the value; for an item value, the sum over all items
 	size  int64 // deep size, for == and in
 	item  bool  // derived from # inside a predicate: bytes and size are totals over the items
+	event bool  // may be the event itself
+	root  bool  // may be the whole payload
 }
 
 // allow walks the checked tree, accepts only the allowlist and sums its cost; the first refusal wins.
@@ -434,20 +483,27 @@ func (a *allow) node(n ast.Node, inPredicate bool) val {
 			// Per-item work then follows the item's own data, which Sanitize bounds in total.
 			a.fail(t, t.Value+" inside a predicate (the body reads only #; compare "+t.Value+" fields outside it)")
 		}
-		return val{cost: st, bytes: MaxString, size: payloadSize}
+		return val{cost: st, bytes: MaxString, size: payloadSize, event: t.Value == "event"}
 	case *ast.PointerNode:
 		if !inPredicate {
 			a.fail(t, "# outside a predicate")
 		}
-		return val{cost: st, bytes: maxBytes, size: payloadSize, item: true}
+		return val{cost: st, bytes: maxRest, size: fieldSize, item: true}
 	case *ast.MemberNode:
 		if t.Method {
 			a.fail(t, "a method call")
 		}
 		x, p := a.node(t.Node, inPredicate), a.node(t.Property, inPredicate)
-		v := val{cost: st + sum(x, p), bytes: MaxString, size: payloadSize, item: x.item}
-		if x.item {
-			v.bytes = maxBytes
+		v := val{cost: st + sum(x, p), bytes: MaxString, size: fieldSize, item: x.item}
+		lit, isLit := t.Property.(*ast.StringNode)
+		switch {
+		case x.item:
+			v.bytes = maxRest
+		case x.event && (!isLit || lit.Value == "payload"):
+			v.root, v.size = true, payloadSize
+		case x.root && (!isLit || lit.Value == "body"):
+			// A computed key may read body too, whatever it looks like.
+			v.bytes = MaxBody
 		}
 		return v
 	case *ast.ChainNode:
@@ -462,7 +518,8 @@ func (a *allow) node(n ast.Node, inPredicate bool) val {
 		return a.binary(t, inPredicate)
 	case *ast.ConditionalNode:
 		c, x, y := a.node(t.Cond, inPredicate), a.node(t.Exp1, inPredicate), a.node(t.Exp2, inPredicate)
-		return val{cost: st + sum(c, x, y), bytes: max(x.bytes, y.bytes), size: max(x.size, y.size), item: anyItem(x, y)}
+		return val{cost: st + sum(c, x, y), bytes: max(x.bytes, y.bytes), size: max(x.size, y.size), item: anyItem(x, y),
+			event: x.event || y.event, root: x.root || y.root}
 	case *ast.CallNode:
 		id, ok := t.Callee.(*ast.IdentifierNode)
 		if !ok || !functions[id.Value] {
@@ -482,7 +539,9 @@ func (a *allow) node(n ast.Node, inPredicate bool) val {
 			v.cost += work
 			v.bytes, v.size, v.item = args[0].bytes, args[0].bytes, args[0].item
 			if !v.item {
-				v.bytes, v.size = MaxString, MaxString
+				// Numbers and times carry no byte bound of their own.
+				v.bytes = max(args[0].bytes, MaxString)
+				v.size = v.bytes
 			}
 		}
 		return v
@@ -661,6 +720,7 @@ func Compile(src string) (*Program, error) {
 		return nil, &Error{Line: 1, Column: 1, Message: fmt.Sprintf("costs %d units, above the budget of %d: "+
 			"fewer operations, or string work on # (the items) rather than per item", v.cost, CostBudget)}
 	}
+	ast.Walk(&tree.Node, arrayGuard{})
 	cfg := config()
 	if err := optimizer.Optimize(&tree.Node, cfg); err != nil {
 		return nil, fromExpr(err)
@@ -684,11 +744,12 @@ func fromExpr(err error) error {
 	return &Error{Line: 1, Column: 1, Message: err.Error()}
 }
 
-// Sanitize bounds what an evaluation sees of a payload: strings cut to MaxString bytes and maxBytes in
+// Sanitize bounds what an evaluation sees of a payload: strings cut to MaxString bytes and maxRest in
 // all, arrays and maps to MaxItems entries (map keys in order, so the cut is the same every time),
-// nesting to maxDepth, and maxValues values in all. It returns a copy.
+// nesting to maxDepth, and maxValues values in all. A top-level string body is cut to MaxBody instead,
+// on bytes of its own, so maxBytes holds and the other fields keep theirs. It returns a copy.
 func Sanitize(payload map[string]any) map[string]any {
-	b := budget{values: maxValues, bytes: maxBytes}
+	b := budget{values: maxValues, bytes: maxRest}
 	out, _ := b.sanitize(payload, 0).(map[string]any)
 	if out == nil {
 		out = map[string]any{}
@@ -720,6 +781,10 @@ func (b *budget) sanitize(v any, depth int) any {
 			if len(out) == MaxItems {
 				break
 			}
+			if s, ok := t[k].(string); ok && depth == 0 && k == "body" {
+				out[k] = strings.ToValidUTF8(s[:min(len(s), MaxBody)], "")
+				continue
+			}
 			out[k] = b.sanitize(t[k], depth+1)
 		}
 		return out
@@ -734,7 +799,9 @@ func Match(p *Program, env Env) (bool, error) {
 	}
 	out, err := expr.Run(p, env)
 	if err != nil {
-		return false, fmt.Errorf("evaluate filter: %w", err)
+		// int(body) quotes its whole input, and this error reaches the logs and the rule preview.
+		msg := err.Error()
+		return false, errors.New("evaluate filter: " + strings.ToValidUTF8(msg[:min(len(msg), maxEvalError)], ""))
 	}
 	b, ok := out.(bool)
 	if !ok {

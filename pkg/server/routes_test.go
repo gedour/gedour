@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/hmac"
 	"encoding/json"
 	"fmt"
@@ -454,13 +455,175 @@ func TestRules(t *testing.T) {
 type previewJSON struct {
 	Items []struct {
 		Event struct {
-			ID   int64  `json:"id"`
-			Type string `json:"type"`
+			ID      int64          `json:"id"`
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
 		} `json:"event"`
 		Watch   struct{ ID, Name string } `json:"watch"`
 		Matched bool                      `json:"matched"`
 		Error   string                    `json:"error"`
 	} `json:"items"`
+}
+
+// 004-AC5, 004-AC9, 004-AC10: the rule API takes filters on the new fields and a pattern at the budget edge, refuses one
+// past the budget with its cost; each selects only the events it should, a mark past 4 KiB included. The audit
+// log never holds the notes.
+func TestRulesOnReleaseNotes(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	long := strings.Repeat("filler ", 60<<10/7) + "BREAKING CHANGE: past 4 KiB"
+	for _, e := range []struct{ tag, body, cves string }{
+		{"v1", "Fixes CVE-2026-1234.", `["CVE-2026-1234"]`},
+		{"v2", long, `[]`},
+		{"v3", "", `[]`},
+	} {
+		a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published',
+			jsonb_build_object('tag', $2::text, 'body', $3::text, 'cves', $4::jsonb), $2)`, w.ID, e.tag, e.body, e.cves)
+	}
+	pattern := strings.Repeat("[ab]?", 29) + "z"
+	if filter.Reference().Cost.Budget != 4_000_000 {
+		t.Fatal("budget")
+	}
+	for _, tt := range []struct {
+		filter string
+		want   []string
+	}{
+		{`"CVE-2026-1234" in event.payload.cves`, []string{"v1"}},
+		{`event.payload.body matches "CVE-[0-9]{4}-[0-9]+"`, []string{"v1"}},
+		{`len(event.payload.cves) == 0 && event.payload.body == ""`, []string{"v3"}},
+		{`event.payload.body matches "(?i)breaking.change"`, []string{"v2"}},
+		{`event.payload.body matches "` + pattern + `"`, nil},
+	} {
+		var r ruleJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": tt.filter[:20], "filter": tt.filter, "watch_id": w.ID}, http.StatusCreated, &r)
+		var pv previewJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/rules/preview", map[string]any{"filter": tt.filter, "watch_id": w.ID}, http.StatusOK, &pv)
+		var got []string
+		for i := len(pv.Items) - 1; i >= 0; i-- {
+			it := pv.Items[i]
+			// Evaluated on the notes, the matches above show it; never returned, they are 20 events of 64 KiB.
+			if _, has := it.Event.Payload["body"]; has || it.Event.Payload["cves"] == nil {
+				t.Fatalf("preview payload %.100v", it.Event.Payload)
+			}
+			if it.Matched {
+				got = append(got, fmt.Sprint(it.Event.Payload["tag"]))
+			} else if it.Error != "" {
+				t.Fatalf("%s: %s", tt.filter, it.Error)
+			}
+		}
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("%s matched %v, want %v", tt.filter, got, tt.want)
+		}
+		a.mustCall(t, alice, http.MethodDelete, "/api/v1/rules/"+r.ID, nil, http.StatusNoContent, nil)
+	}
+	over := `event.payload.body matches "` + strings.Repeat("[ab]?", 30) + `z"`
+	cost, err := filter.Cost(over)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "over", "filter": over}, http.StatusBadRequest)
+	if !strings.Contains(p.Errors[0].Message, fmt.Sprintf("costs %d units", cost)) {
+		t.Fatalf("refusal: %+v", p)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE after::text LIKE '%filler%' OR before::text LIKE '%filler%'`); n != 0 {
+		t.Fatalf("%d audit rows hold the notes", n)
+	}
+
+	// The lists that never show the notes leave them out and keep the ids; the inbox keeps both, for its panel.
+	type listed struct {
+		Items []struct {
+			Payload map[string]any `json:"payload"`
+			Event   struct {
+				Payload map[string]any `json:"payload"`
+			} `json:"event"`
+		} `json:"items"`
+	}
+	var hook channelJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
+	var first int64
+	if err := a.pool.QueryRow(context.Background(), `SELECT id FROM events WHERE payload->>'tag' = 'v1'`).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	var ruleID string
+	if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, watch_id, filter) SELECT owner_id, 'all', id, '' FROM watches WHERE id = $1 RETURNING id::text`, w.ID).Scan(&ruleID); err != nil {
+		t.Fatal(err)
+	}
+	a.exec(t, `INSERT INTO deliveries (event_id, rule_id, channel_id) VALUES ($1, $2, $3)`, first, ruleID, hook.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT owner_id, $1 FROM watches WHERE id = $2`, first, w.ID)
+	check := func(path string, wantBody bool, payload func(l listed) map[string]any) {
+		t.Helper()
+		var l listed
+		a.mustCall(t, alice, http.MethodGet, path, nil, http.StatusOK, &l)
+		if len(l.Items) == 0 {
+			t.Fatalf("%s: empty", path)
+		}
+		p := payload(l)
+		if _, has := p["body"]; has != wantBody {
+			t.Errorf("%s: body present = %v", path, has)
+		}
+		if p["tag"] == nil || p["cves"] == nil {
+			t.Errorf("%s: payload %.100v", path, p)
+		}
+	}
+	event := func(l listed) map[string]any { return l.Items[len(l.Items)-1].Event.Payload }
+	check("/api/v1/watches/"+w.ID+"/events", false, func(l listed) map[string]any { return l.Items[0].Payload })
+	check("/api/v1/deliveries?channel_id="+hook.ID, false, event)
+	check("/api/v1/inbox?state=all", true, event)
+}
+
+// 004-AC4: previewing a filter on the notes fields shows no error row on an event without them, and the API returns
+// that event's payload as stored.
+func TestPreviewOnEventsWithoutNotes(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'pr.state_changed', '{"to":"merged"}', 'pr')`, w.ID)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{"tag":"v1","body":"Notes for X.","cves":["x"]}', 'v1')`, w.ID)
+	isPR := func(typ string) bool { return typ == "pr.state_changed" }
+	for _, tt := range []struct {
+		filter string
+		onPR   bool
+	}{
+		{`len(event.payload.cves) > 0`, false},
+		{`any(event.payload.cves, {# == "x"})`, false},
+		{`lower(event.payload.body) contains "x"`, false},
+		{`len(event.payload.cves) == 0`, true},
+	} {
+		var pv previewJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/rules/preview", map[string]any{"filter": tt.filter}, http.StatusOK, &pv)
+		if len(pv.Items) != 2 {
+			t.Fatalf("%s: %d items", tt.filter, len(pv.Items))
+		}
+		for _, it := range pv.Items {
+			if it.Error != "" {
+				t.Errorf("%s on %s: %s", tt.filter, it.Event.Type, it.Error)
+			}
+			if it.Matched != (isPR(it.Event.Type) == tt.onPR) {
+				t.Errorf("%s on %s: matched %v", tt.filter, it.Event.Type, it.Matched)
+			}
+			if isPR(it.Event.Type) && (len(it.Event.Payload) != 1 || it.Event.Payload["to"] != "merged") {
+				t.Errorf("%s: preview returned %v", tt.filter, it.Event.Payload)
+			}
+		}
+	}
+	var page struct {
+		Items []struct {
+			Type    string         `json:"type"`
+			Payload map[string]any `json:"payload"`
+		} `json:"items"`
+	}
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/watches/"+w.ID+"/events", nil, http.StatusOK, &page)
+	if len(page.Items) != 2 {
+		t.Fatalf("events: %+v", page.Items)
+	}
+	for _, it := range page.Items {
+		if isPR(it.Type) && len(it.Payload) != 1 {
+			t.Errorf("events returned %v", it.Payload)
+		}
+	}
 }
 
 // 001-AC13: the preview evaluates the last 20 events of the watches the caller can read, never others'.

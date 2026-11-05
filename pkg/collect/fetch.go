@@ -68,6 +68,8 @@ type Fetcher struct {
 	// Hosts lists the hosts this run contacted, in first-contact order, for the run log.
 	Hosts []string
 	Now   func() time.Time
+	// Notes holds a release watch's notes by tag, for this run's events only; nil for other kinds.
+	Notes map[string]string
 }
 
 type response struct {

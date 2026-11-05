@@ -447,3 +447,118 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
   await expect(row).not.toContainText("Retrying");
   await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
 });
+
+// 004-AC1, 004-AC4, 004-AC5, 004-AC7, 004-AC8: rules on payload.cves and on a pattern in payload.body each route the
+// right fixture releases and nothing else, on both forges; the panel shows the ids and collapses the notes.
+test("rules on release notes route the right releases", async ({ page }) => {
+  const t = tag();
+  await page.goto("/inbox");
+  await setFixture(page, "a");
+  const call = await api(page);
+  const post = async (path: string, body: object) => {
+    const res = await call("POST", path, body);
+    expect(res.status(), await res.text()).toBe(201);
+    return (await res.json()) as { id: string };
+  };
+  const watches = [
+    await post("/api/v1/watches", {
+      name: `Notes GitHub ${t}`,
+      kind: "github_release",
+      schedule: "1h",
+      config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+    }),
+    await post("/api/v1/watches", {
+      name: `Notes GitLab ${t}`,
+      kind: "gitlab_release",
+      schedule: "1h",
+      config: { project: "gitlab-org/gitlab-runner", base_url: UPSTREAM },
+    }),
+  ];
+  for (const { id } of watches) {
+    await expect
+      .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+        timeout: 15_000,
+      })
+      .toBe("ok");
+  }
+  const rules: Record<string, { filter: string; want: string[] }> = {
+    any: {
+      filter: "len(event.payload.cves) > 0",
+      want: ["v19.3.5", "v19.3.8", "v2.103.3", "v2.105.0"],
+    },
+    one: { filter: '"CVE-2099-1234" in event.payload.cves', want: ["v2.103.3"] },
+    breaking: {
+      filter: 'event.payload.body matches "(?i)breaking.change"',
+      want: ["v19.3.8", "v19.4.0", "v2.104.0-rc.1", "v2.105.0"],
+    },
+  };
+  const ruleIds: string[] = [];
+  for (const [name, r] of Object.entries(rules)) {
+    const channel = await post("/api/v1/channels", {
+      name: `${name} ${t}`,
+      type: "webhook",
+      config: { url: `${UPSTREAM}/_hooks/notes-${name}-${t}` },
+    });
+    for (const w of watches) {
+      const rule = await post("/api/v1/rules", {
+        name: `${name} ${w.id}`,
+        watch_id: w.id,
+        filter: r.filter,
+        channel_ids: [channel.id],
+      });
+      ruleIds.push(rule.id);
+    }
+  }
+
+  await setFixture(page, "b");
+  for (const { id } of watches) {
+    expect((await call("POST", `/api/v1/watches/${id}/run`)).status()).toBe(202);
+  }
+  const received = async (name: string) =>
+    ((await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[])
+      .filter((r) => r.endpoint === `notes-${name}-${t}`)
+      .map(
+        (r) => JSON.parse(r.body).event.payload as { tag: string; body: string; cves: string[] },
+      );
+  for (const [name, r] of Object.entries(rules)) {
+    await expect
+      .poll(async () => (await received(name)).map((p) => p.tag).sort(), { timeout: 15_000 })
+      .toEqual(r.want);
+  }
+  // 004-AC8: a webhook carries both fields.
+  const cited = (await received("one"))[0];
+  expect(cited?.cves).toEqual(["CVE-2099-1234", "CVE-2099-20871"]);
+  expect(cited?.body).toContain("cve-2099-1234");
+
+  // Only what a rule picked reached the inbox: not the routine release, not the one without notes.
+  const inbox = (await (await call("GET", "/api/v1/inbox?state=all&limit=200")).json()).items as {
+    event: { payload: { tag: string } };
+    watch: { id: string };
+  }[];
+  expect(
+    inbox
+      .filter((i) => watches.some((w) => w.id === i.watch.id))
+      .map((i) => i.event.payload.tag)
+      .sort(),
+  ).toEqual(["v19.3.5", "v19.3.8", "v19.4.0", "v2.103.3", "v2.104.0-rc.1", "v2.105.0"]);
+
+  await setFixture(page, "a");
+  await page.goto("/inbox?state=all");
+  await page
+    .getByRole("button", { name: /v2\.103\.3 published/ })
+    .first()
+    .click();
+  const panel = page.getByRole("complementary", { name: "v2.103.3 published" });
+  await expect(panel.getByRole("region", { name: "Details" })).toContainText(
+    "CVE-2099-1234, CVE-2099-20871",
+  );
+  const notes = panel.locator("details");
+  await expect(notes).not.toHaveAttribute("open");
+  await expect(panel.getByText("## Security")).toBeHidden();
+  await notes.getByText("Release notes").click();
+  await expect(panel.getByText("## Security", { exact: false })).toBeVisible();
+
+  // Alice's inbox is back as it was for a retry or a rerun.
+  for (const id of ruleIds) await call("DELETE", `/api/v1/rules/${id}`);
+  for (const { id } of watches) await call("DELETE", `/api/v1/watches/${id}`);
+});

@@ -20,7 +20,7 @@ type Event struct {
 	Type       string         `json:"type" doc:"e.g. release.published, pr.state_changed, tag.created"`
 	OccurredAt *time.Time     `json:"occurred_at" nullable:"true" doc:"Upstream time of the change, when the upstream gives one"`
 	ObservedAt time.Time      `json:"observed_at" doc:"When gedour saw the change"`
-	Payload    map[string]any `json:"payload" doc:"Per-type details: tag, from/to, url..."`
+	Payload    map[string]any `json:"payload" doc:"Per-type details: tag, from/to, url, cves... The release notes (body) only come with the inbox list and to channels"`
 }
 
 // StateSnapshot is one stored state of a watch.
@@ -84,7 +84,7 @@ func (s *Service) listEvents(ctx context.Context, in *listEventsInput) (*listEve
 			return nil, huma.Error400BadRequest("invalid cursor", &huma.ErrorDetail{Location: "query.cursor", Message: "not a cursor this API returned", Value: in.Cursor})
 		}
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, type, occurred_at, observed_at, payload FROM events
+	rows, err := s.pool.Query(ctx, `SELECT id, type, occurred_at, observed_at, payload - 'body' FROM events
 		WHERE watch_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3`, in.ID, before, in.Limit+1)
 	if err != nil {
 		return nil, s.fail("list-watch-events", err)

@@ -15,7 +15,7 @@ describe("FilterReference", () => {
     expect(ref).toHaveTextContent("Over an array: any count");
     expect(ref).toHaveTextContent(FILTER_REFERENCE.rules[0] as string);
     expect(ref).toHaveTextContent(
-      "At most 2000 characters, 200 expression nodes and a cost of 1,000,000 units",
+      "At most 2000 characters, 200 expression nodes and a cost of 4,000,000 units",
     );
   });
 

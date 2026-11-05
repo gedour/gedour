@@ -21,6 +21,9 @@ async function navErrors(code: string, filePath = "src/pages/Bad.tsx"): Promise<
 describe("script navigation lint rule", () => {
   it.each([
     'window.location.assign("/auth/login");',
+    "location.reload();",
+    "window.location.reload();",
+    'import { navigation } from "@/api/client";\nnavigation.reload();',
     'location.href = "/auth/login";',
     'window.location.replace(`/auth/login?return_to=${encodeURIComponent("/")}`);',
     "const { assign } = window.location;\nassign(`/auth/${'login'}`);",
@@ -52,6 +55,7 @@ describe("script navigation lint rule", () => {
     '<a href="/auth/login?return_to=%2F">Sign in</a>;',
     "const { pathname } = useLocation();\nconst dialog = { open: true };\ndialog.open = false;",
     'import { signOut } from "@/api/client";\nvoid signOut();',
+    'import { reloadPage } from "@/api/client";\nreloadPage();',
     'import { signOut } from "@/api/client.ts";\nvoid signOut();',
     'void import("@/pages/ScriptFormPage");',
     'import { clientName } from "@/lib/clients";\nvoid clientName;',

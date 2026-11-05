@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate, type RouteObject } from "react-router";
 
 import { AuthGate } from "@/components/AuthGate";
+import { RouteError } from "@/components/RouteError";
 import { NAV, type NavItem } from "@/nav";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
 import { AuditPage } from "@/pages/AuditPage";
@@ -47,8 +48,8 @@ export const routes: RouteObject[] = [
       { path: "/watches/:id/edit", element: <WatchFormPage /> },
       { path: "/rules/new", element: <RuleFormPage /> },
       { path: "/rules/:id", element: <RuleFormPage /> },
-      { path: "/scripts/new", element: <ScriptFormRoute /> },
-      { path: "/scripts/:id", element: <ScriptFormRoute /> },
+      { path: "/scripts/new", element: <ScriptFormRoute />, errorElement: <RouteError /> },
+      { path: "/scripts/:id", element: <ScriptFormRoute />, errorElement: <RouteError /> },
       { path: "/settings/credentials", element: <CredentialsPage /> },
       { path: "*", element: <NotFound /> },
     ],

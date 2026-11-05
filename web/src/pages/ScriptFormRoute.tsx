@@ -1,9 +1,17 @@
 import { lazy, Suspense } from "react";
 
+import { chunkLoaded, ChunkLoadError } from "@/lib/chunks";
+
 // The editor pulls in CodeMirror: its own chunk, loaded on the first visit.
-const ScriptFormPage = lazy(async () => ({
-  default: (await import("@/pages/ScriptFormPage")).ScriptFormPage,
-}));
+const ScriptFormPage = lazy(async () => {
+  try {
+    const { ScriptFormPage } = await import("@/pages/ScriptFormPage");
+    chunkLoaded();
+    return { default: ScriptFormPage };
+  } catch (cause) {
+    throw new ChunkLoadError(cause);
+  }
+});
 
 export function ScriptFormRoute() {
   return (

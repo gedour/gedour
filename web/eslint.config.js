@@ -22,9 +22,9 @@ export default tseslint.config(
     },
   },
   {
-    // 002-AC3: only api/client.ts navigates by script (sign-out), so a lost session can only ever show
-    // the sign-in gate, never redirect. Tested by src/lint.test.ts. index.html's asset-recovery reload is
-    // the one exception, outside these globs.
+    // 002-AC3: only api/client.ts navigates by script (sign-out, reload), so a lost session can only ever
+    // show the sign-in gate, never redirect. Tested by src/lint.test.ts. index.html's asset-recovery reload
+    // is the one exception, outside these globs.
     files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/api/client.ts", "src/**/*.test.{ts,tsx}", "src/test/**"],
     rules: {

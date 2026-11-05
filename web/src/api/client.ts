@@ -89,6 +89,9 @@ export const navigation = {
   go(url: string) {
     window.location.assign(url);
   },
+  reload() {
+    window.location.reload();
+  },
 };
 
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -196,6 +199,10 @@ export async function logout(): Promise<string> {
 /** Ends the session and leaves for the provider's logout, or the signed-out page. */
 export async function signOut(): Promise<void> {
   navigation.go(await logout());
+}
+
+export function reloadPage(): void {
+  navigation.reload();
 }
 
 export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Promise<AuditPage> {

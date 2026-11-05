@@ -36,8 +36,8 @@ purges it).
 | `GEDOUR_DB_PORT` | `55432` | Host port of PostgreSQL |
 | `GEDOUR_MAILPIT_SMTP_PORT` / `GEDOUR_MAILPIT_PORT` | `1025` / `8025` | Host ports of Mailpit's SMTP and UI |
 
-The realm's redirect and post-logout URIs pin the app ports: `localhost:8082` for compose, `localhost:18080`
-for `make e2e`. Changing `GEDOUR_OIDC_PORT` (or `E2E_PORT`) needs the same change in `realm.json`.
+The realm's redirect and post-logout URIs pin `localhost:8082` for compose: changing `GEDOUR_OIDC_PORT` needs the
+same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 
 ## Configuration
 

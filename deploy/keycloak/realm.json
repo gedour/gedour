@@ -18,11 +18,11 @@
       "directAccessGrantsEnabled": false,
       "implicitFlowEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:18080/auth/callback", "http://localhost:8082/auth/callback"],
-      "webOrigins": ["http://localhost:18080", "http://localhost:8082"],
+      "redirectUris": ["http://localhost:${GEDOUR_E2E_PORT}/auth/callback", "http://localhost:8082/auth/callback"],
+      "webOrigins": ["http://localhost:${GEDOUR_E2E_PORT}", "http://localhost:8082"],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "http://localhost:18080/auth/signed-out##http://localhost:8082/auth/signed-out"
+        "post.logout.redirect.uris": "http://localhost:${GEDOUR_E2E_PORT}/auth/signed-out##http://localhost:8082/auth/signed-out"
       },
       "protocolMappers": [
         {

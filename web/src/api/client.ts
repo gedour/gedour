@@ -205,6 +205,16 @@ export function reloadPage(): void {
   navigation.reload();
 }
 
+/** Whether the server answers. Not request(): its answer must never change the auth state. */
+export async function serverReachable(): Promise<boolean> {
+  try {
+    const res = await fetch("/healthz", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Promise<AuditPage> {
   const q = new URLSearchParams({ limit: String(limit) });
   for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);

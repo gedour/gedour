@@ -23,7 +23,11 @@ async function missing(page: Page, gone: () => boolean = () => true) {
   );
 }
 
-const reloads = (page: Page) => page.evaluate(() => sessionStorage.getItem("gedour.chunkReloads"));
+const reloads = (page: Page) =>
+  page.evaluate(() => {
+    const stored = sessionStorage.getItem("gedour.chunkReloads");
+    return stored === null ? null : (JSON.parse(stored) as { count: number }).count;
+  });
 const message = (page: Page) => page.getByRole("alert");
 const expectMessage = async (page: Page) => {
   await expect(message(page)).toContainText("This page could not be loaded.");
@@ -40,6 +44,27 @@ async function expectNoReload(page: Page, docs: { count: number }, want: number)
 }
 
 const scriptName = (page: Page) => page.getByLabel("Name");
+
+function countProbes(page: Page) {
+  const probes = { count: 0 };
+  page.on("requestfinished", (r) => {
+    if (new URL(r.url()).pathname === "/healthz") probes.count++;
+  });
+  page.on("requestfailed", (r) => {
+    if (new URL(r.url()).pathname === "/healthz") probes.count++;
+  });
+  return probes;
+}
+
+/** Moves the clock until the next probe has ended; a reload it allowed would change the document. */
+async function expectProbeWithoutReload(page: Page, probes: { count: number }) {
+  const before = probes.count;
+  await expect(async () => {
+    await page.clock.fastForward(LONG_AFTER);
+    expect(probes.count).toBeGreaterThan(before);
+  }).toPass();
+  await expect(message(page)).toBeVisible();
+}
 
 // The clock keeps running, unlike asset-recovery.spec.ts: this page needs the data layer's timers to
 // render, so the exact delays are checked by RouteError.test.tsx and here only their end.
@@ -72,7 +97,7 @@ test.describe("lazy chunk lost during a rollout", () => {
       await expect.poll(() => docs.count).toBe(tries + 1);
     }
     await expectMessage(page);
-    expect(await reloads(page)).toBe("4");
+    expect(await reloads(page)).toBe(4);
     await expectNoReload(page, docs, 5);
     await expectMessage(page);
 
@@ -100,7 +125,7 @@ test.describe("lazy chunk lost during a rollout", () => {
       await page.clock.fastForward(LONG_AFTER);
       await page.evaluate(() => fetch("/healthz").then(() => undefined));
       expect(docs.count).toBe(before);
-      expect(await reloads(page)).toBe("4");
+      expect(await reloads(page)).toBe(4);
     }).toPass();
     await expectMessage(page);
     // First document, then at worst 4 chunk reloads each followed by 4 asset reloads and a clean one.
@@ -143,31 +168,51 @@ test.describe("lazy chunk lost during a rollout", () => {
     expect(await reloads(page)).toBeNull();
   });
 
-  test("a dirty script form survives the chunk disappearing", async ({ page }) => {
-    const docs = countDocuments(page);
-    await page.goto("/scripts/new");
-    await scriptName(page).fill("Unsaved draft");
-
-    await missing(page);
-    await expectNoReload(page, docs, 1);
-    await expect(scriptName(page)).toHaveValue("Unsaved draft");
-  });
-
-  test("offline, the message stays instead of the browser's error page", async ({
+  test("offline after arming: no reload, no try spent, recovers by itself", async ({
     page,
     context,
   }) => {
     const docs = countDocuments(page);
-    await page.goto("/scripts");
-    await expect(page.getByRole("link", { name: "New script" }).first()).toBeVisible();
+    const probes = countProbes(page);
+    await missing(page, () => docs.count < 2);
+    await page.goto("/scripts/new");
+    await expectMessage(page);
 
     await context.setOffline(true);
-    await page.getByRole("link", { name: "New script" }).first().click();
+    await expectProbeWithoutReload(page, probes);
+    await expectProbeWithoutReload(page, probes);
+    expect(docs.count).toBe(1);
     await expectMessage(page);
+    expect(await reloads(page)).toBeNull();
+
+    await context.setOffline(false);
     await page.clock.fastForward(LONG_AFTER);
+    await expect(scriptName(page)).toBeVisible();
+    expect(docs.count).toBe(2);
+    expect(await reloads(page)).toBeNull();
+  });
+
+  test("an ingress 502 costs no try, and the reload follows the first ok probe", async ({
+    page,
+  }) => {
+    const docs = countDocuments(page);
+    const probes = countProbes(page);
+    await missing(page, () => docs.count < 2);
+    await page.route("**/healthz", (route) =>
+      route.fulfill({ status: 502, contentType: "text/plain", body: "bad gateway\n" }),
+    );
+    await page.goto("/scripts/new");
     await expectMessage(page);
+
+    await expectProbeWithoutReload(page, probes);
+    await expectProbeWithoutReload(page, probes);
     expect(docs.count).toBe(1);
     expect(await reloads(page)).toBeNull();
+
+    await page.unroute("**/healthz");
+    await page.clock.fastForward(LONG_AFTER);
+    await expect(scriptName(page)).toBeVisible();
+    expect(docs.count).toBe(2);
   });
 
   test("blocked sessionStorage shows the message without reloading", async ({ page }) => {

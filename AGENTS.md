@@ -69,7 +69,7 @@
   Never edit an applied migration; add a new numbered file.
 - Version vars are injected with `-X 'main.<Var>=…'` (never the import path).
 - Frontend: `fetch` only in `web/src/api/`; API resource types come from `schema.gen.ts` (via `types/api.ts`); UI primitives in `web/src/components/ui` (shadcn-style, Radix).
-- A `lazy` route wraps its import in `ChunkLoadError` and sets `errorElement: <RouteError />` (`ScriptFormRoute`): reloads while the page stays open, then a message (`e2e/chunk-recovery.spec.ts`).
+- A `lazy` route wraps its import in `ChunkLoadError` and sets `errorElement: <RouteError />` (`ScriptFormRoute`): reloads while the page stays open and `/healthz` answers, then a message (`e2e/chunk-recovery.spec.ts`).
 - Persisted UI keys: `gedour.theme`, `gedour.sidebar.width`, `gedour.sidebar.collapsed`; `gedour.assetReloads` and `gedour.chunkReloads` in `sessionStorage`.
 - One auth state: a 401 from `request()` or the stream's `signed_out` sets `auth` (`api/client.ts`) and
   `AuthGate` swaps the app for `SignInGate`. Only `api/client.ts` may navigate by script; app code

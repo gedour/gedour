@@ -761,3 +761,38 @@ func TestDrained(t *testing.T) {
 		}
 	}
 }
+
+// A retry that finds the batch gone reports nothing routed, not the failed attempt's count.
+func TestRouteOnceRetryDropsStaleCount(t *testing.T) {
+	e := newEnv(t)
+	u := e.user(t, "u")
+	w := e.watch(t, u)
+	var ev int64
+	e.scalar(t, &ev, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id`, w)
+	retries := testpg.AllowDeadlockRetries(t)
+	release := testpg.ForceDeadlockOnce(t, e.pool, "events")
+	r := NewRouter(e.pool, zap.NewNop(), e.m, time.Hour)
+	type result struct {
+		n   int
+		err error
+	}
+	routed := make(chan result, 1)
+	go func() {
+		n, err := r.RouteOnce(context.Background())
+		routed <- result{n, err}
+	}()
+	testpg.WaitLockWaiters(t, e.pool, 1)
+	gone := make(chan error, 1)
+	go func() {
+		_, err := e.pool.Exec(context.Background(), `DELETE FROM events WHERE id = $1`, ev)
+		gone <- err
+	}()
+	testpg.WaitLockWaiters(t, e.pool, 2)
+	release()
+	if err := <-gone; err != nil {
+		t.Fatal(err)
+	}
+	if got := <-routed; got.err != nil || got.n != 0 || retries() != 1 {
+		t.Fatalf("routed %d, err %v, retries %d: want 0, nil, 1", got.n, got.err, retries())
+	}
+}

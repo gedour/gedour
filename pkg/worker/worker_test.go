@@ -911,3 +911,35 @@ func TestDisabledOwnerKeepsCollecting(t *testing.T) {
 		t.Fatalf("runs %v", f.total())
 	}
 }
+
+// A retry that finds the claim gone reports the failure as not recorded, whatever the failed attempt wrote.
+func TestRecordStoreFailureRetryDropsStaleResult(t *testing.T) {
+	e := newEnv(t)
+	id := e.addWatch(t, "github_release", `{"repo":"a/b"}`, "1h")
+	const token = "00000000-0000-4000-8000-000000000001"
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `UPDATE watches SET claim_token = $2 WHERE id = $1`, id, token); err != nil {
+		t.Fatal(err)
+	}
+	w := e.worker(t, e.pool, nil)
+	retries := testpg.AllowDeadlockRetries(t)
+	release := testpg.ForceDeadlockOnce(t, e.pool, "watches")
+	recorded := make(chan bool, 1)
+	go func() {
+		recorded <- w.recordStoreFailure(ctx, job{id: id, token: token, schedule: "1h", due: t0}, errors.New("boom"))
+	}()
+	testpg.WaitLockWaiters(t, e.pool, 1)
+	lost := make(chan error, 1)
+	go func() {
+		_, err := e.pool.Exec(ctx, `UPDATE watches SET claim_token = NULL WHERE id = $1`, id)
+		lost <- err
+	}()
+	testpg.WaitLockWaiters(t, e.pool, 2)
+	release()
+	if err := <-lost; err != nil {
+		t.Fatal(err)
+	}
+	if <-recorded || retries() != 1 {
+		t.Fatalf("recorded true or retries %d != 1: the claim was gone on the retry", retries())
+	}
+}

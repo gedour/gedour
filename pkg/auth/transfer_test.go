@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gedour/gedour/pkg/secret"
+	"github.com/gedour/gedour/pkg/testpg"
 )
 
 const testKey = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
@@ -419,13 +420,7 @@ func (e *env) lockWaiters(n int) <-chan struct{} {
 // waitLockWaiters blocks until n backends of this database wait on a lock.
 func (e *env) waitLockWaiters(t *testing.T, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for e.count(t, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("fewer than %d lock waiters", n)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testpg.WaitLockWaiters(t, e.pool, n)
 }
 
 // A transfer racing a purge of the watch's owner waits on the owner's row, never deadlocks: the purge
@@ -623,5 +618,38 @@ func TestTransferNameCreateIsConflict(t *testing.T) {
 	}
 	if n := e.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND owner_id = $2`, w, alice); n != 1 {
 		t.Fatal("the refused transfer moved the watch")
+	}
+}
+
+// A retry rebuilds its result: the credential detached since the failed attempt is not reported as moved.
+func TestTransferRetryDropsStaleResult(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	alice, _, _ := e.signedIn(t, "alice", false)
+	bob, _, _ := e.signedIn(t, "bob", false)
+	cred, _ := e.sealedCredential(t, alice, "gh", "plain-secret-value-123")
+	w := e.watchOf(t, alice, "w", &cred)
+	retries := testpg.AllowDeadlockRetries(t)
+	release := testpg.ForceDeadlockOnce(t, e.pool, "audit_log")
+	transfer := e.sendAsync(http.MethodPost, "/api/v1/admin/watches/"+w+"/transfer", token, csrf, map[string]string{"to_user_id": bob})
+	e.waitLockWaiters(t, 1)
+	detached := make(chan error, 1)
+	go func() {
+		_, err := e.pool.Exec(context.Background(), `UPDATE watches SET credential_id = NULL WHERE id = $1`, w)
+		detached <- err
+	}()
+	e.waitLockWaiters(t, 2)
+	release()
+	if err := <-detached; err != nil {
+		t.Fatal(err)
+	}
+	if code := <-transfer; code != http.StatusOK {
+		t.Fatalf("transfer: %d, want 200", code)
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'watch.transfer' AND after ->> 'credential_moved' = 'false' AND after ->> 'credential_name' IS NULL`); n != 1 || retries() != 1 {
+		t.Fatalf("%d clean transfer rows, %d retries: want 1 and 1", n, retries())
+	}
+	if n := e.count(t, `SELECT count(*) FROM credentials WHERE id = $1 AND owner_id = $2`, cred, alice); n != 1 {
+		t.Fatal("the rolled-back attempt moved the credential")
 	}
 }

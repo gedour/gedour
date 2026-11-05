@@ -98,6 +98,7 @@ func (s *Service) actAsStop(ctx context.Context, _ *struct{}) (*struct{}, error)
 	admin := sess.self().ID
 	var target *string
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		target = nil // No row leaves Scan's target alone: a retry must not see the failed attempt's.
 		err := tx.QueryRow(ctx, `SELECT acting_as::text FROM sessions WHERE id = $1 FOR UPDATE`, sess.id).Scan(&target)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("lock session: %w", err)

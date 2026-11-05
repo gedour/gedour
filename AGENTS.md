@@ -77,6 +77,7 @@
   need `X-CSRF-Token`. Frontend calls go through `web/src/api/client.ts`, which adds it.
 - `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
+- `db.InTx` retries a deadlock (40P01) once: its closure may run twice, so it resets what it captures and leaves for after commit the side effects that must happen only once. Any test with `testpg.NewDB` fails on a retry it did not allow (`testpg.AllowDeadlockRetries`).
 - Row locks (`FOR UPDATE`/`NO KEY UPDATE`/`SHARE`) go users, rules, watches, credentials, by id; sessions come after users
   (act-as start takes its target `FOR SHARE` first); addShare takes its target user `FOR SHARE` before the watch. Purges serialize on an advisory lock taken first. Users are never locked `FOR UPDATE`: disable and purge
   take `NO KEY UPDATE` (sign-in, caps, transfer, shares and act-as start still wait on them), so FK KEY SHARE on users (audit

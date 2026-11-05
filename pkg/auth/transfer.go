@@ -117,8 +117,9 @@ func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transf
 	if err != nil {
 		return nil, err
 	}
-	res := TransferResult{OwnerID: to}
+	var res TransferResult
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		res = TransferResult{OwnerID: to}
 		var owner string
 		err := tx.QueryRow(ctx, `SELECT owner_id::text FROM watches WHERE id = $1`, in.ID).Scan(&owner)
 		if errors.Is(err, pgx.ErrNoRows) {

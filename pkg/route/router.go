@@ -123,6 +123,7 @@ func (r *Router) program(src string) (*filter.Program, error) {
 func (r *Router) RouteOnce(ctx context.Context) (int, error) {
 	var n int
 	err := db.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+		n = 0
 		rows, err := tx.Query(ctx, `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind
 			FROM events e JOIN watches w ON w.id = e.watch_id
 			WHERE e.routed_at IS NULL ORDER BY e.id LIMIT $1 FOR UPDATE OF e SKIP LOCKED`, routeBatch)

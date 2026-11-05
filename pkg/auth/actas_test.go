@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/gedour/gedour/pkg/testpg"
 )
 
 type meActing struct {
@@ -381,5 +383,36 @@ func TestLogoutRacingDisable(t *testing.T) {
 	}
 	if l, d := <-logout, <-disable; l != http.StatusOK || d != http.StatusNoContent {
 		t.Fatalf("logout %d, disable %d: want 200 and 204", l, d)
+	}
+}
+
+// A retry reads the session again: gone since the failed attempt, the stop refuses instead of auditing the
+// target that attempt read.
+func TestActAsStopRetryDropsStaleTarget(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	bob, _, _ := e.signedIn(t, "bob", false)
+	if code, raw := e.actAs(t, token, csrf, bob); code != http.StatusNoContent {
+		t.Fatalf("start: %d %s", code, raw)
+	}
+	retries := testpg.AllowDeadlockRetries(t)
+	release := testpg.ForceDeadlockOnce(t, e.pool, "audit_log")
+	stop := e.sendAsync(http.MethodDelete, "/api/v1/admin/act-as", token, csrf, nil)
+	e.waitLockWaiters(t, 1)
+	gone := make(chan error, 1)
+	go func() {
+		_, err := e.pool.Exec(context.Background(), `DELETE FROM sessions WHERE id = $1`, hashToken(token))
+		gone <- err
+	}()
+	e.waitLockWaiters(t, 2)
+	release()
+	if err := <-gone; err != nil {
+		t.Fatal(err)
+	}
+	if code := <-stop; code != http.StatusConflict {
+		t.Fatalf("stop: %d, want 409 from the retry's own read", code)
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'session.act_as_stop'`); n != 0 || retries() != 1 {
+		t.Fatalf("%d stop rows, %d retries: want none and 1", n, retries())
 	}
 }

@@ -359,6 +359,7 @@ func (w *Worker) recordStoreFailure(parent context.Context, j job, cause error) 
 	defer cancel()
 	recorded := false
 	err := db.InTx(ctx, w.pool, func(tx pgx.Tx) error {
+		recorded = false
 		var failures int
 		err := tx.QueryRow(ctx, `SELECT consecutive_failures FROM watches WHERE id = $1 AND claim_token = $2 FOR UPDATE`,
 			j.id, j.token).Scan(&failures)

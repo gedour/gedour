@@ -72,6 +72,8 @@ func run() error {
 		return err
 	}
 	defer func() { _ = logger.Sync() }()
+	// pkg/db logs through the global logger: InTx has no logger of its own.
+	zap.ReplaceGlobals(logger)
 
 	build := server.BuildInfo{Version: Version, CommitHash: CommitHash, BuildTimestamp: BuildTimestamp, Builder: Builder, ProjectURL: ProjectURL}
 	logger.Info("startup",

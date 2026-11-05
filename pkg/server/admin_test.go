@@ -263,13 +263,7 @@ func (a *devApp) callAsync(u apiUser, method, path string, body any) <-chan int 
 // waitLockWaiters blocks until n backends of this database wait on a lock.
 func (a *devApp) waitLockWaiters(t *testing.T, n int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for a.countRows(t, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) < n {
-		if time.Now().After(deadline) {
-			t.Fatalf("fewer than %d lock waiters", n)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	testpg.WaitLockWaiters(t, a.pool, n)
 }
 
 // A rule edit holds its rule FOR UPDATE, then takes the watch's KEY SHARE (the UI always sends watch_id).
@@ -541,5 +535,139 @@ func TestRunAllRacingPurgeLocks(t *testing.T) {
 	}
 	if code := <-run; code != http.StatusAccepted {
 		t.Fatalf("run-all: %d, want 202", code)
+	}
+}
+
+// waitQueryLocked blocks until a backend of this database waits on a lock in a statement matching pattern.
+func (a *devApp) waitQueryLocked(t *testing.T, pattern string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for a.countRows(t, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1`, pattern) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no backend locked in %q", pattern)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Router versus purge, through the real writers. The router read dave's rule while he
+// was active; a held channel parks it on an earlier rule's delivery, which leaves room for a disable and a
+// purge. The purge deletes the rule and waits on the router's event; the router, let go, waits on the rule.
+// PostgreSQL kills the purge, which waited first, and its retry answers 204 instead of 500.
+func TestPurgeRacingRouterRetries(t *testing.T) {
+	a := newDevApp(t)
+	retries := testpg.AllowDeadlockRetries(t)
+	admin, dave, erin := a.signIn(t, "admin"), a.signIn(t, "dave"), a.signIn(t, "erin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	var w watchJSON
+	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": erin.email, "permission": "ro"}, http.StatusCreated, nil)
+	rule := func(u apiUser, name, channel string) {
+		t.Helper()
+		a.mustCall(t, u, http.MethodPost, "/api/v1/rules", map[string]any{"name": name, "channel_ids": []string{channel}}, http.StatusCreated, nil)
+	}
+	channel := func(u apiUser, name string) string {
+		t.Helper()
+		var c channelJSON
+		a.mustCall(t, u, http.MethodPost, "/api/v1/channels", map[string]any{"name": name, "type": "webhook", "config": map[string]any{"url": "https://hook.test/x"}}, http.StatusCreated, &c)
+		return c.ID
+	}
+	first := channel(erin, "erin's")
+	rule(erin, "first", first)
+	rule(dave, "second", channel(dave, "dave's"))
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k')`, w.ID)
+
+	ctx := context.Background()
+	hold, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, first); err != nil {
+		t.Fatal(err)
+	}
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Hour)
+	routed := make(chan error, 1)
+	go func() {
+		_, err := router.RouteOnce(ctx)
+		routed <- err
+	}()
+	a.waitQueryLocked(t, "INSERT INTO deliveries%")
+	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/disable", nil, http.StatusNoContent, nil)
+	purge := a.callAsync(admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/purge", nil)
+	a.waitQueryLocked(t, "%DELETE FROM events%")
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-purge; code != http.StatusNoContent {
+		t.Fatalf("purge: %d, want 204", code)
+	}
+	if err := <-routed; err != nil {
+		t.Fatalf("router: %v", err)
+	}
+	if n := retries(); n != 1 {
+		t.Fatalf("%d retries, want the purge's 1", n)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'user.purge'`); n != 1 {
+		t.Fatalf("%d purge audit rows, want 1", n)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM rules WHERE owner_id = $1`, dave.id); n != 0 {
+		t.Fatalf("%d of dave's rules survived", n)
+	}
+}
+
+// Delete versus rule edit. The delete holds the rules it found and waits on the watch;
+// a rule created now and then locked by an edit escapes its first lock. The delete's cascade waits on that
+// rule while the edit waits on the watch. The delete is real, the edit's two statements are driven by hand:
+// nothing parks a real edit between them. Its long timeout leaves detection, and the retry, to the delete.
+func TestWatchDeleteRacingNewRuleRetries(t *testing.T) {
+	a := newDevApp(t)
+	retries := testpg.AllowDeadlockRetries(t)
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	ctx := context.Background()
+	hold, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
+	a.waitQueryLocked(t, "SELECT 1 FROM watches%")
+	var rule struct {
+		ID string `json:"id"`
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "late", "watch_id": w.ID}, http.StatusCreated, &rule)
+	edit, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = edit.Rollback(ctx) }()
+	for _, sql := range []string{`SET LOCAL deadlock_timeout = '5s'`, `SELECT 1 FROM rules WHERE id = '` + rule.ID + `' FOR UPDATE`} {
+		if _, err := edit.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.waitQueryLocked(t, "DELETE FROM watches%")
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w.ID); err != nil {
+		t.Fatalf("edit's watch check: %v", err)
+	}
+	if err := edit.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-deleted; code != http.StatusNoContent {
+		t.Fatalf("delete: %d, want 204", code)
+	}
+	if n := retries(); n != 1 {
+		t.Fatalf("%d retries, want the delete's 1", n)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'watch.deleted'`); n != 1 {
+		t.Fatalf("%d delete audit rows, want 1", n)
 	}
 }

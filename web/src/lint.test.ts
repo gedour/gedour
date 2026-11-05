@@ -1,3 +1,5 @@
+import { globSync, readFileSync } from "node:fs";
+
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
 
@@ -66,5 +68,27 @@ describe("script navigation lint rule", () => {
   it("lets tests use the navigation seam", async () => {
     const code = 'import { navigation } from "@/api/client";\nvi.spyOn(navigation, "go");';
     expect(await navErrors(code, "src/components/UserMenu.test.tsx")).toBe(0);
+  });
+});
+
+// WCAG 1.4.11 asks 3:1 for a control; bg-line reads 1.2 to 1.4:1 on the surfaces a switch sits on.
+describe("switch off state", () => {
+  it("does not use bg-line", () => {
+    const switches = globSync("src/**/*.tsx")
+      .filter((file) => !file.endsWith(".test.tsx"))
+      .flatMap((file) => {
+        const source = readFileSync(file, "utf8");
+        return [...source.matchAll(/role=\{?["'`]switch/g)].map((match) => ({
+          file,
+          element: source.slice(
+            source.lastIndexOf("<", match.index),
+            source.indexOf("</", match.index),
+          ),
+        }));
+      });
+    expect(switches.length).toBeGreaterThan(0);
+    expect(
+      switches.filter(({ element }) => /\bbg-line\b/.test(element)).map(({ file }) => file),
+    ).toEqual([]);
   });
 });

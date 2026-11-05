@@ -137,7 +137,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
         onClick={() => toggle.mutate()}
         className={cn(
           "relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50",
-          rule.enabled ? "bg-beacon" : "bg-line",
+          rule.enabled ? "bg-beacon" : "bg-muted",
         )}
       >
         <span

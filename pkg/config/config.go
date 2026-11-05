@@ -39,7 +39,7 @@ type Config struct {
 	OIDCIssuer       string
 	OIDCClientID     string
 	OIDCClientSecret string
-	// PublicURL is the browser-facing base URL; the OIDC redirect is PublicURL + /auth/callback.
+	// PublicURL is the comma-separated browser-facing base URLs; the OIDC redirect is <url>/auth/callback.
 	PublicURL string
 	// DevUser enables single-user mode: every request runs as this user, no login.
 	DevUser            string
@@ -224,9 +224,8 @@ func (c Config) validateAuth() []error {
 		}
 		if c.PublicURL == "" {
 			errs = append(errs, errors.New("GEDOUR_PUBLIC_URL is required with OIDC"))
-		} else if err := absoluteURL(c.PublicURL); err != nil {
-			errs = append(errs, fmt.Errorf("GEDOUR_PUBLIC_URL: %w", err))
 		}
+		errs = append(errs, c.validatePublicURLs()...)
 		if strings.TrimSpace(c.OIDCRolesClaim) == "" {
 			errs = append(errs, errors.New("GEDOUR_OIDC_ROLES_CLAIM must not be blank"))
 		}
@@ -235,6 +234,37 @@ func (c Config) validateAuth() []error {
 		errs = append(errs, errors.New("GEDOUR_SESSION_TTL and GEDOUR_SESSION_IDLE_TIMEOUT must be positive"))
 	}
 	return errs
+}
+
+// Each entry is selected by its host, so two entries on one host would be ambiguous.
+func (c Config) validatePublicURLs() []error {
+	var errs []error
+	seen := map[string]bool{}
+	for _, raw := range c.PublicURLs() {
+		if err := absoluteURL(raw); err != nil {
+			errs = append(errs, fmt.Errorf("GEDOUR_PUBLIC_URL: %w", err))
+			continue
+		}
+		u, _ := url.Parse(raw)
+		host := strings.ToLower(u.Host)
+		if seen[host] {
+			errs = append(errs, fmt.Errorf("GEDOUR_PUBLIC_URL: host %q listed twice", u.Host))
+		}
+		seen[host] = true
+	}
+	return errs
+}
+
+// PublicURLs splits GEDOUR_PUBLIC_URL, keeping blank entries so validation rejects them.
+func (c Config) PublicURLs() []string {
+	if c.PublicURL == "" {
+		return nil
+	}
+	out := strings.Split(c.PublicURL, ",")
+	for i := range out {
+		out[i] = strings.TrimSpace(out[i])
+	}
+	return out
 }
 
 func (c Config) validateSMTP() []error {

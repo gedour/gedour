@@ -1098,3 +1098,56 @@ func TestProbeOtherHost(t *testing.T) {
 		t.Fatalf("want a 302 to the other host without a probe, got %q (%d probes)", loc, e.stub.probes.Load())
 	}
 }
+
+// The redirect and post-logout URIs follow the request host among GEDOUR_PUBLIC_URL entries; any other
+// host (port included) gets the first entry, never a URL built from the Host header.
+func TestPublicURLPerHost(t *testing.T) {
+	stub := newStub(t)
+	svc, err := New(config.Config{OIDCIssuer: stub.URL, OIDCClientID: "gedour", OIDCClientSecret: "s",
+		PublicURL: "https://a.example.com, https://B.example.com:8443/gedour/", SessionTTL: time.Hour, SessionIdleTimeout: time.Hour}, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const first, second = "https://a.example.com", "https://B.example.com:8443/gedour"
+	for host, want := range map[string]string{
+		"a.example.com":      first,
+		"b.example.com:8443": second,
+		"B.EXAMPLE.COM:8443": second,
+		"b.example.com":      first,
+		"b.example.com:443":  first,
+		"a.example.com:443":  first,
+		"evil.example.net":   first,
+		"":                   first,
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/auth/login", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		svc.handleLogin(rec, req)
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		if err != nil || rec.Code != http.StatusFound || loc.Query().Get("redirect_uri") != want+"/auth/callback" {
+			t.Errorf("%q: login -> %d %q", host, rec.Code, rec.Header().Get("Location"))
+		}
+		out, err := url.Parse(svc.logoutRedirect(req, &session{idToken: "x"}))
+		if err != nil || out.Query().Get("post_logout_redirect_uri") != want+SignedOutPath {
+			t.Errorf("%q: logout -> %v", host, out)
+		}
+	}
+	for _, bad := range []string{"", "https://a.example.com,", "/relative"} {
+		if _, err := New(config.Config{OIDCIssuer: stub.URL, OIDCClientID: "gedour", OIDCClientSecret: "s", PublicURL: bad}, nil, zap.NewNop()); err == nil {
+			t.Errorf("public URL %q accepted", bad)
+		}
+	}
+}
+
+// A login on a listed host other than the first completes: the token exchange sends the provider the
+// redirect URI the login used (the stub rejects a mismatch).
+func TestLoginOnSecondPublicURL(t *testing.T) {
+	e := setup(t, false, func(c *config.Config) { c.PublicURL = "https://first.example.com," + c.PublicURL })
+	auth := e.startLogin(t, "/")
+	if got := auth.Query().Get("redirect_uri"); got != e.app.URL+"/auth/callback" {
+		t.Fatalf("redirect_uri %q", got)
+	}
+	if resp := e.do(t, http.MethodGet, e.approve(t, auth).String(), nil); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" {
+		t.Fatalf("callback: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+}

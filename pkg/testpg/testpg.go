@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -74,4 +75,24 @@ func Terminate() {
 	if ctr != nil {
 		_ = ctr.Terminate(context.Background())
 	}
+}
+
+// FlipEventsCascade recreates events_watch_id_fkey, as a pg_restore --jobs or a later migration may: its
+// trigger then sorts after the rules one, so a watch delete cascades its rules before its events.
+func FlipEventsCascade(t testing.TB, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `ALTER TABLE events DROP CONSTRAINT events_watch_id_fkey,
+		ADD CONSTRAINT events_watch_id_fkey FOREIGN KEY (watch_id) REFERENCES watches (id) ON DELETE CASCADE`)
+	// PostgreSQL fires a table's triggers in name order: RI_ConstraintTrigger_a_<oid>, the oid unpadded.
+	var order string
+	if err == nil {
+		err = pool.QueryRow(ctx, `SELECT string_agg(c.conrelid::regclass::text, ',' ORDER BY t.tgname)
+			FROM pg_trigger t JOIN pg_constraint c ON c.oid = t.tgconstraint
+			WHERE t.tgrelid = 'watches'::regclass AND c.conrelid IN ('rules'::regclass, 'events'::regclass) AND t.tgtype & 8 <> 0`).Scan(&order)
+	}
+	if err != nil || order != "rules,events" {
+		t.Fatalf("watches delete cascade order %q, want rules,events: %v", order, err)
+	}
+	t.Logf("watches delete cascade order: %s", order)
 }

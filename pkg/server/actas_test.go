@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -158,5 +159,27 @@ func TestAddShareRacingRuleCreate(t *testing.T) {
 	}
 	if code := <-share; code != http.StatusConflict {
 		t.Fatalf("share: %d, want 409 (already shared)", code)
+	}
+}
+
+// The channel test cooldown is the effective account's: two tests acting as bob, the second within the
+// interval, are throttled; once alice stops, her own first test is not throttled by the one made as bob.
+func TestChannelTestCooldownWhileActing(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	hook := map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": srv.URL}}
+	var bobs, alices channelJSON
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", hook, http.StatusCreated, &bobs)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", hook, http.StatusCreated, &alices)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/admin/users/"+bob.id+"/act-as", nil, http.StatusNoContent, nil)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels/"+bobs.ID+"/test", nil, http.StatusOK, nil)
+	if code, raw := a.call(t, alice, http.MethodPost, "/api/v1/channels/"+bobs.ID+"/test", nil); code != http.StatusTooManyRequests {
+		t.Errorf("second test as bob: %d %s, want 429", code, raw)
+	}
+	a.mustCall(t, alice, http.MethodDelete, "/api/v1/admin/act-as", nil, http.StatusNoContent, nil)
+	if code, raw := a.call(t, alice, http.MethodPost, "/api/v1/channels/"+alices.ID+"/test", nil); code != http.StatusOK {
+		t.Errorf("alice's own first test: %d %s, want 200", code, raw)
 	}
 }

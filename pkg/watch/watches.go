@@ -389,6 +389,10 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		if err != nil {
 			return err
 		}
+		// Not left to the cascade: its trigger order may delete rules first and wait on a router holding an event.
+		if _, err := tx.Exec(ctx, `DELETE FROM events WHERE watch_id = $1`, in.ID); err != nil {
+			return fmt.Errorf("delete events: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM watches WHERE id = $1`, in.ID); err != nil {
 			return err
 		}

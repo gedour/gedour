@@ -308,39 +308,82 @@ func TestWatchDeleteRacingRuleEdit(t *testing.T) {
 
 // The router holds an event of the watch FOR UPDATE and then takes KEY SHARE on a matching rule (the
 // deliveries FK). A delete of the watch holding that rule FOR UPDATE would wait on the event while the
-// router waits on the rule: the delete's NO KEY UPDATE lets the router through.
+// router waits on the rule: the delete's NO KEY UPDATE and its events deleted before the watch let the
+// router through, whatever order the watch's cascades fire in.
 func TestWatchDeleteRacingRouter(t *testing.T) {
+	for _, flipped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "events cascade first", true: "rules cascade first"}[flipped], func(t *testing.T) {
+			a := newDevApp(t)
+			if flipped {
+				testpg.FlipEventsCascade(t, a.pool)
+			}
+			alice := a.signIn(t, "alice")
+			var w watchJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+			var rule struct {
+				ID string `json:"id"`
+			}
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
+			var ev int64
+			if err := a.pool.QueryRow(context.Background(), `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id`, w.ID).Scan(&ev); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			router, err := a.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = router.Rollback(ctx) }()
+			if _, err := router.Exec(ctx, `SELECT 1 FROM events WHERE id = $1 FOR UPDATE`, ev); err != nil {
+				t.Fatal(err)
+			}
+			deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
+			a.waitLockWaiters(t, 1)
+			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, rule.ID); err != nil {
+				t.Fatalf("router's rule KEY SHARE: %v", err)
+			}
+			if err := router.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if code := <-deleted; code != http.StatusNoContent {
+				t.Fatalf("delete: %d, want 204", code)
+			}
+		})
+	}
+}
+
+// The purged account's rules on a watch it was shared, the higher id inserted first: a purge deleting them
+// in scan order would hold the higher and wait on the lower while the watch's delete, locking them in id
+// order, holds the lower and waits on the higher. A KEY SHARE (the router's) on the lower parks the purge.
+func TestPurgeRacingWatchDelete(t *testing.T) {
 	a := newDevApp(t)
-	alice := a.signIn(t, "alice")
+	alice, dave, admin := a.signIn(t, "alice"), a.signIn(t, "dave"), a.signIn(t, "admin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
 	var w watchJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	var rule struct {
-		ID string `json:"id"`
+	const low, high = "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-4fff-bfff-ffffffffffff"
+	for _, id := range []string{high, low} {
+		a.exec(t, `INSERT INTO rules (id, owner_id, name, watch_id) VALUES ($1, $2, $3, $4)`, id, dave.id, id, w.ID)
 	}
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
-	var ev int64
-	if err := a.pool.QueryRow(context.Background(), `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id`, w.ID).Scan(&ev); err != nil {
-		t.Fatal(err)
-	}
+	a.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave.id)
 	ctx := context.Background()
-	router, err := a.pool.Begin(ctx)
+	hold, err := a.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = router.Rollback(ctx) }()
-	if _, err := router.Exec(ctx, `SELECT 1 FROM events WHERE id = $1 FOR UPDATE`, ev); err != nil {
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, low); err != nil {
 		t.Fatal(err)
 	}
-	deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
+	purge := a.callAsync(admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/purge", nil)
 	a.waitLockWaiters(t, 1)
-	if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, rule.ID); err != nil {
-		t.Fatalf("router's rule KEY SHARE: %v", err)
-	}
-	if err := router.Commit(ctx); err != nil {
+	del := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
+	a.waitLockWaiters(t, 2)
+	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if code := <-deleted; code != http.StatusNoContent {
-		t.Fatalf("delete: %d, want 204", code)
+	if p, d := <-purge, <-del; p != http.StatusNoContent || d != http.StatusNoContent {
+		t.Fatalf("purge %d, delete %d: want 204 both", p, d)
 	}
 }
 

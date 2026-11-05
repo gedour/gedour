@@ -1,6 +1,7 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router";
 
 import { ActingBanner } from "@/components/ActingBanner";
 import { Sidebar } from "@/components/Sidebar";
@@ -11,8 +12,10 @@ import { Wordmark } from "@/components/Wordmark";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useInboxStream } from "@/hooks/useInbox";
+import { useMe } from "@/hooks/useMe";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useSidebar } from "@/hooks/useSidebar";
+import type { Me } from "@/types/api";
 
 export const MOBILE_QUERY = "(max-width: 767px)";
 
@@ -30,7 +33,19 @@ export function AppShell() {
   const mobile = useMediaQuery(MOBILE_QUERY);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { pathname } = useLocation();
+  const me = useMe().data as Me;
+  const client = useQueryClient();
+  const navigate = useNavigate();
+  const shownFor = useRef(me.id);
   useInboxStream();
+
+  // Act-as started or stopped in another tab: the cache and the page (its route, a draft) are the previous account's.
+  useEffect(() => {
+    if (shownFor.current === me.id) return;
+    shownFor.current = me.id;
+    client.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
+    void navigate("/inbox");
+  }, [me.id, client, navigate]);
 
   // Close the drawer on route or breakpoint change, during render rather than in an effect.
   const drawerKey = `${pathname}|${mobile}`;
@@ -122,7 +137,7 @@ export function AppShell() {
               tabIndex={-1}
               className="min-w-0 flex-1 overflow-y-auto bg-bg outline-none md:rounded-tl-2xl"
             >
-              <Outlet />
+              <Outlet key={me.id} />
             </main>
           </div>
         </div>

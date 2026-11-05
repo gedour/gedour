@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gedour/gedour/pkg/secret"
@@ -281,6 +283,7 @@ func TestTransferRefusals(t *testing.T) {
 		{"target disabled", w, disabled, http.StatusConflict},
 		{"target purged", w, purged, http.StatusConflict},
 		{"target already owner", w, alice, http.StatusConflict},
+		{"target already owner, upper case", w, strings.ToUpper(alice), http.StatusConflict},
 		{"source purged", orphan, bob, http.StatusConflict},
 		{"unknown watch", none, bob, http.StatusNotFound},
 		{"unknown user", w, none, http.StatusNotFound},
@@ -291,6 +294,42 @@ func TestTransferRefusals(t *testing.T) {
 	}
 	if got := e.snapshot(t); got != snap {
 		t.Fatalf("refused transfers changed rows:\n%s\n%s", snap, got)
+	}
+}
+
+// Every spelling format:"uuid" accepts names the same account: the transfer goes through, answering its
+// canonical form.
+func TestTransferDestinationSpellings(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	alice, _, _ := e.signedIn(t, "alice", false)
+	bob, _, _ := e.signedIn(t, "bob", false)
+	w := e.watchOf(t, alice, "w", nil)
+	owner := alice
+	for _, spell := range []func(string) string{
+		strings.ToUpper,
+		func(id string) string { return "{" + id + "}" },
+		func(id string) string { return strings.ReplaceAll(id, "-", "") },
+		func(id string) string { return "urn:uuid:" + id },
+	} {
+		to := map[string]string{alice: bob, bob: alice}[owner]
+		if code, raw := e.transfer(t, token, csrf, w, spell(to)); code != http.StatusOK || !strings.Contains(string(raw), `"owner_id":"`+to+`"`) {
+			t.Fatalf("transfer to %s: %d %s, want 200 to %s", spell(to), code, raw, to)
+		}
+		if n := e.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND owner_id = $2`, w, to); n != 1 {
+			t.Fatalf("the watch did not move to %s", to)
+		}
+		owner = to
+	}
+}
+
+// An id huma's format check let through but uuid.Parse refuses is a 400, before anything else runs.
+func TestTransferUnparsedDestination(t *testing.T) {
+	in := &transferInput{}
+	in.Body.ToUserID = "not-a-uuid"
+	var se huma.StatusError
+	if _, err := (&Service{}).transferWatch(context.Background(), in); !errors.As(err, &se) || se.GetStatus() != http.StatusBadRequest {
+		t.Fatalf("unparsed destination: %v, want 400", err)
 	}
 }
 

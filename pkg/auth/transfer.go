@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
@@ -106,11 +107,16 @@ func (s *Service) listUserWatches(ctx context.Context, in *userIDPath) (*listUse
 // order in AGENTS.md. The old owner's rules on it stay and route nothing while it cannot read the watch
 // (a share or a transfer back restores routing).
 func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transferOutput, error) {
+	// Canonical whatever spelling format:"uuid" let through: lockTransferUsers matches ids read back as text.
+	id, err := uuid.Parse(in.Body.ToUserID)
+	if err != nil {
+		return nil, huma.Error400BadRequest("validation failed", &huma.ErrorDetail{Location: "body.to_user_id", Message: "expected a UUID", Value: in.Body.ToUserID})
+	}
+	to := id.String()
 	actor, err := adminActor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	to := in.Body.ToUserID
 	res := TransferResult{OwnerID: to}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var owner string

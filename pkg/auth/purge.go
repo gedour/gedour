@@ -112,15 +112,15 @@ func (s *Service) purgePreview(ctx context.Context, in *userIDPath) (*purgePrevi
 // purgeSteps run in this order, which follows the lock order in AGENTS.md and keeps every ON DELETE RESTRICT
 // quiet: rules before the channels they use (rule_channels), every watch before the credentials they use. The
 // account's own rows (inbox, shares received, sessions) go before its watches, whose cascade would remove
-// some uncounted. A nil count is a lock only.
+// some uncounted. A nil count is not reported.
 var purgeSteps = []struct {
 	sql   string
 	count func(*PurgeCounts) *int
 }{
+	// One id-ordered lock, as deleteWatch's; NO KEY UPDATE lets the router's FK KEY SHARE pass (TestPurgeRacingRouter).
+	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE owner_id = $1 OR watch_id IN (SELECT id FROM watches WHERE owner_id = $1)
+		ORDER BY id FOR NO KEY UPDATE) x`, nil},
 	{`WITH d AS (DELETE FROM rules WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Rules }},
-	// NO KEY UPDATE: the router's FK KEY SHARE on a rule it routes passes, else it would wait while holding
-	// the events the cascade waits on. TestPurgeRacingRouter guards it.
-	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) ORDER BY id FOR NO KEY UPDATE) x`, nil},
 	// From here a rule create or move onto these watches (KEY SHARE on the watch) waits for the purge.
 	{`SELECT count(*) FROM (SELECT 1 FROM watches WHERE owner_id = $1 ORDER BY id FOR UPDATE) x`, nil},
 	// A statement of its own, after the watch lock: it counts a rule committed while that lock waited.
@@ -133,11 +133,16 @@ var purgeSteps = []struct {
 	// The row stays, so ON DELETE SET NULL never fires: other admins' sessions acting as it end here.
 	{`WITH d AS (UPDATE sessions SET acting_as = NULL WHERE acting_as = $1 RETURNING 1) SELECT count(*) FROM d`,
 		func(c *PurgeCounts) *int { return &c.ActingSessions }},
-	// Cascades to other users' rules on them, events (and their inbox items and deliveries), shares, states, cache.
+	// Not left to the watches' cascade: its trigger order may delete rules first and wait on a router holding an event.
+	{`WITH d AS (DELETE FROM events WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) RETURNING 1) SELECT count(*) FROM d`, nil},
+	// Cascades to other users' rules on them, shares, states, cache.
 	{`WITH d AS (DELETE FROM watches WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Watches }},
 	{`WITH d AS (DELETE FROM credentials WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Credentials }},
 	{`WITH d AS (DELETE FROM scripts WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Scripts }},
 }
+
+// purgeLockKey is the purge's advisory lock; goose's migration lock is 4097083626.
+const purgeLockKey int64 = 6006
 
 // purgeUser deletes a disabled account's data in one tx under its row lock and blanks its personal data;
 // the row stays, with its oidc_sub, so the audit log keeps its actor and the same person stays refused
@@ -148,6 +153,10 @@ func (s *Service) purgeUser(ctx context.Context, in *userIDPath) (*struct{}, err
 		return nil, err
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Purges serialize: two accounts with rules on each other's watches would each hold what the other deletes.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, purgeLockKey); err != nil {
+			return fmt.Errorf("purge lock: %w", err)
+		}
 		var status string
 		// NO KEY UPDATE: sign-in, act-as start, shares and transfers still wait, FK checks (audit rows of a
 		// stop or of a change made acting as the account, holding rows this purge needs) do not.

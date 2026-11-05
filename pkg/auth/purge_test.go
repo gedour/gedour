@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gedour/gedour/pkg/testpg"
 )
 
 func (e *env) purge(t *testing.T, token, csrf, id string) (int, []byte) {
@@ -193,39 +195,47 @@ func TestAdminDataDatabaseFailure(t *testing.T) {
 }
 
 // The router holds an event of a purged account's watch FOR UPDATE, then takes KEY SHARE on another
-// user's rule on it (the deliveries FK). The purge only counts those rules (NO KEY UPDATE) and lets the
-// watches' cascade delete them, so the router goes through and the purge then completes.
+// user's rule on it (the deliveries FK). The purge only locks those rules (NO KEY UPDATE) and deletes the
+// events before the watches, so the router goes through and the purge then completes, whatever order the
+// watches' cascades fire in.
 func TestPurgeRacingRouter(t *testing.T) {
-	e := setup(t, false)
-	_, token, csrf := e.signedIn(t, "admin", true)
-	dave, _, _ := e.signedIn(t, "dave", false)
-	erin, _, _ := e.signedIn(t, "erin", false)
-	w := e.watchOf(t, dave, "w", nil)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
-	r := e.ruleOf(t, erin, "erin on w", &w)
-	ev := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, w)
-	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
-	ctx := context.Background()
-	router := e.begin(t)
-	if _, err := router.Exec(ctx, `SELECT 1 FROM events WHERE id = $1 FOR UPDATE`, ev); err != nil {
-		t.Fatal(err)
-	}
-	purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
-	e.waitLockWaiters(t, 1)
-	if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, r); err != nil {
-		t.Fatalf("router's rule KEY SHARE: %v", err)
-	}
-	if err := router.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if code := <-purge; code != http.StatusNoContent {
-		t.Fatalf("purge: %d, want 204", code)
-	}
-	if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, r); n != 0 {
-		t.Error("erin's rule on the purged watch survived")
-	}
-	if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 1 {
-		t.Errorf("audit other_users_rules %d, want 1", n)
+	for _, flipped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "events cascade first", true: "rules cascade first"}[flipped], func(t *testing.T) {
+			e := setup(t, false)
+			if flipped {
+				testpg.FlipEventsCascade(t, e.pool)
+			}
+			_, token, csrf := e.signedIn(t, "admin", true)
+			dave, _, _ := e.signedIn(t, "dave", false)
+			erin, _, _ := e.signedIn(t, "erin", false)
+			w := e.watchOf(t, dave, "w", nil)
+			e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
+			r := e.ruleOf(t, erin, "erin on w", &w)
+			ev := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, w)
+			e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
+			ctx := context.Background()
+			router := e.begin(t)
+			if _, err := router.Exec(ctx, `SELECT 1 FROM events WHERE id = $1 FOR UPDATE`, ev); err != nil {
+				t.Fatal(err)
+			}
+			purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
+			e.waitLockWaiters(t, 1)
+			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, r); err != nil {
+				t.Fatalf("router's rule KEY SHARE: %v", err)
+			}
+			if err := router.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if code := <-purge; code != http.StatusNoContent {
+				t.Fatalf("purge: %d, want 204", code)
+			}
+			if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, r); n != 0 {
+				t.Error("erin's rule on the purged watch survived")
+			}
+			if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 1 {
+				t.Errorf("audit other_users_rules %d, want 1", n)
+			}
+		})
 	}
 }
 
@@ -300,5 +310,34 @@ func TestPurgeRacingRuleEdit(t *testing.T) {
 	}
 	if code := <-purge; code != http.StatusNoContent {
 		t.Fatalf("purge: %d, want 204", code)
+	}
+}
+
+// Each account has an inbox item on the other's event: a purge deletes its own items, then its events
+// with the other's items on them. dave's session, held by a test tx, parks dave's purge between the two;
+// purges serialize, so erin's waits instead of taking the other half.
+func TestCrossedPurgesInbox(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	evd := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, e.watchOf(t, dave, "dave's", nil))
+	eve := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, e.watchOf(t, erin, "erin's", nil))
+	e.exec(t, `INSERT INTO inbox_items (user_id, event_id) VALUES ($1, $2), ($3, $4)`, dave, eve, erin, evd)
+	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id IN ($1, $2)`, dave, erin)
+	ctx := context.Background()
+	hold := e.begin(t)
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM sessions WHERE user_id = $1 FOR UPDATE`, dave); err != nil {
+		t.Fatal(err)
+	}
+	pd := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
+	e.waitLockWaiters(t, 1)
+	pe := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+erin+"/purge", token, csrf, nil)
+	e.waitLockWaiters(t, 2)
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d, er := <-pd, <-pe; d != http.StatusNoContent || er != http.StatusNoContent {
+		t.Fatalf("purges %d and %d, want 204 both", d, er)
 	}
 }

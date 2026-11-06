@@ -80,8 +80,8 @@ export function Sidebar({
       className={cn(
         "flex shrink-0 flex-col bg-harbor text-harbor-ink",
         mobile
-          ? "fixed inset-y-0 left-0 z-40 w-72 pt-14 shadow-2xl transition-transform duration-200 motion-reduce:transition-none"
-          : "relative",
+          ? "fixed inset-y-0 left-0 z-40 w-72 pt-(--shell-top) shadow-2xl transition-transform duration-200 motion-reduce:transition-none"
+          : "sticky top-(--shell-top) h-[calc(100dvh-var(--shell-top))] self-start",
         mobile && !open && "-translate-x-full",
         !mobile && !dragging && "transition-[width] duration-200 motion-reduce:transition-none",
       )}

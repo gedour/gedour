@@ -565,7 +565,7 @@ function InboxPanel({
   return (
     <aside
       aria-labelledby={titleId}
-      className="sticky top-4 flex max-h-[calc(100dvh-8rem)] flex-col gap-4 overflow-y-auto rounded-xl border border-line bg-surface p-5"
+      className="sticky top-[calc(var(--shell-top)+1rem)] flex max-h-[calc(100dvh-var(--shell-top)-2rem)] flex-col gap-4 overflow-y-auto rounded-xl border border-line bg-surface p-5"
     >
       <div className="flex items-start gap-3">
         <h2 id={titleId} className="sr-only">

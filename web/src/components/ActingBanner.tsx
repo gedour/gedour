@@ -31,7 +31,7 @@ export function ActingBanner() {
     <div
       role="region"
       aria-label="Acting as another user"
-      className="flex shrink-0 items-center gap-3 bg-amber-300 px-4 py-1.5 text-sm text-amber-950"
+      className="flex h-11 items-center gap-3 bg-amber-300 px-4 text-sm text-amber-950"
     >
       <UserRoundCog aria-hidden className="size-4 shrink-0" />
       <p className="min-w-0 truncate">

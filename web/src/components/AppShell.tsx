@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router";
 
 import { ActingBanner } from "@/components/ActingBanner";
@@ -88,33 +88,39 @@ export function AppShell() {
   return (
     <TooltipProvider delayDuration={300}>
       <ToastProvider>
-        <div className="flex h-dvh flex-col bg-harbor">
+        {/* The document is the only scroller: never give main its own overflow. */}
+        <div
+          className="min-h-dvh bg-harbor"
+          style={{ "--shell-top": me.acting_as ? "6.25rem" : "3.5rem" } as CSSProperties}
+        >
           <a
             href="#main"
             className="sr-only z-50 rounded-md bg-surface px-3 py-2 text-ink focus:not-sr-only focus:absolute focus:top-2 focus:left-2"
           >
             Skip to content
           </a>
-          <ActingBanner />
-          <header className="relative z-50 flex h-14 shrink-0 items-center gap-2 px-3">
-            <Button
-              variant="harbor"
-              size="icon"
-              aria-label={toggle.label}
-              aria-expanded={toggle.expanded}
-              aria-controls="app-sidebar"
-              title={mobile ? undefined : `${toggle.label} (Ctrl+B)`}
-              onClick={toggle.onClick}
-            >
-              <toggle.Icon aria-hidden />
-            </Button>
-            <Wordmark />
-            <div className="ml-auto flex items-center gap-1">
-              <ThemeToggle />
-              <UserMenu />
-            </div>
-          </header>
-          <div className="relative flex min-h-0 flex-1">
+          <div className="sticky top-0 z-50 bg-harbor">
+            <ActingBanner />
+            <header className="flex h-14 items-center gap-2 px-3">
+              <Button
+                variant="harbor"
+                size="icon"
+                aria-label={toggle.label}
+                aria-expanded={toggle.expanded}
+                aria-controls="app-sidebar"
+                title={mobile ? undefined : `${toggle.label} (Ctrl+B)`}
+                onClick={toggle.onClick}
+              >
+                <toggle.Icon aria-hidden />
+              </Button>
+              <Wordmark />
+              <div className="ml-auto flex items-center gap-1">
+                <ThemeToggle />
+                <UserMenu />
+              </div>
+            </header>
+          </div>
+          <div className="relative flex">
             {mobile && drawerOpen && (
               <div
                 data-testid="drawer-backdrop"
@@ -135,7 +141,7 @@ export function AppShell() {
             <main
               id="main"
               tabIndex={-1}
-              className="min-w-0 flex-1 overflow-y-auto bg-bg outline-none md:rounded-tl-2xl"
+              className="min-h-[calc(100dvh-var(--shell-top))] min-w-0 flex-1 bg-bg outline-none md:rounded-tl-2xl"
             >
               <Outlet key={me.id} />
             </main>

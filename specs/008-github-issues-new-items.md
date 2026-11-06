@@ -136,5 +136,11 @@ Repository states grow by up to 50 numbers.
 - One issues call for both boxes: the `/issues` list returns PRs too, so `new_prs` alone costs the same as
   both.
 - Baseline on first run instead of announcing the existing 50 items, as `github_pr` does for comments.
+- One list of seen numbers per kind (`issues`, `prs`), stored only while its box is on: checking a second
+  box baselines that kind alone. A box is not part of the target: toggling it keeps the release states and
+  drops the watch's cached ETags.
+- A box is part of the config for authz: on a watch with a credential, only its owner, from the UI, toggles
+  it (the box spends the owner's token on another call).
+- With a box on, both requests are unconditional: a 304 on one list would end the run before the other.
 - Default schedule `1h` for `github_issue`, like `github_pr`: the unauthenticated GitHub budget is 60
   requests an hour.

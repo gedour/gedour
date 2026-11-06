@@ -16,7 +16,7 @@ export const KINDS: KindInfo[] = [
   {
     kind: "github_repo",
     label: "GitHub repository",
-    blurb: "Releases of a repository",
+    blurb: "Releases, new issues and PRs of a repository",
     icon: Rocket,
     credential: "github_token",
     defaultSchedule: "1h",
@@ -109,11 +109,15 @@ const PROJECT: FieldSpec = {
   placeholder: "gitlab-org/gitlab",
 };
 
+const TWO_REQUESTS = "Each run then makes two requests: GitHub allows 60 an hour without a token.";
+
 // Shared keys (repo, api_url, base_url, project) carry over when the kind changes in the form.
 export const FIELDS: Record<WatchKind, FieldSpec[]> = {
   github_repo: [
     REPO,
     { key: "include_prereleases", label: "Include pre-releases", type: "checkbox" },
+    { key: "new_issues", label: "Report new issues", type: "checkbox", hint: TWO_REQUESTS },
+    { key: "new_prs", label: "Report new pull requests", type: "checkbox", hint: TWO_REQUESTS },
     GITHUB_API,
   ],
   github_pr: [
@@ -183,10 +187,10 @@ export function fromConfig(config: WatchConfig): FormValues {
 
 /** One line naming what the watch follows: "golang/go releases", "group/proj !12", "postgres tags". */
 export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
-  const c = w.config as Record<string, string | number | undefined>;
+  const c = w.config as Record<string, string | number | boolean | undefined>;
   switch (w.kind) {
     case "github_repo":
-      return `${c.repo} releases`;
+      return c.new_issues === true || c.new_prs === true ? String(c.repo) : `${c.repo} releases`;
     case "github_pr":
       return `${c.repo} #${c.number}`;
     case "gitlab_release":

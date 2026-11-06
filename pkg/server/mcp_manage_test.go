@@ -268,6 +268,17 @@ func TestMCPManageCredentialConfig(t *testing.T) {
 					t.Fatalf("%v: %+v", edit, res)
 				}
 			}
+			// 008: a new-items box is a config change too, refused to the owner's key on a credentialed watch.
+			if tt.kind == "github_repo" {
+				boxed := maps.Clone(stored)
+				boxed["new_issues"] = true
+				if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": boxed}); !res.IsError || !strings.Contains(res.text(), "has a credential") {
+					t.Fatalf("box toggle by key: %+v", res)
+				}
+				if got := m.watchConfig(t, w.ID); got["new_issues"] != nil {
+					t.Fatalf("%v", got)
+				}
+			}
 			var got watchJSON
 			m.mustCall(t, alice, http.MethodGet, "/api/v1/watches/"+w.ID, nil, http.StatusOK, &got)
 			if got.Name != "renamed "+tt.field || got.Schedule != "2h" || !got.Paused || got.CredentialID == nil {

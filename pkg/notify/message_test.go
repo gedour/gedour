@@ -32,6 +32,11 @@ func TestFormat(t *testing.T) {
 		{ev("pr.ci_changed", map[string]any{"number": 7.0, "to": "failure"}), "PR #7 CI failing", "", ""},
 		{ev("pr.commented", map[string]any{"number": 7.0, "author": "bob", "title": "T", "excerpt": "Looks good.\nShip it", "url": "https://x.test/pr/7#issuecomment-1"}),
 			"PR #7 commented by bob", "Looks good. Ship it", "https://x.test/pr/7#issuecomment-1"},
+		// 008-AC12: the two new-item events, mirrored in web/src/lib/events.ts.
+		{ev("issue.opened", map[string]any{"number": 12.0, "author": "alice", "title": "Crash on start", "labels": []any{"bug"}, "url": "https://github.com/o/r/issues/12"}),
+			"Issue #12 opened by alice", "Crash on start", "https://github.com/o/r/issues/12"},
+		{ev("pr.opened", map[string]any{"number": 12.0, "author": "alice", "title": "Fix the crash", "labels": []any{}, "url": "https://github.com/o/r/pull/12"}),
+			"PR #12 opened by alice", "Fix the crash", "https://github.com/o/r/pull/12"},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": true, "count": 2.0}}), "MR !3 approved (2 approvals)", "", ""},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": false, "count": 1.0}}), "MR !3 not approved (1 approval)", "", ""},
 		{ev("mr.pipeline_changed", map[string]any{"iid": 3.0, "to": "success"}), "MR !3 pipeline success", "", ""},

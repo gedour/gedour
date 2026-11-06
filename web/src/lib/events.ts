@@ -99,6 +99,15 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       return { badge: "CI", tone: tone(to), text: `${pr} CI ${CI[to] ?? to}`, url };
     case "pr.commented":
       return { badge: "Comment", tone: "change", text: `${pr} commented by ${str(p.author)}`, url };
+    case "issue.opened":
+      return {
+        badge: "New issue",
+        tone: "change",
+        text: `Issue #${str(p.number)} opened by ${str(p.author)}`,
+        url,
+      };
+    case "pr.opened":
+      return { badge: "New PR", tone: "change", text: `${pr} opened by ${str(p.author)}`, url };
     case "mr.approval_changed": {
       const a = (p.to ?? {}) as Approvals;
       const count = plural(a.count ?? 0, "approval");

@@ -95,6 +95,19 @@ describe("summarizeEvent", () => {
       "PR #12 commented by bob",
       "change",
     ],
+    // 008-AC12: the two new-item events, mirrored in pkg/notify/message.go.
+    [
+      ev("issue.opened", { ...pr, author: "alice", labels: ["bug"] }),
+      "New issue",
+      "Issue #12 opened by alice",
+      "change",
+    ],
+    [
+      ev("pr.opened", { ...pr, author: "alice", labels: [] }),
+      "New PR",
+      "PR #12 opened by alice",
+      "change",
+    ],
     [
       ev("mr.state_changed", { ...mr, from: "opened", to: "merged" }),
       "State",

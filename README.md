@@ -283,14 +283,24 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 - Next run: interval schedules ±10 % jitter, cron schedules at their next activation (UTC). Errors back
   off `interval × 2^(failures-1)`, capped at 8 intervals. Rate limits (GitHub `X-RateLimit-*`, GitLab
   `RateLimit-Reset`, `Retry-After`) push the next run to the reset time, at most 1 h away, without
-  counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged.
+  counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged. A GitHub
+  repository watch with a new-items box on reads both of its lists in full: a 304 on one would skip the other.
 - The first run stores a baseline and emits nothing. Each later change becomes typed events
-  (`release.published`, `release.promoted`, `pr.state_changed`, `pr.draft_changed`, `pr.review_changed`,
-  `pr.ci_changed`, `pr.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
+  (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `pr.state_changed`, `pr.draft_changed`,
+  `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
   `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
   run is a new baseline. The last 50 states per watch are kept; events are kept.
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
   comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
+- A GitHub repository watch reports releases. Its boxes `new_issues` and `new_prs` (config, default `false`) add
+  `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 2 requests
+  instead of 1 (the 50 newest issues and PRs, one list for both boxes). Payload: `number`, `title`, `author`,
+  `labels` (names, `[]` without any), `url`, `created_at`. A box is not part of the target: toggling one keeps
+  the release states, but it is a config change, so on a watch with a credential only its owner may toggle it,
+  from the UI. The run stores the numbers listed, one list per checked box, not the items: the first run after a
+  box is checked takes its kind as a baseline (an uncheck then a check with no run between keep the list going),
+  and an item numbered at or below the oldest one stored for its kind is not new. To follow an item once opened,
+  add a `github_pr` watch.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
@@ -324,7 +334,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `event.payload.body matches "(?i)breaking.change"`. On an event without them, filters read `cves` as `[]` and
   `body` as `""`; the stored and delivered payload stays as it is. So `len(event.payload.cves) == 0` and
   `event.payload.body == ""` also match non-release events: a rule meant for releases adds a check on
-  `event.type` or targets a watch. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
+  `event.type` or targets a watch. New issues and PRs carry their label names in `payload.labels`:
+  `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule whose owner can
   read the watch now (own or shared) is evaluated; a match adds one inbox item per user and one delivery

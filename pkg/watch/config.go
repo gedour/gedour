@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"reflect"
@@ -62,6 +63,9 @@ type GitHubRepoConfig struct {
 	Repo               string `json:"repo"`
 	IncludePrereleases bool   `json:"include_prereleases"`
 	APIURL             string `json:"api_url"`
+	// omitempty: a config with both boxes off stays as stored before them, so saving it unchanged is no retarget.
+	NewIssues bool `json:"new_issues,omitempty"`
+	NewPRs    bool `json:"new_prs,omitempty"`
 }
 
 // GitHubPRConfig is the normalized config of a github_pr watch.
@@ -128,6 +132,21 @@ func targetOf(cfg map[string]any) (field, raw string) {
 		}
 	}
 	return "", ""
+}
+
+// boxKeys only add requests to the same target: changing them is no retarget.
+var boxKeys = []string{"new_issues", "new_prs"}
+
+// sameTarget compares two normalized configs, the new-items boxes left out.
+func sameTarget(a, b map[string]any) bool {
+	strip := func(m map[string]any) map[string]any {
+		out := maps.Clone(m)
+		for _, k := range boxKeys {
+			delete(out, k)
+		}
+		return out
+	}
+	return reflect.DeepEqual(strip(a), strip(b))
 }
 
 // comparableTarget is a target's host, non-default port and path.

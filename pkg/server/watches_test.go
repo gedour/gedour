@@ -293,6 +293,8 @@ func TestWatchAuthzMatrix(t *testing.T) {
 		// The owner's token follows the config: only the owner may retarget a credentialed watch.
 		{"edit config of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "attacker/loot", "api_url": "https://evil.example"}}, [4]int{404, 403, 403, 200}, true},
 		{"resend same config of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "golang/go"}}, [4]int{404, 403, 200, 200}, true},
+		// 008: a new-items box spends the owner's token on another call: only the owner may toggle it on a credentialed watch.
+		{"toggle a box of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "golang/go", "new_prs": true}}, [4]int{404, 403, 403, 200}, true},
 		{"rename credentialed watch", http.MethodPatch, "", map[string]any{"name": "renamed", "schedule": "1h", "paused": true}, [4]int{404, 403, 200, 200}, true},
 		{"pause", http.MethodPost, "/pause", nil, [4]int{404, 403, 200, 200}, false},
 		{"resume", http.MethodPost, "/resume", nil, [4]int{404, 403, 200, 200}, false},
@@ -313,6 +315,15 @@ func TestWatchAuthzMatrix(t *testing.T) {
 			}
 		})
 	}
+
+	// 008: a box is config, not target; the refusal says so.
+	t.Run("sharee toggling a box of a credentialed watch is told why", func(t *testing.T) {
+		id := freshWith(t, true)
+		code, raw := a.call(t, rw, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"config": map[string]any{"repo": "golang/go", "new_issues": true}})
+		if code != http.StatusForbidden || !strings.Contains(string(raw), "only the owner can change the config of a watch that uses their credential") {
+			t.Fatalf("%d %s", code, raw)
+		}
+	})
 
 	t.Run("missing watch is 404 for everyone", func(t *testing.T) {
 		for _, c := range callers {

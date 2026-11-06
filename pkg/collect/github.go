@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,10 @@ type Release struct {
 // ReleaseState is the normalized state of a release watch, newest first.
 type ReleaseState struct {
 	Releases []Release `json:"releases"`
+	// Numbers of the issues, and of the PRs, listed while their box is on. One list per box, so checking a box
+	// starts a baseline for its kind alone; nil (absent) is no list stored, and keeps a boxes-off state as before 008.
+	Issues *[]int `json:"issues,omitempty"`
+	PRs    *[]int `json:"prs,omitempty"`
 	// Notes by tag: out of the JSON, so an edit of the notes alone changes neither the stored state nor its hash.
 	Notes map[string]string `json:"-"`
 }
@@ -73,8 +78,32 @@ func WithNotes(events []Event, notes map[string]string) {
 		return
 	}
 	for _, e := range events {
-		e.Payload["body"], e.Payload["cves"] = parseNotes(notes[e.Subject])
+		// An item's subject is its number, which a tag may equal.
+		if e.Type != "issue.opened" && e.Type != "pr.opened" {
+			e.Payload["body"], e.Payload["cves"] = parseNotes(notes[e.Subject])
+		}
 	}
+}
+
+// itemListed is Diff's placeholder for a new issue or PR number: the stored states hold numbers only.
+const itemListed = "item.listed"
+
+// WithItems turns Diff's placeholders into the run's issue.opened and pr.opened events, and drops those
+// whose box is off. Call it before WithNotes.
+func WithItems(events []Event, items map[int]Event) []Event {
+	out := events[:0]
+	for _, e := range events {
+		if e.Type == itemListed {
+			n, _ := strconv.Atoi(e.Subject)
+			it, ok := items[n]
+			if !ok {
+				continue
+			}
+			e = it
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func githubHeaders(cred *Credential) http.Header {
@@ -85,16 +114,85 @@ func githubHeaders(cred *Credential) http.Header {
 	return h
 }
 
-func collectGitHubReleases(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, cred *Credential) (ReleaseState, error) {
+func collectGitHubRepo(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, cred *Credential) (ReleaseState, error) {
+	h := githubHeaders(cred)
+	items := cfg.NewIssues || cfg.NewPRs
 	// The first page is enough: the newest 50 cover any realistic gap between two runs.
 	u := fmt.Sprintf("%s/repos/%s/releases?per_page=50", cfg.APIURL, cfg.Repo)
-	r, err := f.get(ctx, u, githubHeaders(cred), true)
+	// A 304 ends the whole run with no state: with a box on it would skip the issues list, so both are read in full.
+	r, err := f.get(ctx, u, h, !items)
 	if err != nil {
 		return ReleaseState{}, err
 	}
 	s, err := normalizeGitHubReleases(r.body, cfg.IncludePrereleases)
 	f.Notes = s.Notes
-	return s, err
+	if err != nil || !items {
+		return s, err
+	}
+	// The list holds PRs too, so one call serves both boxes.
+	// ponytail: first page only; past 50 items opened between two runs, the oldest of them are never reported.
+	u = fmt.Sprintf("%s/repos/%s/issues?state=all&sort=created&direction=desc&per_page=50", cfg.APIURL, cfg.Repo)
+	if r, err = f.get(ctx, u, h, false); err != nil {
+		return ReleaseState{}, err
+	}
+	issues, prs, opened, err := normalizeGitHubItems(r.body, cfg.NewIssues, cfg.NewPRs)
+	if err != nil {
+		return ReleaseState{}, err
+	}
+	if cfg.NewIssues {
+		s.Issues = &issues
+	}
+	if cfg.NewPRs {
+		s.PRs = &prs
+	}
+	f.Items = opened
+	return s, nil
+}
+
+// normalizeGitHubItems reads an issues list: the numbers of its issues and of its PRs, never nil, and the
+// opened event of each item whose box is on, by number.
+func normalizeGitHubItems(body []byte, newIssues, newPRs bool) (issues, prs []int, opened map[int]Event, err error) {
+	var raw []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		HTMLURL   string     `json:"html_url"`
+		CreatedAt *time.Time `json:"created_at"`
+		// A pointer: "pull_request": null, as a GitHub-compatible server may send, is an issue.
+		PullRequest *struct{} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, nil, nil, fmt.Errorf("decode issues: %w", err)
+	}
+	issues, prs, opened = []int{}, []int{}, map[int]Event{}
+	for _, it := range raw {
+		if it.Number <= 0 {
+			continue
+		}
+		typ, on := "issue.opened", newIssues
+		if it.PullRequest != nil {
+			typ, on = "pr.opened", newPRs
+			prs = append(prs, it.Number)
+		} else {
+			issues = append(issues, it.Number)
+		}
+		if !on {
+			continue
+		}
+		labels := []string{}
+		for _, l := range it.Labels {
+			labels = append(labels, l.Name)
+		}
+		opened[it.Number] = Event{Type: typ, Subject: strconv.Itoa(it.Number), OccurredAt: it.CreatedAt, Payload: map[string]any{
+			"number": it.Number, "title": it.Title, "author": it.User.Login, "labels": labels, "url": it.HTMLURL, "created_at": it.CreatedAt,
+		}}
+	}
+	return issues, prs, opened, nil
 }
 
 func normalizeGitHubReleases(body []byte, includePrereleases bool) (ReleaseState, error) {
@@ -168,7 +266,37 @@ func diffReleases(old, cur ReleaseState) []Event {
 			events = append(events, Event{Type: "release.promoted", Subject: r.Tag, OccurredAt: r.PublishedAt, Payload: payload})
 		}
 	}
+	added := append(newNumbers(old.Issues, cur.Issues), newNumbers(old.PRs, cur.PRs)...)
+	slices.Sort(added)
+	for _, n := range added {
+		events = append(events, Event{Type: itemListed, Subject: strconv.Itoa(n)})
+	}
 	return events
+}
+
+// newNumbers lists the numbers of cur missing from old, oldest first. No list in old is a baseline (a box just
+// checked, or a watch stored before the boxes); a number at or below old's lowest slid back into the window.
+// ponytail: an empty old list has no floor, so an old item sliding back in after deletions reads as new.
+func newNumbers(old, cur *[]int) []int {
+	if old == nil || cur == nil {
+		return nil
+	}
+	seen := make(map[int]bool, len(*old))
+	for _, n := range *old {
+		seen[n] = true
+	}
+	floor := 0
+	if len(*old) > 0 {
+		floor = slices.Min(*old)
+	}
+	var out []int
+	for _, n := range *cur {
+		if !seen[n] && n > floor {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // PRState is the normalized state of one GitHub pull request.

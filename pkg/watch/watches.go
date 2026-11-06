@@ -359,18 +359,20 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		if len(errs) > 0 {
 			return huma.Error400BadRequest("invalid watch", errs...)
 		}
-		retargeted := !reflect.DeepEqual(next.Config, before.Config)
+		// Authz reads any config change, a box included: a box spends the owner's token on another call.
+		changed := !reflect.DeepEqual(next.Config, before.Config)
+		retargeted := !sameTarget(next.Config, before.Config)
 		// The config decides where the owner's credential is sent: a sharee retargeting it could hand the
 		// token to another host or read the owner's private repositories with it. A hijacked key could too, owner's included.
-		if before.CredentialID != nil && retargeted {
+		if before.CredentialID != nil && changed {
 			if viaKey {
 				return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
 			}
 			if levelOf(before.Permission) < levelOwner {
-				return huma.Error403Forbidden("only the owner can change the target of a watch that uses their credential")
+				return huma.Error403Forbidden("only the owner can change the config of a watch that uses their credential")
 			}
 		}
-		if viaKey && retargeted {
+		if viaKey && changed {
 			if err := checkKnownHost(ctx, tx, me, before.Kind, next.Config); err != nil {
 				return err
 			}
@@ -393,6 +395,11 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 			if _, err := tx.Exec(ctx, `DELETE FROM watch_states WHERE watch_id = $1`, in.ID); err != nil {
 				return err
 			}
+			if _, err := tx.Exec(ctx, `DELETE FROM http_cache WHERE watch_id = $1`, in.ID); err != nil {
+				return err
+			}
+		} else if changed {
+			// A box toggled: states stay, ETags go, so a boxes-off run cannot 304 onto numbers stored while a box was on.
 			if _, err := tx.Exec(ctx, `DELETE FROM http_cache WHERE watch_id = $1`, in.ID); err != nil {
 				return err
 			}

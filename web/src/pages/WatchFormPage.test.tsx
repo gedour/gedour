@@ -28,6 +28,36 @@ describe("WatchFormPage (new)", () => {
     expect(screen.getByText(/Not recognized/)).toBeInTheDocument();
   });
 
+  // 008-AC15: both boxes share one hint on the doubled request count, and reach the config.
+  it("offers the new-items boxes with the request hint", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    const issues = screen.getByRole("checkbox", { name: "Report new issues" });
+    const prs = screen.getByRole("checkbox", { name: "Report new pull requests" });
+    for (const box of [issues, prs]) {
+      expect(box).not.toBeChecked();
+      expect(box).toHaveAccessibleDescription(/two requests.*60 an hour without a token/);
+    }
+    expect(screen.getAllByText(/two requests/)).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: "Include pre-releases" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+    await userEvent.type(screen.getByLabelText("Repository"), "a/b");
+    await userEvent.click(issues);
+    await userEvent.click(prs);
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body?.config).toMatchObject({
+      new_issues: true,
+      new_prs: true,
+    });
+    await userEvent.click(kindCard("GitHub pull request"));
+    expect(screen.queryByRole("checkbox", { name: "Report new issues" })).not.toBeInTheDocument();
+  });
+
   it("keeps compatible fields when the kind changes", async () => {
     mockApi({ "/api/v1/credentials": { items: [] } });
     renderApp("/watches/new");
@@ -112,7 +142,7 @@ describe("WatchFormPage (new)", () => {
     expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toEqual({
       name: "Mine",
       kind: "github_repo",
-      config: { repo: "a/b", include_prereleases: false },
+      config: { repo: "a/b", include_prereleases: false, new_issues: false, new_prs: false },
       credential_id: "c1",
     });
     release(Response.json(watch({ id: "w9", name: "Mine" }), { status: 201 }));
@@ -176,7 +206,13 @@ describe("WatchFormPage (edit)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Renamed" })).toBeInTheDocument();
     expect(lastCall(fn, "/api/v1/watches/w1", "PATCH")?.body).toEqual({
       name: "Renamed",
-      config: { repo: "golang/go", include_prereleases: false, api_url: "https://api.github.com" },
+      config: {
+        repo: "golang/go",
+        include_prereleases: false,
+        new_issues: false,
+        new_prs: false,
+        api_url: "https://api.github.com",
+      },
       schedule: "15m",
       credential_id: "",
     });
@@ -216,7 +252,9 @@ describe("WatchFormPage (edit)", () => {
     renderApp("/watches/w1/edit");
     const repo = await screen.findByLabelText("Repository");
     expect(repo).toHaveAttribute("readonly");
-    expect(repo).toHaveAccessibleDescription(/credential of Alice, so only they can change/);
+    expect(repo).toHaveAccessibleDescription(
+      /^The config is read-only: this watch uses a credential of Alice, so only they can change it\./,
+    );
     expect(screen.getByRole("checkbox", { name: "Include pre-releases" })).toBeDisabled();
     expect(screen.getByLabelText("Name")).not.toHaveAttribute("readonly");
     expect(screen.getByLabelText("Schedule", { exact: true })).not.toHaveAttribute("readonly");
@@ -234,7 +272,7 @@ describe("WatchFormPage (edit)", () => {
     });
     renderApp("/watches/w1/edit");
     expect(await screen.findByLabelText("Repository")).not.toHaveAttribute("readonly");
-    expect(screen.queryByText(/target fields are read-only/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/config is read-only/)).not.toBeInTheDocument();
   });
 
   it("refuses a read-only share, a missing watch, and reports load errors", async () => {

@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
+import { api, enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, hasTouch: true });
 
@@ -54,6 +54,8 @@ test("main views fit 375 px", async ({ page }) => {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
+    // 008-AC15: the default kind's form shows the new-items boxes and their hint.
+    if (path === "/watches/new") await expect(page.getByText(/two requests/)).toBeVisible();
     await expectNoHorizontalScroll(page);
   }
   await page.goto("/auth/signed-out");
@@ -254,8 +256,9 @@ test("rule form and script editor at 375 px", async ({ page }) => {
   await expectNoHorizontalScroll(page);
   await page.getByLabel("Name").fill(`Mobile rule ${t}`);
   await page.getByLabel("Watches").selectOption({ label: SEED.watch });
-  await page.getByLabel("Expression").fill('event.type == "release.published"');
-  await expect(page.getByText("Valid filter")).toBeVisible();
+  await enterFilter(page, 'event.type == "release.published"', (text) =>
+    page.getByLabel("Expression").fill(text),
+  );
   await expectNoHorizontalScroll(page);
   await shot(page, "rule-form");
   await page.getByRole("button", { name: "Create rule" }).tap();

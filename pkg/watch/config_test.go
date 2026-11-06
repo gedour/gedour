@@ -38,29 +38,29 @@ func TestConfigValidation(t *testing.T) {
 		want           string   // normalized JSON when valid
 		errAt          []string // error locations when invalid
 	}{
-		{"github release defaults", KindGitHubRelease, `{"repo":"golang/go"}`,
+		{"github release defaults", KindGitHubRepo, `{"repo":"golang/go"}`,
 			`{"api_url":"https://api.github.com","include_prereleases":false,"repo":"golang/go"}`, nil},
-		{"github release enterprise", KindGitHubRelease, `{"repo":"o/r.js","include_prereleases":true,"api_url":"https://ghe.example/api/v3/"}`,
+		{"github release enterprise", KindGitHubRepo, `{"repo":"o/r.js","include_prereleases":true,"api_url":"https://ghe.example/api/v3/"}`,
 			`{"api_url":"https://ghe.example/api/v3","include_prereleases":true,"repo":"o/r.js"}`, nil},
-		{"github repo without owner", KindGitHubRelease, `{"repo":"go"}`, "", []string{"body.config.repo"}},
-		{"github repo with three parts", KindGitHubRelease, `{"repo":"a/b/c"}`, "", []string{"body.config.repo"}},
-		{"github repo dotdot", KindGitHubRelease, `{"repo":"a/.."}`, "", []string{"body.config.repo"}},
-		{"github missing repo", KindGitHubRelease, `{}`, "", []string{"body.config.repo"}},
-		{"github unknown field", KindGitHubRelease, `{"repo":"a/b","token":"x","zz":1}`, "", []string{"body.config.token", "body.config.zz"}},
-		{"github prerelease not bool", KindGitHubRelease, `{"repo":"a/b","include_prereleases":"yes"}`, "", []string{"body.config.include_prereleases"}},
-		{"github http api", KindGitHubRelease, `{"repo":"a/b","api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
-		{"github http allowlisted", KindGitHubRelease, `{"repo":"a/b","api_url":"http://127.0.0.1:9999"}`,
+		{"github repo without owner", KindGitHubRepo, `{"repo":"go"}`, "", []string{"body.config.repo"}},
+		{"github repo with three parts", KindGitHubRepo, `{"repo":"a/b/c"}`, "", []string{"body.config.repo"}},
+		{"github repo dotdot", KindGitHubRepo, `{"repo":"a/.."}`, "", []string{"body.config.repo"}},
+		{"github missing repo", KindGitHubRepo, `{}`, "", []string{"body.config.repo"}},
+		{"github unknown field", KindGitHubRepo, `{"repo":"a/b","token":"x","zz":1}`, "", []string{"body.config.token", "body.config.zz"}},
+		{"github prerelease not bool", KindGitHubRepo, `{"repo":"a/b","include_prereleases":"yes"}`, "", []string{"body.config.include_prereleases"}},
+		{"github http api", KindGitHubRepo, `{"repo":"a/b","api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
+		{"github http allowlisted", KindGitHubRepo, `{"repo":"a/b","api_url":"http://127.0.0.1:9999"}`,
 			`{"api_url":"http://127.0.0.1:9999","include_prereleases":false,"repo":"a/b"}`, nil},
-		{"github userinfo", KindGitHubRelease, `{"repo":"a/b","api_url":"https://u:p@ghe.example"}`, "", []string{"body.config.api_url"}},
+		{"github userinfo", KindGitHubRepo, `{"repo":"a/b","api_url":"https://u:p@ghe.example"}`, "", []string{"body.config.api_url"}},
 		{"docker hub default port", KindOCITags, `{"registry":"docker.io:443","repository":"a/b"}`, `{"registry":"docker.io","repository":"a/b","semver_only":false}`, nil},
 		{"docker hub alias default port", KindOCITags, `{"registry":"INDEX.docker.io:443","repository":"a/b"}`, `{"registry":"docker.io","repository":"a/b","semver_only":false}`, nil},
 		{"docker hub other port", KindOCITags, `{"registry":"docker.io:8443","repository":"a/b"}`, `{"registry":"docker.io:8443","repository":"a/b","semver_only":false}`, nil},
 		{"bare port", KindOCITags, `{"registry":":443","repository":"a/b"}`, "", []string{"body.config.registry"}},
-		{"github empty query", KindGitHubRelease, `{"repo":"a/b","api_url":"https://ghe.example/x?"}`, "", []string{"body.config.api_url"}},
+		{"github empty query", KindGitHubRepo, `{"repo":"a/b","api_url":"https://ghe.example/x?"}`, "", []string{"body.config.api_url"}},
 		{"gitlab empty fragment", KindGitLabRelease, `{"project":"a/b","base_url":"https://git.example/x#"}`, "", []string{"body.config.base_url"}},
-		{"github query", KindGitHubRelease, `{"repo":"a/b","api_url":"https://ghe.example/?x=1"}`, "", []string{"body.config.api_url"}},
-		{"github relative url", KindGitHubRelease, `{"repo":"a/b","api_url":"/api"}`, "", []string{"body.config.api_url"}},
-		{"github ftp url", KindGitHubRelease, `{"repo":"a/b","api_url":"ftp://ghe.example"}`, "", []string{"body.config.api_url"}},
+		{"github query", KindGitHubRepo, `{"repo":"a/b","api_url":"https://ghe.example/?x=1"}`, "", []string{"body.config.api_url"}},
+		{"github relative url", KindGitHubRepo, `{"repo":"a/b","api_url":"/api"}`, "", []string{"body.config.api_url"}},
+		{"github ftp url", KindGitHubRepo, `{"repo":"a/b","api_url":"ftp://ghe.example"}`, "", []string{"body.config.api_url"}},
 		{"github pr", KindGitHubPR, `{"repo":"golang/go","number":123}`,
 			`{"api_url":"https://api.github.com","number":123,"repo":"golang/go"}`, nil},
 		{"github pr zero", KindGitHubPR, `{"repo":"golang/go","number":0}`, "", []string{"body.config.number"}},
@@ -142,7 +142,7 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("last4(%q) = %q", in, got)
 		}
 	}
-	for kind, want := range map[string]string{KindGitHubRelease: CredGitHubToken, KindGitHubPR: CredGitHubToken,
+	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken,
 		KindGitLabRelease: CredGitLabToken, KindGitLabMR: CredGitLabToken, KindOCITags: CredRegistryBasic} {
 		if CredentialKindFor(kind) != want {
 			t.Errorf("%s: %s", kind, CredentialKindFor(kind))

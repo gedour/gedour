@@ -9,3 +9,4 @@
 | [005](005-rule-priority.md) | High priority rules | shipped |
 | [006](006-roles-admin.md) | Roles from the identity provider and account administration | shipped |
 | [007](007-mcp-api-keys.md) | MCP server and API keys | shipped |
+| [008](008-github-issues-new-items.md) | GitHub repository watches: new issues and PRs, one-issue watches | in progress |

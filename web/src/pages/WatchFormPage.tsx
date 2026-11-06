@@ -98,7 +98,7 @@ export function WatchForm({ initial }: { initial?: Watch }) {
   const owner = !initial || initial.permission === "owner";
   // The server refuses a sharee's retarget of a watch carrying the owner's credential.
   const configLocked = !owner && Boolean(initial?.credential_id);
-  const [kind, setKind] = useState<WatchKind>(initial?.kind ?? "github_release");
+  const [kind, setKind] = useState<WatchKind>(initial?.kind ?? "github_repo");
   const [values, setValues] = useState<FormValues>(initial ? fromConfig(initial.config) : {});
   const [name, setName] = useState(initial?.name ?? "");
   const [nameTouched, setNameTouched] = useState(editing);

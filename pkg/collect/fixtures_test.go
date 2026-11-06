@@ -43,11 +43,11 @@ func tags(rs []Release) []string {
 
 func flatten(pages [][]string) []string { return slices.Concat(pages...) }
 
-// 001-AC7: github_release normalizes fixture A, and B yields exactly the expected events, with and
+// 001-AC7: github_repo normalizes fixture A, and B yields exactly the expected events, with and
 // without prereleases. Diffing a state with itself yields none.
 func TestGitHubReleaseFixtures(t *testing.T) {
-	a := testupstream.Fixture("github_release", "a")
-	b := testupstream.Fixture("github_release", "b")
+	a := testupstream.Fixture("github_repo", "a")
+	b := testupstream.Fixture("github_repo", "b")
 	for _, tt := range []struct {
 		name     string
 		pre      bool
@@ -368,7 +368,7 @@ func TestSemver(t *testing.T) {
 }
 
 func TestAdapter(t *testing.T) {
-	c := Collectors()["github_release"]
+	c := Collectors()["github_repo"]
 	if _, err := c.Diff([]byte(`{`), []byte(`{}`)); err == nil {
 		t.Fatal("bad old state accepted")
 	}

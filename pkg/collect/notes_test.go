@@ -30,7 +30,7 @@ func roundTrip(t *testing.T, p map[string]any) map[string]any {
 // 004-AC1, 004-AC4: both kinds, from their fixtures: a release fires with its notes and ids, whatever
 // mix of CVEs and breaking changes it states; one without notes has an empty body and an empty list.
 func TestReleaseFixtureNotes(t *testing.T) {
-	github, err := normalizeGitHubReleases(testupstream.Fixture("github_release", "b"), true)
+	github, err := normalizeGitHubReleases(testupstream.Fixture("github_repo", "b"), true)
 	if err != nil {
 		t.Fatal(err)
 	}

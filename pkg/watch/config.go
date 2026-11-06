@@ -18,7 +18,7 @@ import (
 
 // Watch kinds.
 const (
-	KindGitHubRelease = "github_release"
+	KindGitHubRepo    = "github_repo"
 	KindGitHubPR      = "github_pr"
 	KindGitLabRelease = "gitlab_release"
 	KindGitLabMR      = "gitlab_mr"
@@ -33,7 +33,7 @@ const (
 )
 
 // Kinds lists the watch kinds in display order.
-var Kinds = []string{KindGitHubRelease, KindGitHubPR, KindGitLabRelease, KindGitLabMR, KindOCITags}
+var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitLabRelease, KindGitLabMR, KindOCITags}
 
 // CredentialKinds lists the credential kinds.
 var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBasic}
@@ -41,7 +41,7 @@ var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBas
 // CredentialKindFor is the only credential kind a watch of this kind accepts.
 func CredentialKindFor(kind string) string {
 	switch kind {
-	case KindGitHubRelease, KindGitHubPR:
+	case KindGitHubRepo, KindGitHubPR:
 		return CredGitHubToken
 	case KindGitLabRelease, KindGitLabMR:
 		return CredGitLabToken
@@ -57,8 +57,8 @@ const (
 	maxTagRegex      = 256
 )
 
-// GitHubReleaseConfig is the normalized config of a github_release watch.
-type GitHubReleaseConfig struct {
+// GitHubRepoConfig is the normalized config of a github_repo watch.
+type GitHubRepoConfig struct {
 	Repo               string `json:"repo"`
 	IncludePrereleases bool   `json:"include_prereleases"`
 	APIURL             string `json:"api_url"`
@@ -104,7 +104,7 @@ var (
 
 // defaultHosts need no watch of the owner's for a key to target them, with no path and on their own kind only: docker.io and ghcr.io redirect a chosen path to other hosts, and a GitHub or GitLab kind's path holds a key's repo or project.
 var defaultHosts = map[string][]string{
-	KindGitHubRelease: {"api.github.com"},
+	KindGitHubRepo:    {"api.github.com"},
 	KindGitHubPR:      {"api.github.com"},
 	KindGitLabRelease: {"gitlab.com"},
 	KindGitLabMR:      {"gitlab.com"},
@@ -185,7 +185,7 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 		return nil, fe.errs
 	}
 	switch c := target.(type) {
-	case *GitHubReleaseConfig:
+	case *GitHubRepoConfig:
 		c.Repo = v.repo(c.Repo, fe)
 		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
 	case *GitHubPRConfig:
@@ -213,8 +213,8 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 
 func newConfig(kind string) any {
 	switch kind {
-	case KindGitHubRelease:
-		return &GitHubReleaseConfig{}
+	case KindGitHubRepo:
+		return &GitHubRepoConfig{}
 	case KindGitHubPR:
 		return &GitHubPRConfig{}
 	case KindGitLabRelease:

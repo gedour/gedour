@@ -232,7 +232,7 @@ echo "${hog}" | jq -c '{outcome, error, duration_ms}'
 echo "== watch run and script delivery on a worker"
 readonly UPSTREAM="http://fakeupstream:8091"
 watch_id="$(api POST /api/v1/watches \
-  "{\"name\":\"smoke releases\",\"kind\":\"github_release\",\"config\":{\"repo\":\"golang/go\",\"api_url\":\"${UPSTREAM}\"}}" | jq -r .id)" \
+  "{\"name\":\"smoke releases\",\"kind\":\"github_repo\",\"config\":{\"repo\":\"golang/go\",\"api_url\":\"${UPSTREAM}\"}}" | jq -r .id)" \
   || fail "create watch failed"
 baseline() { [[ "$(api GET "/api/v1/watches/${watch_id}" | jq -r .last_status)" == "ok" ]]; }
 wait_for 60 baseline || fail "watch baseline run never succeeded: $(api GET "/api/v1/watches/${watch_id}")"

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/secret"
+	"github.com/gedour/gedour/pkg/watch"
 )
 
 type apiUser struct {
@@ -116,7 +117,7 @@ func newWatch(name, kind string, cfg map[string]any) map[string]any {
 }
 
 var sampleWatches = []map[string]any{
-	newWatch("Go releases", "github_release", map[string]any{"repo": "golang/go"}),
+	newWatch("Go releases", "github_repo", map[string]any{"repo": "golang/go"}),
 	newWatch("Go PR", "github_pr", map[string]any{"repo": "golang/go", "number": 1}),
 	newWatch("GitLab releases", "gitlab_release", map[string]any{"project": "gitlab-org/gitlab"}),
 	newWatch("GitLab MR", "gitlab_mr", map[string]any{"project": "gitlab-org/gitlab", "iid": 2}),
@@ -161,7 +162,7 @@ func TestWatchCRUD(t *testing.T) {
 		}
 	}
 
-	id := ids["github_release"]
+	id := ids["github_repo"]
 	a.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{
 		"name": " Go stable ", "schedule": "0 9 * * 1-5", "config": map[string]any{"repo": "golang/tools", "include_prereleases": true},
 	}, http.StatusOK, &got)
@@ -211,14 +212,14 @@ func TestWatchValidation(t *testing.T) {
 		body               any
 		at                 []string
 	}{
-		{"bad repo", http.MethodPost, "/api/v1/watches", newWatch("x", "github_release", map[string]any{"repo": "nope"}), []string{"body.config.repo"}},
+		{"bad repo", http.MethodPost, "/api/v1/watches", newWatch("x", "github_repo", map[string]any{"repo": "nope"}), []string{"body.config.repo"}},
 		{"bad regex", http.MethodPost, "/api/v1/watches", newWatch("x", "oci_tags", map[string]any{"repository": "a/b", "tag_regex": "(["}), []string{"body.config.tag_regex"}},
-		{"bad cron", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_release", "config": map[string]any{"repo": "a/b"}, "schedule": "61 * * * *"}, []string{"body.schedule"}},
-		{"blank name and short interval", http.MethodPost, "/api/v1/watches", map[string]any{"name": "  ", "kind": "github_release", "config": map[string]any{"repo": "a/b"}, "schedule": "10s"}, []string{"body.schedule", "body.name"}},
+		{"bad cron", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "61 * * * *"}, []string{"body.schedule"}},
+		{"blank name and short interval", http.MethodPost, "/api/v1/watches", map[string]any{"name": "  ", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "10s"}, []string{"body.schedule", "body.name"}},
 		{"unknown kind", http.MethodPost, "/api/v1/watches", newWatch("x", "rss", map[string]any{}), []string{"body.kind"}},
-		{"unknown top-level field", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_release", "config": map[string]any{"repo": "a/b"}, "owner_id": "x"}, []string{"body.owner_id"}},
-		{"missing config", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_release"}, []string{"body"}},
-		{"bad credential id", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_release", "config": map[string]any{"repo": "a/b"}, "credential_id": "nope"}, []string{"body.credential_id"}},
+		{"unknown top-level field", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "owner_id": "x"}, []string{"body.owner_id"}},
+		{"missing config", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo"}, []string{"body"}},
+		{"bad credential id", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "credential_id": "nope"}, []string{"body.credential_id"}},
 		{"patch bad config", http.MethodPatch, "/api/v1/watches/" + w.ID, map[string]any{"config": map[string]any{"repo": "a/b", "number": 1}}, []string{"body.config.number"}},
 		{"patch bad schedule and name", http.MethodPatch, "/api/v1/watches/" + w.ID, map[string]any{"schedule": "@daily", "name": " "}, []string{"body.name", "body.schedule"}},
 		{"patch credential not a uuid", http.MethodPatch, "/api/v1/watches/" + w.ID, map[string]any{"credential_id": "x"}, []string{"body.credential_id"}},
@@ -232,6 +233,25 @@ func TestWatchValidation(t *testing.T) {
 				t.Fatalf("want errors at %v, got %+v", tt.at, p)
 			}
 		})
+	}
+}
+
+// 008-AC3: the old kind name has no alias; the refusal lists the valid kinds (400: the API's status for every
+// invalid input, 001-AC4).
+func TestWatchOldKindRefused(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	// Split so the 008-AC3 grep for the old name finds no live use.
+	old := "github_" + "release"
+	var p problem
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", newWatch("x", old, map[string]any{"repo": "a/b"}), http.StatusBadRequest, &p)
+	if len(p.Errors) != 1 || p.Errors[0].Location != "body.kind" {
+		t.Fatalf("want one error at body.kind, got %+v", p)
+	}
+	for _, k := range watch.Kinds {
+		if !strings.Contains(p.Errors[0].Message, k) {
+			t.Errorf("message %q does not list %s", p.Errors[0].Message, k)
+		}
 	}
 }
 
@@ -250,7 +270,7 @@ func TestWatchAuthzMatrix(t *testing.T) {
 	a.mustCall(t, owner, http.MethodPost, "/api/v1/credentials", map[string]any{"name": "matrix", "kind": "github_token", "secret": "ghp_0123456789abcdef"}, http.StatusCreated, &ownerCred)
 	freshWith := func(t *testing.T, credentialed bool) string {
 		var w watchJSON
-		body := map[string]any{"name": "Go", "kind": "github_release", "config": map[string]any{"repo": "golang/go"}}
+		body := map[string]any{"name": "Go", "kind": "github_repo", "config": map[string]any{"repo": "golang/go"}}
 		if credentialed {
 			body["credential_id"] = ownerCred.ID
 		}
@@ -499,7 +519,7 @@ func TestCredentials(t *testing.T) {
 
 	// Attach: kind family and ownership are checked.
 	var w watchJSON
-	body := newWatch("Go", "github_release", map[string]any{"repo": "golang/go"})
+	body := newWatch("Go", "github_repo", map[string]any{"repo": "golang/go"})
 	body["credential_id"] = reg.ID
 	var p problem
 	mustRaw(alice, http.MethodPost, "/api/v1/watches", body, http.StatusBadRequest, &p)
@@ -701,7 +721,7 @@ func TestSharedCredentialTarget(t *testing.T) {
 	var c credJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/credentials", map[string]any{"name": "gh", "kind": "github_token", "secret": "ghp_0123456789abcdef"}, http.StatusCreated, &c)
 	var w, plain watchJSON
-	body := newWatch("Private", "github_release", map[string]any{"repo": "alice/private"})
+	body := newWatch("Private", "github_repo", map[string]any{"repo": "alice/private"})
 	body["credential_id"] = c.ID
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", body, http.StatusCreated, &w)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &plain)

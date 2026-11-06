@@ -85,7 +85,7 @@ func githubHeaders(cred *Credential) http.Header {
 	return h
 }
 
-func collectGitHubReleases(ctx context.Context, f *Fetcher, cfg watch.GitHubReleaseConfig, cred *Credential) (ReleaseState, error) {
+func collectGitHubReleases(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, cred *Credential) (ReleaseState, error) {
 	// The first page is enough: the newest 50 cover any realistic gap between two runs.
 	u := fmt.Sprintf("%s/repos/%s/releases?per_page=50", cfg.APIURL, cfg.Repo)
 	r, err := f.get(ctx, u, githubHeaders(cred), true)

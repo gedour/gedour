@@ -39,7 +39,7 @@ export const SCRIPT_COMPLETIONS: ScriptCompletion[] = [
   { label: "event.occurred_at", type: "property", detail: "ISO time" },
   { label: "watch.id", type: "property", detail: "the watch's id" },
   { label: "watch.name", type: "property", detail: "the watch's name" },
-  { label: "watch.kind", type: "property", detail: '"github_release", "oci_tags"…' },
+  { label: "watch.kind", type: "property", detail: '"github_repo", "oci_tags"…' },
   { label: "rule.id", type: "property", detail: "null in a dry run" },
   { label: "rule.name", type: "property", detail: "the rule that routed the event" },
   { label: "delivery_id", type: "variable", detail: "0 in a dry run" },
@@ -70,7 +70,7 @@ export const SAMPLES: Sample[] = [
         body: "## Security\n\nFixes CVE-2099-1234.",
         cves: ["CVE-2099-1234"],
       },
-      watch: { name: "GitHub CLI releases", kind: "github_release" },
+      watch: { name: "GitHub CLI releases", kind: "github_repo" },
     },
   },
   {

@@ -42,7 +42,7 @@ export interface TagState {
 export function stateLine(kind: WatchKind, state: unknown): string {
   if (!state || typeof state !== "object") return "empty";
   switch (kind) {
-    case "github_release":
+    case "github_repo":
     case "gitlab_release": {
       const rs = (state as ReleaseState).releases ?? [];
       const latest = rs.find((r) => !r.draft);

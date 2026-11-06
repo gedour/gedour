@@ -22,7 +22,7 @@ test("the worker turns upstream changes into timeline events", async ({ page }) 
   };
   const releases = await create({
     name: `CLI releases ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
   const tags = await create({
@@ -101,7 +101,7 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Routed CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -255,7 +255,7 @@ test("a script channel runs its script on a routed event", async ({ page }) => {
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Scripted CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -342,7 +342,7 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Talk CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -473,7 +473,7 @@ test("rules on release notes route the right releases", async ({ page }) => {
   const watches = [
     await post("/api/v1/watches", {
       name: `Notes GitHub ${t}`,
-      kind: "github_release",
+      kind: "github_repo",
       schedule: "1h",
       config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
     }),

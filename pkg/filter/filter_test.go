@@ -13,7 +13,7 @@ import (
 var sample = Env{
 	Event: Event{Type: "release.published", Payload: map[string]any{"tag": "v2.104.0", "prerelease": false, "highest": true},
 		OccurredAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
-	Watch: Watch{ID: "w1", Name: "cli/cli", Kind: "github_release"},
+	Watch: Watch{ID: "w1", Name: "cli/cli", Kind: "github_repo"},
 }
 
 // 001-AC13: valid filters compile against the typed env and evaluate to a boolean.
@@ -25,7 +25,7 @@ func TestMatch(t *testing.T) {
 		{"", true},
 		{`event.type == "release.published"`, true},
 		{`event.type startsWith "pr."`, false},
-		{`not event.payload.prerelease && watch.kind == "github_release"`, true},
+		{`not event.payload.prerelease && watch.kind == "github_repo"`, true},
 		{`event.payload.highest`, true},
 		{`semver_gt(event.payload.tag, "v2.100.0")`, true},
 		{`semver_gt(event.payload.tag, "v3")`, false},

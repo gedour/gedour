@@ -43,7 +43,7 @@ function watchOf(over: Partial<AdminWatch> = {}): AdminWatch {
   return {
     id: "44444444-4444-4444-4444-444444444444",
     name: "Go releases",
-    kind: "github_release",
+    kind: "github_repo",
     credential_name: "gh",
     shares: 1,
     ...over,
@@ -390,9 +390,7 @@ describe("AdminUsersPage", () => {
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const list = await screen.findByRole("list", { name: "Watches of Bob" });
-    expect(list).toHaveTextContent(
-      "Go releasesgithub_release · credential gh · shared with 1 user",
-    );
+    expect(list).toHaveTextContent("Go releasesgithub_repo · credential gh · shared with 1 user");
     await userEvent.click(within(list).getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
     expect(d).toHaveTextContent("Its credential gh moves with it");
@@ -434,7 +432,7 @@ describe("AdminUsersPage", () => {
     });
     renderApp("/admin/users", ADMIN);
     await userEvent.click(await screen.findByRole("button", { name: "Watches of Bob" }));
-    expect(await screen.findByText("github_release")).toBeInTheDocument();
+    expect(await screen.findByText("github_repo")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
     expect(d).not.toHaveTextContent("credential");

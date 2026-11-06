@@ -37,7 +37,7 @@ describe("WatchFormPage (new)", () => {
     await userEvent.click(kindCard("GitLab releases"));
     expect(screen.queryByLabelText("Repository")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Project path")).toHaveValue("");
-    await userEvent.click(kindCard("GitHub releases"));
+    await userEvent.click(kindCard("GitHub repository"));
     expect(screen.getByLabelText("Repository")).toHaveValue("golang/go");
   });
 
@@ -111,7 +111,7 @@ describe("WatchFormPage (new)", () => {
     expect(screen.getByRole("button", { name: "Saving…" })).toBeDisabled();
     expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toEqual({
       name: "Mine",
-      kind: "github_release",
+      kind: "github_repo",
       config: { repo: "a/b", include_prereleases: false },
       credential_id: "c1",
     });
@@ -168,7 +168,7 @@ describe("WatchFormPage (edit)", () => {
     renderApp("/watches/w1/edit");
     const name = await screen.findByLabelText("Name");
     expect(name).toHaveValue("Go releases");
-    expect(kindCard("GitHub releases")).toBeDisabled();
+    expect(kindCard("GitHub repository")).toBeDisabled();
     expect(screen.queryByLabelText(/Paste a URL/)).not.toBeInTheDocument();
     await userEvent.clear(name);
     await userEvent.type(name, "Renamed");

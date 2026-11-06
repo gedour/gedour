@@ -51,7 +51,7 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(page.getByRole("heading", { level: 1, name: "New watch" })).toBeVisible();
   await tabTo(page, page.getByLabel("Paste a URL"));
   await page.keyboard.type("https://github.com/cli/cli/releases");
-  await expect(page.getByText("Recognized: GitHub releases")).toBeVisible();
+  await expect(page.getByText("Recognized: GitHub repository")).toBeVisible();
   await tabTo(page, page.getByLabel("API URL (optional)"));
   await page.keyboard.type(UPSTREAM);
   await tabTo(page, page.getByLabel("Name"));

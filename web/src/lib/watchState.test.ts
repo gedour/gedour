@@ -5,7 +5,7 @@ import { stateLine } from "@/lib/watchState";
 describe("stateLine", () => {
   it.each([
     [
-      "github_release",
+      "github_repo",
       {
         releases: [
           { tag: "v2", draft: true },

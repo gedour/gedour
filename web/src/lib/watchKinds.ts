@@ -14,9 +14,9 @@ export interface KindInfo {
 
 export const KINDS: KindInfo[] = [
   {
-    kind: "github_release",
-    label: "GitHub releases",
-    blurb: "New releases of a repository",
+    kind: "github_repo",
+    label: "GitHub repository",
+    blurb: "Releases of a repository",
     icon: Rocket,
     credential: "github_token",
     defaultSchedule: "1h",
@@ -111,7 +111,7 @@ const PROJECT: FieldSpec = {
 
 // Shared keys (repo, api_url, base_url, project) carry over when the kind changes in the form.
 export const FIELDS: Record<WatchKind, FieldSpec[]> = {
-  github_release: [
+  github_repo: [
     REPO,
     { key: "include_prereleases", label: "Include pre-releases", type: "checkbox" },
     GITHUB_API,
@@ -185,7 +185,7 @@ export function fromConfig(config: WatchConfig): FormValues {
 export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
   const c = w.config as Record<string, string | number | undefined>;
   switch (w.kind) {
-    case "github_release":
+    case "github_repo":
       return `${c.repo} releases`;
     case "github_pr":
       return `${c.repo} #${c.number}`;
@@ -203,7 +203,7 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
 }
 
 const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
-  github_release: ["api_url", "https://api.github.com"],
+  github_repo: ["api_url", "https://api.github.com"],
   github_pr: ["api_url", "https://api.github.com"],
   gitlab_release: ["base_url", "https://gitlab.com"],
   gitlab_mr: ["base_url", "https://gitlab.com"],

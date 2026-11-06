@@ -53,19 +53,19 @@ func TestWorkerRedirectExposesNoCredential(t *testing.T) {
 		// wantBasic: the registry's own challenge names the token host, so a watch's Basic credential goes there by design.
 		wantBasic bool
 	}{
-		{name: "github, with a credential", kind: "github_release", cred: cred, sentByKnown: "Authorization",
+		{name: "github, with a credential", kind: "github_repo", cred: cred, sentByKnown: "Authorization",
 			cfg: func(k string) map[string]any { return map[string]any{"repo": "a/b", "api_url": k} }},
 		{name: "gitlab, with a credential", kind: "gitlab_release", cred: cred, sentByKnown: "Private-Token",
 			cfg: func(k string) map[string]any { return map[string]any{"project": "a/b", "base_url": k} }},
-		{name: "github, a key's watch", kind: "github_release",
+		{name: "github, a key's watch", kind: "github_repo",
 			cfg: func(k string) map[string]any { return map[string]any{"repo": "a/b", "api_url": k} }},
 		{name: "gitlab, a key's watch", kind: "gitlab_release",
 			cfg: func(k string) map[string]any { return map[string]any{"project": "a/b", "base_url": k} }},
 		// Why a key gets no path on a known host (007-AC36): it would reach the other host.
-		{name: "path-preserving host, a path in the config", kind: "github_release", preserve: true, wantURI: "/zzDATA/repos/a/b/releases?per_page=50",
+		{name: "path-preserving host, a path in the config", kind: "github_repo", preserve: true, wantURI: "/zzDATA/repos/a/b/releases?per_page=50",
 			cfg: func(k string) map[string]any { return map[string]any{"repo": "a/b", "api_url": k + "/zzDATA"} }},
 		// What stays open: the key's repo still names part of the path, on the host the known host chooses.
-		{name: "path-preserving host, a key's watch", kind: "github_release", preserve: true, wantURI: "/repos/a/b/releases?per_page=50",
+		{name: "path-preserving host, a key's watch", kind: "github_repo", preserve: true, wantURI: "/repos/a/b/releases?per_page=50",
 			cfg: func(k string) map[string]any { return map[string]any{"repo": "a/b", "api_url": k} }},
 		{name: "path-preserving host, with a credential", kind: "gitlab_release", cred: cred, sentByKnown: "Private-Token", preserve: true, wantURI: "/api/v4/projects/a%2Fb/releases?per_page=50",
 			cfg: func(k string) map[string]any { return map[string]any{"project": "a/b", "base_url": k} }},

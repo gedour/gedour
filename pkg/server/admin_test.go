@@ -157,7 +157,7 @@ func TestTransferKeepsCollecting(t *testing.T) {
 	var c credJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/credentials", map[string]any{"name": "gh", "kind": "github_token", "secret": plain}, http.StatusCreated, &c)
 	var w watchJSON
-	body := newWatch("Private", "github_release", map[string]any{"repo": "alice/private"})
+	body := newWatch("Private", "github_repo", map[string]any{"repo": "alice/private"})
 	body["credential_id"] = c.ID
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", body, http.StatusCreated, &w)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
@@ -179,7 +179,7 @@ func TestTransferKeepsCollecting(t *testing.T) {
 	col := &secretSeen{}
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
 	wk, err := worker.New(a.pool, zap.NewNop(), box, g.Client(netguard.Options{Timeout: 5 * time.Second, HTTPHosts: []string{"127.0.0.1"}}),
-		map[string]collect.Collector{"github_release": col}, worker.NewMetrics(prometheus.NewRegistry()),
+		map[string]collect.Collector{"github_repo": col}, worker.NewMetrics(prometheus.NewRegistry()),
 		worker.Options{Poll: 10 * time.Millisecond, Concurrency: 1, DrainTimeout: time.Second, UserAgent: "gedour/test", HTTPHosts: []string{"127.0.0.1"}})
 	if err != nil {
 		t.Fatal(err)
@@ -513,7 +513,7 @@ func TestRunAllRacingPurgeLocks(t *testing.T) {
 	dave, erin := a.signIn(t, "dave"), a.signIn(t, "erin")
 	const low, high = "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-4fff-bfff-ffffffffffff"
 	for _, id := range []string{high, low} {
-		a.exec(t, `INSERT INTO watches (id, owner_id, name, kind, config) VALUES ($1, $2, $3, 'github_release', '{"repo":"a/b"}')`, id, dave.id, id)
+		a.exec(t, `INSERT INTO watches (id, owner_id, name, kind, config) VALUES ($1, $2, $3, 'github_repo', '{"repo":"a/b"}')`, id, dave.id, id)
 		a.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'rw')`, id, erin.id)
 	}
 	ctx := context.Background()

@@ -90,7 +90,7 @@ func (e *env) user(t *testing.T, name string) string {
 func (e *env) watch(t *testing.T, owner string) string {
 	t.Helper()
 	var id string
-	e.scalar(t, &id, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'cli/cli', 'github_release', '{}') RETURNING id::text`, owner)
+	e.scalar(t, &id, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'cli/cli', 'github_repo', '{}') RETURNING id::text`, owner)
 	return id
 }
 

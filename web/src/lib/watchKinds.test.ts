@@ -14,7 +14,7 @@ describe("toConfig / fromConfig", () => {
   it("sends only the kind's fields, trimmed, numbers as numbers, blanks left out", () => {
     const values = { repo: " golang/go ", number: "12", api_url: "", project: "x/y", extra: "z" };
     expect(toConfig("github_pr", values)).toEqual({ repo: "golang/go", number: 12 });
-    expect(toConfig("github_release", values)).toEqual({
+    expect(toConfig("github_repo", values)).toEqual({
       repo: "golang/go",
       include_prereleases: false,
     });
@@ -36,7 +36,7 @@ describe("toConfig / fromConfig", () => {
 
 describe("targetSummary", () => {
   it.each([
-    ["github_release", { repo: "golang/go" }, "golang/go releases"],
+    ["github_repo", { repo: "golang/go" }, "golang/go releases"],
     ["github_pr", { repo: "golang/go", number: 5 }, "golang/go #5"],
     ["gitlab_release", { project: "a/b" }, "a/b releases"],
     ["gitlab_mr", { project: "a/b", iid: 9 }, "a/b !9"],
@@ -50,7 +50,7 @@ describe("targetSummary", () => {
 
   it("labels kinds and credentials", () => {
     expect(kindInfo("gitlab_mr").credential).toBe("gitlab_token");
-    expect(kindInfo("nope" as "oci_tags").kind).toBe("github_release");
+    expect(kindInfo("nope" as "oci_tags").kind).toBe("github_repo");
     expect(credentialLabel("registry_basic")).toBe("Registry login");
     expect(credentialLabel("x" as "github_token")).toBe("x");
   });
@@ -91,7 +91,7 @@ describe("describeSchedule", () => {
 
 describe("credentialHost", () => {
   it.each([
-    ["github_release", {}, "api.github.com"],
+    ["github_repo", {}, "api.github.com"],
     ["github_pr", { api_url: " https://ghe.example.com:8443/api/v3 " }, "ghe.example.com:8443"],
     ["gitlab_mr", {}, "gitlab.com"],
     ["gitlab_release", { base_url: "https://git.example.com" }, "git.example.com"],

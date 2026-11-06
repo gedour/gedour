@@ -298,7 +298,7 @@ export function StatePanel({ watch }: { watch: Watch }) {
 
 export function StateView({ kind, state }: { kind: Watch["kind"]; state: unknown }) {
   switch (kind) {
-    case "github_release":
+    case "github_repo":
     case "gitlab_release":
       return <ReleaseTable state={state as ReleaseState} />;
     case "github_pr":

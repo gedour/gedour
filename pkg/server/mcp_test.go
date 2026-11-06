@@ -1589,7 +1589,7 @@ func TestMCPWatchesTruncated(t *testing.T) {
 	alice := m.user(t, "alice")
 	key, _ := m.key(t, alice.id, "read", "")
 	seed := func(n int) {
-		m.exec(t, `INSERT INTO watches (owner_id, name, kind, config) SELECT $1, 'w' || g, 'github_release', '{"repo":"a/b"}' FROM generate_series(1, $2::int) g`, alice.id, n)
+		m.exec(t, `INSERT INTO watches (owner_id, name, kind, config) SELECT $1, 'w' || g, 'github_repo', '{"repo":"a/b"}' FROM generate_series(1, $2::int) g`, alice.id, n)
 	}
 	list := func(args map[string]any) (int, any) {
 		res := m.tool(t, key, "list_watches", args, nil)

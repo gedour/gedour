@@ -46,7 +46,7 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 		cfg   map[string]any
 		types []string
 	}{
-		{"github_release", map[string]any{"repo": "cli/cli", "include_prereleases": true, "api_url": srv.URL},
+		{"github_repo", map[string]any{"repo": "cli/cli", "include_prereleases": true, "api_url": srv.URL},
 			[]string{"release.promoted", "release.published", "release.published"}},
 		{"github_pr", map[string]any{"repo": "cli/cli", "number": 14925, "api_url": srv.URL},
 			[]string{"pr.draft_changed", "pr.review_changed", "pr.ci_changed", "pr.commented", "pr.commented", "pr.commented"}},
@@ -71,7 +71,7 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 				t.Fatal(err)
 			}
 			// 004-AC1: only the release kinds hand notes over, and they reach the state nowhere.
-			if isRelease := strings.HasSuffix(tt.kind, "_release"); isRelease != (f.Notes != nil) || strings.Contains(string(b), "## ") {
+			if isRelease := tt.kind == "github_repo" || tt.kind == "gitlab_release"; isRelease != (f.Notes != nil) || strings.Contains(string(b), "## ") {
 				t.Fatalf("notes %v in the state %.80s", f.Notes != nil, b)
 			}
 			events, err := c.Diff(a, b)
@@ -102,7 +102,7 @@ func TestConditionalRequests(t *testing.T) {
 		kind string
 		cfg  map[string]any
 	}{
-		{"github_release", map[string]any{"repo": "cli/cli", "api_url": srv.URL}},
+		{"github_repo", map[string]any{"repo": "cli/cli", "api_url": srv.URL}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "g/p"}},
 	} {
 		t.Run(tt.kind, func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestCredentialHeaders(t *testing.T) {
 	}))
 	defer srv.Close()
 	cred := &Credential{Kind: "x", Secret: "s3cret"}
-	if _, err := Collectors()["github_release"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "api_url": srv.URL}), cred); err != nil {
+	if _, err := Collectors()["github_repo"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "api_url": srv.URL}), cred); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Collectors()["gitlab_release"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"base_url": srv.URL, "project": "a/b"}), cred); err != nil {

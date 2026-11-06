@@ -856,7 +856,7 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
               "gitlab_release",
               "gitlab_mr",
@@ -2242,7 +2242,7 @@
         "properties": {
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
               "gitlab_release",
               "gitlab_mr",
@@ -2676,7 +2676,7 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
               "gitlab_release",
               "gitlab_mr",
@@ -2782,7 +2782,7 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
               "gitlab_release",
               "gitlab_mr",
@@ -4897,7 +4897,7 @@
             "schema": {
               "description": "Only watches of this kind",
               "enum": [
-                "github_release",
+                "github_repo",
                 "github_pr",
                 "gitlab_release",
                 "gitlab_mr",

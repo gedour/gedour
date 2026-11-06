@@ -263,6 +263,13 @@ test("an admin acts as a user", async ({ page, browser, baseURL }) => {
   const name = `act-as e2e ${Date.now()}`;
   let ruleId = "";
   const banner = page.getByRole("region", { name: "Acting as another user" });
+  // --shell-top must match the sticky bar's height, banner or not: the sidebar fills the rest.
+  const sidebarUnderBar = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector("header")?.parentElement?.getBoundingClientRect();
+      const sidebar = document.getElementById("app-sidebar")?.getBoundingClientRect();
+      return bar?.bottom === sidebar?.top && sidebar?.bottom === window.innerHeight;
+    });
   try {
     await page.goto("/admin/users");
     const row = page
@@ -272,6 +279,7 @@ test("an admin acts as a user", async ({ page, browser, baseURL }) => {
     await row.getByRole("button", { name: `Act as ${BOB.name}` }).click();
     await expect(banner).toContainText(`Acting as ${BOB.name}`);
     await expect(page).toHaveURL(/\/inbox$/);
+    expect(await sidebarUnderBar()).toBe(true);
     await expect(page.getByRole("link", { name: "Administration" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: `Account: ${BOB.name}` })).toBeVisible();
 
@@ -285,6 +293,7 @@ test("an admin acts as a user", async ({ page, browser, baseURL }) => {
 
     await banner.getByRole("button", { name: "Stop" }).click();
     await expect(banner).toBeHidden();
+    expect(await sidebarUnderBar()).toBe(true);
     await expect(page.getByRole("link", { name: "Administration" })).toBeVisible();
     await expect(page.getByRole("button", { name: `Account: ${ALICE.name}` })).toBeVisible();
     await expect(page.getByText(SEED.rule)).toHaveCount(0);

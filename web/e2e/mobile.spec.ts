@@ -8,7 +8,7 @@ test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, h
 const SHOTS = process.env.E2E_SHOTS_DIR;
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
-/** Fails when the page, or the shell's scrolling main area, is wider than the viewport. */
+/** Fails when the page, or main, is wider than the viewport. */
 async function expectNoHorizontalScroll(page: Page) {
   const widths = await page.evaluate(() =>
     [document.documentElement, document.getElementById("main")].flatMap((el) =>

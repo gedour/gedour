@@ -32,6 +32,16 @@ test("alice deletes several watches at once", async ({ page }) => {
   await page.getByLabel("Search").fill(t);
   const list = page.getByRole("list", { name: "Watches" });
   await expect(list.getByRole("listitem")).toHaveCount(3);
+  // Rows below the fold: scrolled to the bottom, the header and the sidebar still frame the page.
+  await page.setViewportSize({ width: 1280, height: 320 });
+  const shellHolds = () =>
+    page.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      const header = document.querySelector("header")?.getBoundingClientRect();
+      const sidebar = document.getElementById("app-sidebar")?.getBoundingClientRect();
+      return window.scrollY > 0 && header?.top === 0 && sidebar?.bottom === window.innerHeight;
+    });
+  expect(await shellHolds()).toBe(true);
   await page.getByRole("checkbox", { name: `Select: Bulk one ${t}` }).check();
   await page.getByRole("checkbox", { name: `Select: Bulk two ${t}` }).check();
   await page
@@ -45,6 +55,7 @@ test("alice deletes several watches at once", async ({ page }) => {
   await expect(page.getByRole("status")).toContainText("Deleted 2 watches");
   await expect(list.getByRole("listitem")).toHaveCount(1);
   await expect(list).toContainText(`Bulk three ${t}`);
+  expect(await shellHolds()).toBe(true);
 });
 
 // 001-AC4: one watch of each kind through the UI (one by URL paste), edit, pause, resume, delete.

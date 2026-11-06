@@ -2,7 +2,7 @@
 
 ## Setup
 
-- Go 1.27, Node 24 + pnpm (version pinned in `web/package.json` `packageManager`), Docker (tests start PostgreSQL via testcontainers).
+- Go 1.27, Node 26 + pnpm (version pinned in `web/package.json` `packageManager`), Docker (tests start PostgreSQL via testcontainers).
 - `pnpm --dir web install --frozen-lockfile` once; `make` targets re-run it when the lockfile changes.
 - JS packages: pnpm only. Build scripts are refused unless listed in `web/pnpm-workspace.yaml` `allowBuilds`.
 

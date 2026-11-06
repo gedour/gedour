@@ -1,6 +1,6 @@
 # 008 — GitHub repository watches: new issues and pull requests, one-issue watches
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-06
 
@@ -37,7 +37,8 @@ reason), labels, and new comments, the same way `github_pr` follows one PR.
 - `github_issue` state: `state` (`open`, `closed`), `state_reason` (as GitHub reports it, e.g.
   `completed`, `not_planned`, or empty), `title`, `labels` (sorted), `url`, and the 20 newest comments, read
   with `lastPage` and normalized like PR conversation comments.
-- `github_issue` events: `issue.state_changed` (from/to, plus `state_reason`), `issue.labels_changed`
+- `github_issue` events: `issue.state_changed` (from/to, plus `state_reason`; also on a reason change while
+  closed, from and to both `closed`), `issue.labels_changed`
   (from/to), `issue.commented` (author, excerpt), built with `diffFacets` and `newComments`.
 - A `github_issue` watch on a number that is a PR fails with a clear error naming `github_pr`.
 - UI: the kind picker shows "GitHub repository" and "GitHub issue"; the `github_repo` form shows both boxes
@@ -61,36 +62,36 @@ reason), labels, and new comments, the same way `github_pr` follows one PR.
 
 ## Acceptance criteria
 
-- [ ] **AC1** After the migration, every former `github_release` watch has kind `github_repo`, keeps its
+- [x] **AC1** After the migration, every former `github_release` watch has kind `github_repo`, keeps its
   config, states and events, and its next run emits nothing new; the down migration restores
   `github_release`.
-- [ ] **AC2** A saved rule filter `watch.kind == "github_release"` (or single- or backtick-quoted) reads `github_repo`
+- [x] **AC2** A saved rule filter `watch.kind == "github_release"` (or single- or backtick-quoted) reads `github_repo`
   after the migration and still routes that watch's events.
-- [ ] **AC3** The API refuses `kind: "github_release"` with a 400 (the project maps 422 to 400) listing the valid kinds; `grep -rn
+- [x] **AC3** The API refuses `kind: "github_release"` with a 400 (the project maps 422 to 400) listing the valid kinds; `grep -rn
   github_release` outside migrations, specs 001-007 and the changelog returns nothing.
-- [ ] **AC4** A `github_repo` watch with both boxes off makes exactly the requests a `github_release` watch
+- [x] **AC4** A `github_repo` watch with both boxes off makes exactly the requests a `github_release` watch
   made, and its events do not change.
-- [ ] **AC5** With `new_issues` on, an issue opened between two runs produces one `issue.opened` with the
+- [x] **AC5** With `new_issues` on, an issue opened between two runs produces one `issue.opened` with the
   payload above; a PR opened in the same interval produces nothing unless `new_prs` is on, then one
   `pr.opened`.
-- [ ] **AC6** The first run after a box is checked, and the first run of a watch stored before this spec,
+- [x] **AC6** The first run after a box is checked, and the first run of a watch stored before this spec,
   emit no `issue.opened` or `pr.opened`.
-- [ ] **AC7** An item that reappears in the window after a deletion, with a number below the oldest stored,
+- [x] **AC7** An item that reappears in the window after a deletion, with a number below the oldest stored,
   emits nothing.
-- [ ] **AC8** A failing issues call fails the run like a failing releases call: no partial state saved, no
+- [x] **AC8** A failing issues call fails the run like a failing releases call: no partial state saved, no
   events.
-- [ ] **AC9** A `github_issue` watch reports a close as `issue.state_changed` with `state_reason`, a reopen
+- [x] **AC9** A `github_issue` watch reports a close as `issue.state_changed` with `state_reason`, a reopen
   the same way, a label added or removed as `issue.labels_changed`, and each new comment as
   `issue.commented`; its first run emits nothing.
-- [ ] **AC10** A `github_issue` watch on a PR number fails with an error that names `github_pr`.
-- [ ] **AC11** The API refuses a `github_issue` config with a bad `repo` or a non-positive `number`, with
+- [x] **AC10** A `github_issue` watch on a PR number fails with an error that names `github_pr`.
+- [x] **AC11** The API refuses a `github_issue` config with a bad `repo` or a non-positive `number`, with
   field errors like `github_pr`'s.
-- [ ] **AC12** Telegram, email, Talk and the UI show one readable line for each new event type (e.g.
+- [x] **AC12** Telegram, email, Talk and the UI show one readable line for each new event type (e.g.
   "Issue #12 opened by alice", "Issue #12 closed (not planned)").
-- [ ] **AC13** Pasting `https://github.com/o/r/issues/12` in the watch form picks `github_issue` with repo
+- [x] **AC13** Pasting `https://github.com/o/r/issues/12` in the watch form picks `github_issue` with repo
   `o/r` and number 12.
-- [ ] **AC14** A rule filter `"bug" in event.payload.labels` routes an `issue.opened` fixture event.
-- [ ] **AC15** The form hint on the two boxes states the doubled request count; a11y, 375 px and CSP e2e
+- [x] **AC14** A rule filter `"bug" in event.payload.labels` routes an `issue.opened` fixture event.
+- [x] **AC15** The form hint on the two boxes states the doubled request count; a11y, 375 px and CSP e2e
   checks pass on the form.
 
 ## Phases

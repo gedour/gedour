@@ -15,6 +15,16 @@ describe("recognize", () => {
       "github_pr",
       { repo: "golang/go", number: 7 },
     ],
+    // 008-AC13: an issue URL picks github_issue; a non-numeric or zero number falls back to the repo.
+    ["https://github.com/o/r/issues/12", "github_issue", { repo: "o/r", number: 12 }],
+    [
+      "github.com/cli/cli/issues/9400#issuecomment-1",
+      "github_issue",
+      { repo: "cli/cli", number: 9400 },
+    ],
+    ["https://github.com/o/r/issues", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/issues/0", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/issues/new", "github_repo", { repo: "o/r" }],
     [
       "https://github.com/orgs/acme/packages/container/package/Api",
       "oci_tags",

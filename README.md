@@ -2,7 +2,7 @@
 
 # gedour
 
-Self-hosted watch service: follows upstream releases, pull/merge requests and image tags, keeps their
+Self-hosted watch service: follows upstream releases, issues, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
 The name is Breton: *gedour* (pronounced like *get* + *door*, hard G, /ˈɡeː.dur/) means lookout,
@@ -287,7 +287,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   repository watch with a new-items box on reads both of its lists in full: a 304 on one would skip the other.
 - The first run stores a baseline and emits nothing. Each later change becomes typed events
   (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `pr.state_changed`, `pr.draft_changed`,
-  `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
+  `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `issue.state_changed`, `issue.labels_changed`,
+  `issue.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
   `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
   run is a new baseline. The last 50 states per watch are kept; events are kept.
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
@@ -300,7 +301,13 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   from the UI. The run stores the numbers listed, one list per checked box, not the items: the first run after a
   box is checked takes its kind as a baseline (an uncheck then a check with no run between keep the list going),
   and an item numbered at or below the oldest one stored for its kind is not new. To follow an item once opened,
-  add a `github_pr` watch.
+  add a `github_pr` or `github_issue` watch.
+- A `github_issue` watch (config `repo`, `number`, `api_url`, like `github_pr`) follows one issue: 2 GitHub
+  requests per run (3 past 100 comments). Events, each with `number`, `title`, `url`: `issue.state_changed`
+  (`from`, `to`: `open` or `closed`, plus `state_reason` as GitHub reports it, e.g. `completed`, `not_planned`,
+  `reopened`, `""` when none; a closed issue whose reason changes emits it too, `from` and `to` both `closed`), `issue.labels_changed` (`from`, `to`: label names, sorted) and `issue.commented`
+  (`author`, `excerpt`; `url` is the comment's). A number that is a pull request fails the run: watch it with
+  `github_pr`.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,

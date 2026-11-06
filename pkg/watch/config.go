@@ -21,6 +21,7 @@ import (
 const (
 	KindGitHubRepo    = "github_repo"
 	KindGitHubPR      = "github_pr"
+	KindGitHubIssue   = "github_issue"
 	KindGitLabRelease = "gitlab_release"
 	KindGitLabMR      = "gitlab_mr"
 	KindOCITags       = "oci_tags"
@@ -34,7 +35,7 @@ const (
 )
 
 // Kinds lists the watch kinds in display order.
-var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitLabRelease, KindGitLabMR, KindOCITags}
+var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitLabRelease, KindGitLabMR, KindOCITags}
 
 // CredentialKinds lists the credential kinds.
 var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBasic}
@@ -42,7 +43,7 @@ var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBas
 // CredentialKindFor is the only credential kind a watch of this kind accepts.
 func CredentialKindFor(kind string) string {
 	switch kind {
-	case KindGitHubRepo, KindGitHubPR:
+	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue:
 		return CredGitHubToken
 	case KindGitLabRelease, KindGitLabMR:
 		return CredGitLabToken
@@ -74,6 +75,9 @@ type GitHubPRConfig struct {
 	Number int    `json:"number"`
 	APIURL string `json:"api_url"`
 }
+
+// GitHubIssueConfig is the normalized config of a github_issue watch: an alias, so it validates exactly like github_pr's.
+type GitHubIssueConfig = GitHubPRConfig
 
 // GitLabReleaseConfig is the normalized config of a gitlab_release watch.
 type GitLabReleaseConfig struct {
@@ -110,6 +114,7 @@ var (
 var defaultHosts = map[string][]string{
 	KindGitHubRepo:    {"api.github.com"},
 	KindGitHubPR:      {"api.github.com"},
+	KindGitHubIssue:   {"api.github.com"},
 	KindGitLabRelease: {"gitlab.com"},
 	KindGitLabMR:      {"gitlab.com"},
 	KindOCITags:       {dockerHub, "ghcr.io"},
@@ -236,6 +241,8 @@ func newConfig(kind string) any {
 		return &GitHubRepoConfig{}
 	case KindGitHubPR:
 		return &GitHubPRConfig{}
+	case KindGitHubIssue:
+		return &GitHubIssueConfig{}
 	case KindGitLabRelease:
 		return &GitLabReleaseConfig{}
 	case KindGitLabMR:

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gedour/gedour/internal/testupstream"
+	"github.com/gedour/gedour/pkg/watch"
 )
 
 // summary renders events as "type subject payload" so whole diffs compare in one assertion.
@@ -381,7 +382,92 @@ func TestAdapter(t *testing.T) {
 	if s := (&Credential{Kind: "github_token", Secret: "ghp_secret"}).String(); s != "credential(github_token, redacted)" {
 		t.Fatal(s)
 	}
-	if len(Collectors()) != 5 {
+	if len(Collectors()) != len(watch.Kinds) {
 		t.Fatal("one collector per kind")
+	}
+}
+
+// 008-AC9: github_issue normalizes the issue and its comments; a→b closes it as not planned, adds a
+// label and a comment.
+func TestGitHubIssueFixtures(t *testing.T) {
+	norm := func(set string) IssueState {
+		s, err := normalizeGitHubIssue(testupstream.Part("github_issue", set, "issue"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), testupstream.Part("github_issue", set, "comments")); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	a, b := norm("a"), norm("b")
+	const title = "`gh run watch` exits 0 when the run is cancelled"
+	want := IssueState{Number: 9400, State: "open", Title: title, Labels: []string{"bug"}, URL: "https://github.com/cli/cli/issues/9400",
+		Comments: []PRComment{{Author: "renata-q", CreatedAt: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC),
+			URL: "https://github.com/cli/cli/issues/9400#issuecomment-3600001", Excerpt: "Same on 2.62.0, Linux."}}}
+	if !reflect.DeepEqual(a, want) {
+		t.Fatalf("state A:\n got  %+v\n want %+v", a, want)
+	}
+	if b.StateReason != "not_planned" || !slices.Equal(b.Labels, []string{"bug", "wontfix"}) {
+		t.Fatalf("state B: %+v", b)
+	}
+	const base = `"number":9400,"title":"` + title + `"`
+	const url = `"url":"https://github.com/cli/cli/issues/9400"`
+	check(t, summary(t, diffIssue(a, b)), []string{
+		`issue.state_changed "open">"closed" {"from":"open",` + `"number":9400,"state_reason":"not_planned","title":"` + title + `","to":"closed",` + url + `}`,
+		`issue.labels_changed ["bug"]>["bug","wontfix"] {"from":["bug"],` + base + `,"to":["bug","wontfix"],` + url + `}`,
+		`issue.commented https://github.com/cli/cli/issues/9400#issuecomment-3600002 {"author":"maintainer","excerpt":"This is by design: a cancelled run is not a failure. Closing.",` +
+			base + `,"url":"https://github.com/cli/cli/issues/9400#issuecomment-3600002"}`,
+	})
+}
+
+// 008-AC9: each facet alone, the reopen, and the baselines.
+func TestDiffIssue(t *testing.T) {
+	at := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	c := func(n int) PRComment {
+		return PRComment{Author: "alice", CreatedAt: at.Add(time.Duration(n) * time.Minute), URL: fmt.Sprintf("u%d", n), Excerpt: "hi"}
+	}
+	open := IssueState{Number: 12, State: "open", Title: "T", Labels: []string{"bug"}, URL: "x", Comments: []PRComment{c(1)}}
+	with := func(f func(*IssueState)) IssueState {
+		s := open
+		s.Labels = slices.Clone(open.Labels)
+		s.Comments = slices.Clone(open.Comments)
+		f(&s)
+		return s
+	}
+	closed := with(func(s *IssueState) { s.State, s.StateReason = "closed", "completed" })
+	for _, tt := range []struct {
+		name     string
+		old, cur IssueState
+		want     []string
+	}{
+		{"unchanged", open, open, []string{}},
+		{"closed completed", open, closed, []string{`issue.state_changed "open">"closed" {"from":"open","number":12,"state_reason":"completed","title":"T","to":"closed","url":"x"}`}},
+		{"closed no reason", open, with(func(s *IssueState) { s.State = "closed" }),
+			[]string{`issue.state_changed "open">"closed" {"from":"open","number":12,"state_reason":"","title":"T","to":"closed","url":"x"}`}},
+		{"reopened", closed, with(func(s *IssueState) { s.StateReason = "reopened" }),
+			[]string{`issue.state_changed "closed">"open" {"from":"closed","number":12,"state_reason":"reopened","title":"T","to":"open","url":"x"}`}},
+		{"reason change while closed", closed, with(func(s *IssueState) { s.State, s.StateReason = "closed", "duplicate" }),
+			[]string{`issue.state_changed "closed:completed">"closed:duplicate" {"from":"closed","number":12,"state_reason":"duplicate","title":"T","to":"closed","url":"x"}`}},
+		{"reason change and label", closed, with(func(s *IssueState) { s.State, s.StateReason, s.Labels = "closed", "not_planned", []string{} }), []string{
+			`issue.state_changed "closed:completed">"closed:not_planned" {"from":"closed","number":12,"state_reason":"not_planned","title":"T","to":"closed","url":"x"}`,
+			`issue.labels_changed ["bug"]>[] {"from":["bug"],"number":12,"title":"T","to":[],"url":"x"}`}},
+		{"reason set on an open issue is no event", open, with(func(s *IssueState) { s.StateReason = "reopened" }), []string{}},
+		{"label added", open, with(func(s *IssueState) { s.Labels = []string{"bug", "triage"} }),
+			[]string{`issue.labels_changed ["bug"]>["bug","triage"] {"from":["bug"],"number":12,"title":"T","to":["bug","triage"],"url":"x"}`}},
+		{"label removed", open, with(func(s *IssueState) { s.Labels = []string{} }),
+			[]string{`issue.labels_changed ["bug"]>[] {"from":["bug"],"number":12,"title":"T","to":[],"url":"x"}`}},
+		{"new comments", open, with(func(s *IssueState) { s.Comments = []PRComment{c(1), c(2), c(3)} }), []string{
+			`issue.commented u2 {"author":"alice","excerpt":"hi","number":12,"title":"T","url":"u2"}`,
+			`issue.commented u3 {"author":"alice","excerpt":"hi","number":12,"title":"T","url":"u3"}`}},
+		{"comment slid back is old", with(func(s *IssueState) { s.Comments = []PRComment{c(5)} }), with(func(s *IssueState) { s.Comments = []PRComment{c(4), c(5)} }), []string{}},
+		{"no comments stored is a baseline", with(func(s *IssueState) { s.Comments = nil }), with(func(s *IssueState) { s.Comments = []PRComment{c(1), c(2)} }), []string{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			check(t, summary(t, diffIssue(tt.old, tt.cur)), tt.want)
+		})
+	}
+	if _, err := normalizeGitHubIssue([]byte(`{"message":"Not Found"}`)); err == nil {
+		t.Fatal("issue without state accepted")
 	}
 }

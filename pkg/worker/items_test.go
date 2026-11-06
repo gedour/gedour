@@ -271,3 +271,47 @@ func TestRepoBoxToggleBaselines(t *testing.T) {
 		t.Fatalf("states with an issue list: %d", n)
 	}
 }
+
+// failComments wraps the fake upstream: fail answers 500 on an issue's comments.
+type failComments struct {
+	up   *testupstream.Server
+	fail atomic.Bool
+}
+
+func (u *failComments) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if u.fail.Load() && strings.HasSuffix(r.URL.Path, "/comments") {
+		http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
+		return
+	}
+	u.up.ServeHTTP(w, r)
+}
+
+// 008-AC9: a failing comments call fails a github_issue run: no state, no events, on the baseline and later.
+func TestIssueCommentsCallFails(t *testing.T) {
+	e := newEnv(t)
+	up := &failComments{up: testupstream.New()}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.addWatch(t, "github_issue", fmt.Sprintf(`{"repo":"cli/cli","number":%s,"api_url":%q}`, testupstream.IssueNumber, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	run := func(k int, fail bool, status string, states int) {
+		t.Helper()
+		up.fail.Store(fail)
+		e.clock.set(t0.Add(time.Duration(k) * time.Hour))
+		tick(t, w)
+		r := e.row(t, id)
+		if *r.status != status || (fail && (r.lastErr == nil || !strings.Contains(*r.lastErr, "/comments") || !strings.Contains(*r.lastErr, "HTTP 500"))) {
+			t.Fatalf("run %d: %s %v", k, *r.status, r.lastErr)
+		}
+		if n := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id); n != states {
+			t.Fatalf("run %d: %d states, want %d", k, n, states)
+		}
+		if ev := e.events(t, id); len(ev) != 0 {
+			t.Fatalf("run %d: events %v", k, ev)
+		}
+	}
+	run(0, true, "error", 0)
+	run(1, false, "ok", 1)
+	up.up.SetFixture("b")
+	run(2, true, "error", 1)
+}

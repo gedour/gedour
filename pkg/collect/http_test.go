@@ -42,20 +42,27 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 	defer srv.Close()
 	host := strings.TrimPrefix(srv.URL, "http://")
 	for _, tt := range []struct {
-		kind  string
-		cfg   map[string]any
-		types []string
+		kind   string
+		cfg    map[string]any
+		events []string // type and subject
 	}{
 		{"github_repo", map[string]any{"repo": "cli/cli", "include_prereleases": true, "api_url": srv.URL},
-			[]string{"release.promoted", "release.published", "release.published"}},
+			[]string{"release.promoted v2.104.0-rc.1", "release.published v2.103.3", "release.published v2.105.0"}},
 		{"github_pr", map[string]any{"repo": "cli/cli", "number": 14925, "api_url": srv.URL},
-			[]string{"pr.draft_changed", "pr.review_changed", "pr.ci_changed", "pr.commented", "pr.commented", "pr.commented"}},
+			[]string{"pr.draft_changed true>false", `pr.review_changed "review_required">"approved"`, `pr.ci_changed "pending">"success"`,
+				// The first comment comes from /issues/{n}/comments: it pins the fake's PR side of that route.
+				"pr.commented https://github.com/cli/cli/pull/14925#issuecomment-3500002", "pr.commented https://github.com/cli/cli/pull/14925#discussion_r2400001",
+				"pr.commented https://github.com/cli/cli/pull/14925#pullrequestreview-13785781"}},
+		// 008-AC9: fixture b closes the issue as not planned, adds a label and a comment.
+		{"github_issue", map[string]any{"repo": "cli/cli", "number": 9400, "api_url": srv.URL},
+			[]string{`issue.state_changed "open">"closed"`, `issue.labels_changed ["bug"]>["bug","wontfix"]`,
+				"issue.commented https://github.com/cli/cli/issues/9400#issuecomment-3600002"}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner"},
-			[]string{"release.published", "release.published", "release.published", "release.published", "release.published"}},
+			[]string{"release.published v19.3.5", "release.published v19.3.6", "release.published v19.3.7", "release.published v19.3.8", "release.published v19.4.0"}},
 		{"gitlab_mr", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner", "iid": 7764},
-			[]string{"mr.state_changed", "mr.approval_changed", "mr.pipeline_changed"}},
+			[]string{`mr.state_changed "opened">"merged"`, `mr.approval_changed {"approved":false,"count":0}>{"approved":true,"count":1}`, `mr.pipeline_changed "running">"success"`}},
 		{"oci_tags", map[string]any{"registry": host, "repository": "library/postgres", "tag_regex": `^\d+(\.\d+)?$`, "semver_only": true},
-			[]string{"tag.created", "tag.created"}},
+			[]string{"tag.created 17.6", "tag.created 18.1"}},
 	} {
 		t.Run(tt.kind, func(t *testing.T) {
 			c := Collectors()[tt.kind]
@@ -80,10 +87,10 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 			}
 			var got []string
 			for _, e := range events {
-				got = append(got, e.Type)
+				got = append(got, e.Type+" "+e.Subject)
 			}
-			if strings.Join(got, ",") != strings.Join(tt.types, ",") {
-				t.Fatalf("events %v, want %v", got, tt.types)
+			if !slices.Equal(got, tt.events) {
+				t.Fatalf("events %q, want %q", got, tt.events)
 			}
 		})
 	}
@@ -488,6 +495,75 @@ func TestGitHubPRLastCommentPage(t *testing.T) {
 			var s PRState
 			if err != nil || json.Unmarshal(raw, &s) != nil || len(s.Comments) != 1 || s.Comments[0].URL != tt.want {
 				t.Fatalf("got %s, %v", raw, err)
+			}
+		})
+	}
+}
+
+// 008-AC10: the issues endpoint answers for a PR too; a github_issue watch on one fails naming github_pr.
+func TestGitHubIssueOnPR(t *testing.T) {
+	for name, body := range map[string]string{
+		"pull_request object": `{"number":7,"state":"open","pull_request":{"url":"https://api.github.com/repos/a/b/pulls/7"}}`,
+		"pull_request empty":  `{"number":7,"state":"closed","pull_request":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			comments := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/comments") {
+					comments++
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			_, err := Collectors()["github_issue"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 7, "api_url": srv.URL}), nil)
+			if err == nil || !strings.Contains(err.Error(), "#7 is a pull request") || !strings.Contains(err.Error(), "github_pr") || comments != 0 {
+				t.Fatalf("err %v, comment calls %d", err, comments)
+			}
+		})
+	}
+	// "pull_request": null is an issue (a GitHub-compatible server may send it).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/comments") {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"number":7,"state":"open","pull_request":null,"labels":null}`))
+	}))
+	defer srv.Close()
+	raw, err := Collectors()["github_issue"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 7, "api_url": srv.URL}), nil)
+	if err != nil || !strings.Contains(string(raw), `"labels":[]`) || !strings.Contains(string(raw), `"comments":[]`) {
+		t.Fatalf("%s, %v", raw, err)
+	}
+}
+
+// 008-AC9: a failing issue or comments call, or an unreadable comments page, fails the run with no state.
+func TestGitHubIssueCallFails(t *testing.T) {
+	const issue = `{"number":7,"state":"open","labels":[]}`
+	for _, tt := range []struct {
+		name, issue, comments string
+		status                int // of the failing call
+		want                  string
+	}{
+		{"issue 500", "", `[]`, http.StatusInternalServerError, "/issues/7: HTTP 500"},
+		{"comments 500", issue, "", http.StatusInternalServerError, "/issues/7/comments?per_page=100: HTTP 500"},
+		{"comments not a list", issue, `{"message":"x"}`, 0, "decode issue comments"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := tt.issue
+				if strings.HasSuffix(r.URL.Path, "/comments") {
+					body = tt.comments
+				}
+				if body == "" {
+					http.Error(w, `{"message":"boom"}`, tt.status)
+					return
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			raw, err := Collectors()["github_issue"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 7, "api_url": srv.URL}), nil)
+			if err == nil || raw != nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("state %s, err %v; want %q", raw, err, tt.want)
 			}
 		})
 	}

@@ -204,7 +204,7 @@ func TestHiddenInput(t *testing.T) {
 
 // A config's fields reach both tools from the structs, so a new one cannot be forgotten.
 func TestConfigFieldsInDescriptions(t *testing.T) {
-	structs := map[string]any{watch.KindGitHubRepo: watch.GitHubRepoConfig{}, watch.KindGitHubPR: watch.GitHubPRConfig{}, watch.KindGitLabRelease: watch.GitLabReleaseConfig{},
+	structs := map[string]any{watch.KindGitHubRepo: watch.GitHubRepoConfig{}, watch.KindGitHubPR: watch.GitHubPRConfig{}, watch.KindGitHubIssue: watch.GitHubIssueConfig{}, watch.KindGitLabRelease: watch.GitLabReleaseConfig{},
 		watch.KindGitLabMR: watch.GitLabMRConfig{}, watch.KindOCITags: watch.OCITagsConfig{}}
 	if len(structs) != len(watch.Kinds) {
 		t.Fatalf("%d structs for %d kinds", len(structs), len(watch.Kinds))

@@ -88,7 +88,7 @@ type SampleEvent struct {
 // SampleWatch is the watch a sample event claims to come from.
 type SampleWatch struct {
 	Name string `json:"name" maxLength:"200"`
-	Kind string `json:"kind,omitempty" enum:"github_repo,github_pr,gitlab_release,gitlab_mr,oci_tags"`
+	Kind string `json:"kind,omitempty" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
 }
 
 type dryRunInput struct {

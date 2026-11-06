@@ -125,3 +125,64 @@ func assertFilters(t *testing.T, pool *pgxpool.Pool, want map[string]string) {
 		}
 	}
 }
+
+// 008 phase 3: github_issue joins the kind CHECK on a phase 2 DB; the down refuses to run while a
+// github_issue watch exists rather than delete it, then runs once none is left.
+func TestGitHubIssueKindMigration(t *testing.T) {
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, testpg.NewDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = sqlDB.Close() }()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, os.DirFS("migrations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpTo(ctx, 15); err != nil {
+		t.Fatalf("up to 15: %v", err)
+	}
+	insert := func(name, kind string) error {
+		_, err := pool.Exec(ctx, `INSERT INTO watches (owner_id, name, kind, config) SELECT id, $1, $2, '{"repo":"a/b","number":1}' FROM users`, name, kind)
+		return err
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := insert("pr", "github_pr"); err != nil {
+		t.Fatal(err)
+	}
+	if insert("early", "github_issue") == nil {
+		t.Fatal("github_issue accepted before the up")
+	}
+	if _, err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := insert("issue", "github_issue"); err != nil {
+		t.Fatalf("github_issue refused after the up: %v", err)
+	}
+	if _, err := provider.DownTo(ctx, 15); err == nil {
+		t.Fatal("down ran with a github_issue watch left")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE kind IN ('github_issue', 'github_pr')`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("watches after the refused down: %d, %v", n, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM watches WHERE kind = 'github_issue'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 15); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if insert("late", "github_issue") == nil {
+		t.Fatal("github_issue accepted after the down")
+	}
+	if _, err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if err := insert("issue", "github_issue"); err != nil {
+		t.Fatalf("github_issue refused after the second up: %v", err)
+	}
+}

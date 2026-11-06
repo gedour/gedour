@@ -593,10 +593,16 @@ func diffPR(old, cur PRState) []Event {
 		{"review_changed", old.ReviewDecision, cur.ReviewDecision},
 		{"ci_changed", old.CI, cur.CI},
 	})
-	for _, c := range newComments(old.Comments, cur.Comments) {
+	return append(events, commentEvents("pr.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+}
+
+// commentEvents emits typ for each comment of cur missing from old.
+func commentEvents(typ string, number int, title string, old, cur []PRComment) []Event {
+	var events []Event
+	for _, c := range newComments(old, cur) {
 		at := c.CreatedAt
-		events = append(events, Event{Type: "pr.commented", Subject: c.URL, OccurredAt: &at, Payload: map[string]any{
-			"number": cur.Number, "title": cur.Title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt,
+		events = append(events, Event{Type: typ, Subject: c.URL, OccurredAt: &at, Payload: map[string]any{
+			"number": number, "title": title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt,
 		}})
 	}
 	return events
@@ -644,4 +650,89 @@ func diffFacets(prefix string, base func() map[string]any, facets []facet) []Eve
 		events = append(events, Event{Type: prefix + "." + f.event, Subject: string(fromJSON) + ">" + string(toJSON), Payload: p})
 	}
 	return events
+}
+
+// IssueState is the normalized state of one GitHub issue.
+type IssueState struct {
+	Number      int      `json:"number"`
+	State       string   `json:"state"`        // open or closed
+	StateReason string   `json:"state_reason"` // as GitHub reports it (completed, not_planned, reopened...), empty when null
+	Title       string   `json:"title"`
+	Labels      []string `json:"labels"` // names, sorted, never nil
+	URL         string   `json:"url"`
+	// Comments follow PRState.Comments: nil is a state stored before comments were collected.
+	Comments []PRComment `json:"comments"`
+}
+
+func collectGitHubIssue(ctx context.Context, f *Fetcher, cfg watch.GitHubIssueConfig, cred *Credential) (IssueState, error) {
+	h := githubHeaders(cred)
+	base := fmt.Sprintf("%s/repos/%s/issues/%d", cfg.APIURL, cfg.Repo, cfg.Number)
+	r, err := f.get(ctx, base, h, false)
+	if err != nil {
+		return IssueState{}, err
+	}
+	s, err := normalizeGitHubIssue(r.body)
+	if err != nil {
+		return IssueState{}, err
+	}
+	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
+	if err != nil {
+		return IssueState{}, err
+	}
+	// An issue has conversation comments only: no reviews, no inline comments.
+	if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), comments); err != nil {
+		return IssueState{}, err
+	}
+	return s, nil
+}
+
+// normalizeGitHubIssue reads one issue; a PR, which the issues endpoint also answers for, is an error.
+func normalizeGitHubIssue(body []byte) (IssueState, error) {
+	var raw struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		StateReason string `json:"state_reason"`
+		Title       string `json:"title"`
+		Labels      []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		HTMLURL string `json:"html_url"`
+		// A pointer: "pull_request": null, as a GitHub-compatible server may send, is an issue.
+		PullRequest *struct{} `json:"pull_request"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.State == "" {
+		return IssueState{}, fmt.Errorf("decode issue: no state (%v)", err)
+	}
+	if raw.PullRequest != nil {
+		return IssueState{}, fmt.Errorf("#%d is a pull request: watch it with a github_pr watch", raw.Number)
+	}
+	s := IssueState{Number: raw.Number, State: raw.State, StateReason: raw.StateReason, Title: raw.Title, Labels: []string{}, URL: raw.HTMLURL}
+	for _, l := range raw.Labels {
+		s.Labels = append(s.Labels, l.Name)
+	}
+	slices.Sort(s.Labels)
+	return s, nil
+}
+
+// diffIssue emits issue.state_changed (with the reason) and issue.labels_changed, then one issue.commented per new comment.
+func diffIssue(old, cur IssueState) []Event {
+	base := func() map[string]any {
+		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
+	}
+	events := diffFacets("issue", base, []facet{
+		{"state_changed", old.State, cur.State},
+		{"labels_changed", old.Labels, cur.Labels},
+	})
+	for _, e := range events {
+		if e.Type == "issue.state_changed" {
+			e.Payload["state_reason"] = cur.StateReason
+		}
+	}
+	// A closed issue re-triaged (completed to duplicate...) keeps its state: only the reason tells, and names the subject.
+	if old.State == "closed" && cur.State == "closed" && old.StateReason != cur.StateReason {
+		p := base()
+		p["from"], p["to"], p["state_reason"] = "closed", "closed", cur.StateReason
+		events = append([]Event{{Type: "issue.state_changed", Subject: fmt.Sprintf("%q>%q", "closed:"+old.StateReason, "closed:"+cur.StateReason), Payload: p}}, events...)
+	}
+	return append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
 }

@@ -76,6 +76,19 @@ func TestConfigValidation(t *testing.T) {
 		{"github pr zero", KindGitHubPR, `{"repo":"golang/go","number":0}`, "", []string{"body.config.number"}},
 		{"github pr fraction", KindGitHubPR, `{"repo":"golang/go","number":1.5}`, "", []string{"body.config.number"}},
 		{"github pr missing number and bad repo", KindGitHubPR, `{"repo":"x"}`, "", []string{"body.config.repo", "body.config.number"}},
+		// 008-AC11: github_issue checks repo, number and api_url like github_pr.
+		{"github issue", KindGitHubIssue, `{"repo":"cli/cli","number":9400}`,
+			`{"api_url":"https://api.github.com","number":9400,"repo":"cli/cli"}`, nil},
+		{"github issue enterprise", KindGitHubIssue, `{"repo":"o/r","number":1,"api_url":"https://ghe.example/api/v3/"}`,
+			`{"api_url":"https://ghe.example/api/v3","number":1,"repo":"o/r"}`, nil},
+		{"github issue zero", KindGitHubIssue, `{"repo":"cli/cli","number":0}`, "", []string{"body.config.number"}},
+		{"github issue negative", KindGitHubIssue, `{"repo":"cli/cli","number":-3}`, "", []string{"body.config.number"}},
+		{"github issue fraction", KindGitHubIssue, `{"repo":"cli/cli","number":1.5}`, "", []string{"body.config.number"}},
+		{"github issue number string", KindGitHubIssue, `{"repo":"cli/cli","number":"12"}`, "", []string{"body.config.number"}},
+		{"github issue missing number and bad repo", KindGitHubIssue, `{"repo":"a/b/c"}`, "", []string{"body.config.repo", "body.config.number"}},
+		{"github issue no repo", KindGitHubIssue, `{"number":1}`, "", []string{"body.config.repo"}},
+		{"github issue http api", KindGitHubIssue, `{"repo":"a/b","number":1,"api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
+		{"github issue unknown field", KindGitHubIssue, `{"repo":"a/b","number":1,"new_issues":true}`, "", []string{"body.config.new_issues"}},
 		{"gitlab release defaults", KindGitLabRelease, `{"project":"gitlab-org/gitlab"}`,
 			`{"base_url":"https://gitlab.com","project":"gitlab-org/gitlab"}`, nil},
 		{"gitlab nested self-hosted", KindGitLabRelease, `{"project":"/grp/sub/proj/","base_url":"https://git.example"}`,
@@ -152,7 +165,7 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("last4(%q) = %q", in, got)
 		}
 	}
-	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken,
+	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken, KindGitHubIssue: CredGitHubToken,
 		KindGitLabRelease: CredGitLabToken, KindGitLabMR: CredGitLabToken, KindOCITags: CredRegistryBasic} {
 		if CredentialKindFor(kind) != want {
 			t.Errorf("%s: %s", kind, CredentialKindFor(kind))

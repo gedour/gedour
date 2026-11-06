@@ -21,6 +21,13 @@ describe("stateLine", () => {
       { state: "open", draft: true, review_decision: "review_required", ci: "pending" },
       "open (draft) · review review required · CI pending",
     ],
+    ["github_issue", { state: "open", state_reason: "", labels: ["bug"] }, "open · bug"],
+    [
+      "github_issue",
+      { state: "closed", state_reason: "not_planned", labels: ["bug", "wontfix"] },
+      "closed (not planned) · bug, wontfix",
+    ],
+    ["github_issue", { state: "open", state_reason: "reopened", labels: null }, "open"],
     [
       "gitlab_mr",
       {

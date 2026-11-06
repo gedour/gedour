@@ -58,6 +58,27 @@ describe("WatchFormPage (new)", () => {
     expect(screen.queryByRole("checkbox", { name: "Report new issues" })).not.toBeInTheDocument();
   });
 
+  // 008-AC13: an issue URL picks the GitHub issue card and fills its fields.
+  it("picks GitHub issue from a pasted issue URL", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    await userEvent.type(screen.getByLabelText(/Paste a URL/), "https://github.com/o/r/issues/12");
+    expect(kindCard("GitHub issue")).toBeChecked();
+    expect(screen.getByText(/State, labels and comments of one issue/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository")).toHaveValue("o/r");
+    expect(screen.getByLabelText("Issue number")).toHaveValue(12);
+    expect(screen.getByLabelText("Name")).toHaveValue("o/r #12");
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toMatchObject({
+      kind: "github_issue",
+      config: { repo: "o/r", number: 12 },
+    });
+  });
+
   it("keeps compatible fields when the kind changes", async () => {
     mockApi({ "/api/v1/credentials": { items: [] } });
     renderApp("/watches/new");

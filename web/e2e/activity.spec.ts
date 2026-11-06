@@ -645,3 +645,48 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
   await call("DELETE", `/api/v1/rules/${ruleId}`);
   await call("DELETE", `/api/v1/watches/${id}`);
 });
+
+// 008-AC13, 008-AC9: a pasted issue URL picks the GitHub issue kind; the baseline is quiet, then fixture B's
+// close (not planned), new label and new comment show in the timeline.
+test("an issue watch reports a close and a comment", async ({ page }) => {
+  const t = tag();
+  await page.goto("/watches/new");
+  await setFixture(page, "a");
+  await page.getByLabel("Paste a URL").fill("https://github.com/cli/cli/issues/9400");
+  await expect(page.getByText("Recognized: GitHub issue")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /GitHub issue/ })).toBeChecked();
+  await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("cli/cli");
+  await expect(page.getByLabel("Issue number")).toHaveValue("9400");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByLabel("Name").fill(`Issue ${t}`);
+  await page.getByRole("button", { name: "Create watch" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: `Issue ${t}` })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/").pop() as string;
+  const call = await api(page);
+  await expect
+    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+      timeout: 15_000,
+    })
+    .toBe("ok");
+
+  await setFixture(page, "b");
+  await page.reload();
+  await expect(page.getByText("No changes yet")).toBeVisible();
+  await page
+    .getByRole("region", { name: "Status" })
+    .getByRole("button", { name: "Run now" })
+    .click();
+  await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
+    [
+      /Issue #9400 commented by maintainer/,
+      /Issue #9400 labels: bug, wontfix/,
+      /Issue #9400 closed \(not planned\)/,
+    ],
+    { timeout: 15_000 },
+  );
+  await page.getByRole("tab", { name: "State" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("closed (not planned)");
+
+  await setFixture(page, "a");
+  await call("DELETE", `/api/v1/watches/${id}`);
+});

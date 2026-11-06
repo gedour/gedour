@@ -1,4 +1,12 @@
-import { Container, GitMerge, GitPullRequest, Rocket, Tag, type LucideIcon } from "lucide-react";
+import {
+  CircleDot,
+  Container,
+  GitMerge,
+  GitPullRequest,
+  Rocket,
+  Tag,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { CredentialKind, Watch, WatchConfig, WatchKind } from "@/types/api";
 
@@ -26,6 +34,14 @@ export const KINDS: KindInfo[] = [
     label: "GitHub pull request",
     blurb: "State, reviews and CI of one PR",
     icon: GitPullRequest,
+    credential: "github_token",
+    defaultSchedule: "1h",
+  },
+  {
+    kind: "github_issue",
+    label: "GitHub issue",
+    blurb: "State, labels and comments of one issue",
+    icon: CircleDot,
     credential: "github_token",
     defaultSchedule: "1h",
   },
@@ -125,6 +141,11 @@ export const FIELDS: Record<WatchKind, FieldSpec[]> = {
     { key: "number", label: "Pull request number", type: "number", placeholder: "123" },
     GITHUB_API,
   ],
+  github_issue: [
+    REPO,
+    { key: "number", label: "Issue number", type: "number", placeholder: "123" },
+    GITHUB_API,
+  ],
   gitlab_release: [GITLAB_URL, PROJECT],
   gitlab_mr: [
     GITLAB_URL,
@@ -192,6 +213,7 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
     case "github_repo":
       return c.new_issues === true || c.new_prs === true ? String(c.repo) : `${c.repo} releases`;
     case "github_pr":
+    case "github_issue":
       return `${c.repo} #${c.number}`;
     case "gitlab_release":
       return `${c.project} releases`;
@@ -209,6 +231,7 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
 const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
   github_repo: ["api_url", "https://api.github.com"],
   github_pr: ["api_url", "https://api.github.com"],
+  github_issue: ["api_url", "https://api.github.com"],
   gitlab_release: ["base_url", "https://gitlab.com"],
   gitlab_mr: ["base_url", "https://gitlab.com"],
   oci_tags: ["registry", "docker.io"],

@@ -57,6 +57,7 @@ describe("targetSummary", () => {
     ["github_repo", { repo: "golang/go", new_issues: true }, "golang/go"],
     ["github_repo", { repo: "golang/go", new_prs: true }, "golang/go"],
     ["github_pr", { repo: "golang/go", number: 5 }, "golang/go #5"],
+    ["github_issue", { repo: "cli/cli", number: 9400 }, "cli/cli #9400"],
     ["gitlab_release", { project: "a/b" }, "a/b releases"],
     ["gitlab_mr", { project: "a/b", iid: 9 }, "a/b !9"],
     ["oci_tags", { registry: "docker.io", repository: "library/postgres" }, "postgres tags"],

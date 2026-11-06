@@ -858,6 +858,7 @@
             "enum": [
               "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2244,6 +2245,7 @@
             "enum": [
               "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2678,6 +2680,7 @@
             "enum": [
               "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2784,6 +2787,7 @@
             "enum": [
               "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -4899,6 +4903,7 @@
               "enum": [
                 "github_repo",
                 "github_pr",
+                "github_issue",
                 "gitlab_release",
                 "gitlab_mr",
                 "oci_tags"

@@ -196,6 +196,10 @@ func (s *Service) runWatch(ctx context.Context, in *idPath) (*watchOutput, error
 		if before.Paused {
 			return huma.Error409Conflict("the watch is paused: resume it to run it")
 		}
+		// A person may override the upstream's hold; an unattended client would refetch with the owner's credential.
+		if audit.APIKeyID(ctx) != "" && before.LastStatus != nil && *before.LastStatus == "rate_limited" && before.NextRunAt.After(time.Now()) {
+			return huma.Error409Conflict("the upstream's rate limit holds this watch until " + before.NextRunAt.UTC().Format(time.RFC3339))
+		}
 		if _, err := tx.Exec(ctx, `UPDATE watches SET next_run_at = now() WHERE id = $1`, in.ID); err != nil {
 			return err
 		}

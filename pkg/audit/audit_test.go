@@ -279,6 +279,64 @@ func TestList(t *testing.T) {
 	}
 }
 
+// 007-AC26: an entry names the key it was made with, by name while the key lives, by ID after. An old pod's INSERT, which names no such column, still works.
+func TestAPIKeyColumn(t *testing.T) {
+	pool := newPool(t)
+	ctx := context.Background()
+	viewer := newUser(t, pool, "viewer")
+	var keyID string
+	if err := pool.QueryRow(ctx, `INSERT INTO api_keys (user_id, name, hash, prefix, scope) VALUES ($1, 'ci client', '\x00', 'abcdefgh', 'write') RETURNING id::text`, viewer).Scan(&keyID); err != nil {
+		t.Fatal(err)
+	}
+	record := func(ctx context.Context, action string) {
+		t.Helper()
+		if err := db.InTx(ctx, pool, func(tx pgx.Tx) error {
+			return Record(ctx, tx, Entry{ActorUserID: viewer, Action: action, TargetType: "x", TargetID: "1"})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(WithAPIKey(ctx, keyID), "with.key")
+	record(ctx, "with.session")
+	if _, err := pool.Exec(ctx, `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, before, after, request_id, on_behalf_of)
+		VALUES ($1, 'old.pod', 'x', '1', NULL, NULL, '', NULL)`, viewer); err != nil {
+		t.Fatal(err)
+	}
+	byAction := func() map[string]Item {
+		t.Helper()
+		items, _, err := List(ctx, pool, Query{Viewer: viewer, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]Item{}
+		for _, it := range items {
+			out[it.Action] = it
+		}
+		return out
+	}
+	got := byAction()
+	if it := got["with.key"]; it.APIKeyID == nil || *it.APIKeyID != keyID || it.APIKeyName == nil || *it.APIKeyName != "ci client" {
+		t.Fatalf("%+v", it)
+	}
+	for _, action := range []string{"with.session", "old.pod"} {
+		if it := got[action]; it.APIKeyID != nil || it.APIKeyName != nil {
+			t.Fatalf("%s: %+v", action, it)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, keyID); err != nil {
+		t.Fatal(err)
+	}
+	if it := byAction()["with.key"]; it.APIKeyID == nil || *it.APIKeyID != keyID || it.APIKeyName != nil {
+		t.Fatalf("key gone: %+v", it)
+	}
+	// Neither name is one the audit's safety net would blank, should the fields ever pass through it.
+	for _, field := range []string{"api_key_id", "api_key_name"} {
+		if IsSecretKey(field) {
+			t.Errorf("%s reads as a secret", field)
+		}
+	}
+}
+
 func TestItemJSON(t *testing.T) {
 	b, err := json.Marshal(Item{})
 	if err != nil {

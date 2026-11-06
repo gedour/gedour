@@ -735,6 +735,54 @@ func (e *env) history(t *testing.T, id string) (latest string, events []string) 
 	return latest, events
 }
 
+// 007-AC26: a 429 during the run outranks a run-now made before it, or a key's run_watch would cancel the upstream's hold. Any other failure keeps the request, and a changed target still runs at once.
+func TestRunNowDuringRunAgainstOutcome(t *testing.T) {
+	until := t0.Add(17 * time.Minute)
+	runNow := t0.Add(time.Second)
+	for _, tt := range []struct {
+		name     string
+		runErr   error
+		retarget bool
+		status   string
+		want     time.Time
+	}{
+		{"rate limited", &collect.RateLimitError{Until: until, URL: "https://api.github.com/x"}, false, "rate_limited", until},
+		{"failed", errors.New("boom"), false, "error", runNow},
+		{"retarget", &collect.RateLimitError{Until: until, URL: "https://api.github.com/x"}, true, "", runNow},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			id := e.addWatch(t, "github_release", `{}`, "1m")
+			started, release := make(chan struct{}, 1), make(chan struct{})
+			w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+				started <- struct{}{}
+				<-release
+				return nil, tt.runErr
+			})})
+			var run sync.WaitGroup
+			run.Go(func() { tick(t, w) })
+			<-started
+			edit := `UPDATE watches SET next_run_at = $2 WHERE id = $1`
+			if tt.retarget {
+				edit = `UPDATE watches SET next_run_at = $2, config = '{"moved": true}' WHERE id = $1`
+			}
+			if _, err := e.pool.Exec(context.Background(), edit, id, runNow); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			run.Wait()
+			r := e.row(t, id)
+			status := ""
+			if r.status != nil {
+				status = *r.status
+			}
+			if status != tt.status || !r.next.Equal(tt.want) {
+				t.Fatalf("%q, next %v, want %v", status, r.next, tt.want)
+			}
+		})
+	}
+}
+
 // 001-AC9: a run-now (or an edit, a resume) while a run is in flight makes the watch due again but
 // cannot start a second run: the lease is apart from next_run_at. The request is kept for after.
 func TestRunNowDuringRunWaitsForTheLease(t *testing.T) {

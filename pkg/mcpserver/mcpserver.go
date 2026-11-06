@@ -31,8 +31,13 @@ const (
 	keyRate  = 5.0
 	keyBurst = 20.0
 	maxBody  = 1 << 20
+	// A burst of 6, then one every 10 s: a call makes the worker fetch from an upstream, which a request's size does not show.
+	limitedRate  = 6.0 / 60
+	limitedBurst = 6.0
 	// dispatchTimeout stays under the server's 30 s WriteTimeout: a legacy client's call is detached from its request.
 	dispatchTimeout = 25 * time.Second
+	// Versions compare as strings, as the SDK does; older client SDKs read a 404 as a transport failure, not as the JSON-RPC error it carries.
+	notFoundFrom = "2026-07-28"
 
 	outcomeOK       = "ok"
 	outcomeError    = "error"
@@ -41,11 +46,19 @@ const (
 
 const instructions = "gedour reports changes on watched upstream projects. " + untrustedWarning
 
+// servedMethods is what reaches the SDK: its other methods decode their params on a goroutine nothing can recover (see ServeHTTP), for no feature gedour offers.
+// ping, notifications/cancelled and notifications/roots/list_changed have no feature either; legacy clients send them, and an error back would fail those clients.
+var servedMethods = map[string]bool{
+	"initialize": true, "notifications/initialized": true, "ping": true, "server/discover": true, "tools/list": true, "tools/call": true,
+	"notifications/cancelled": true, "notifications/roots/list_changed": true,
+}
+
 type handler struct {
 	authn        *auth.Service
 	log          *zap.Logger
 	inner        http.Handler
 	limits       *ratelimit.Limiter
+	limited      *ratelimit.Limiter
 	sdk          http.Handler
 	servers      map[string]*mcp.Server
 	order        map[string]int
@@ -74,7 +87,7 @@ func New(doc *huma.OpenAPI, inner http.Handler, authn *auth.Service, log *zap.Lo
 }
 
 func newHandler(tools []*tool, inner http.Handler, authn *auth.Service, log *zap.Logger, reg prometheus.Registerer, version string) *handler {
-	h := &handler{authn: authn, log: log, inner: inner, limits: ratelimit.New(keyRate, keyBurst), servers: map[string]*mcp.Server{}, order: map[string]int{}, tools: tools,
+	h := &handler{authn: authn, log: log, inner: inner, limits: ratelimit.New(keyRate, keyBurst), limited: ratelimit.New(limitedRate, limitedBurst), servers: map[string]*mcp.Server{}, order: map[string]int{}, tools: tools,
 		calls: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
 			Name: "gedour_mcp_tool_calls_total",
 			Help: "MCP tool calls by tool and outcome (ok, error: isError, rejected: a protocol error such as a tool above the key's scope).",
@@ -122,8 +135,12 @@ func (t *tool) sdkTool() *mcp.Tool {
 	if strings.HasPrefix(t.name, "list_") {
 		desc += " " + untrustedWarning
 	}
-	return &mcp.Tool{Name: t.name, Description: desc, InputSchema: t.schema,
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: t.readOnly, OpenWorldHint: new(false)}}
+	annotations := &mcp.ToolAnnotations{ReadOnlyHint: t.readOnly, OpenWorldHint: new(t.openWorld)}
+	// MCP's default is true, which fits only manage's edits: read and write tools destroy nothing.
+	if t.scope != scopeManage {
+		annotations.DestructiveHint = new(false)
+	}
+	return &mcp.Tool{Name: t.name, Description: desc, InputSchema: t.schema, Annotations: annotations}
 }
 
 func writeProblem(w http.ResponseWriter, status int, detail string) {
@@ -164,6 +181,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusTooManyRequests, "too many requests for this key")
 		return
 	}
+	fields := []zap.Field{zap.String("key_id", p.KeyID), zap.String("user_id", p.User.ID), zap.String("request_id", audit.RequestID(r.Context()))}
 	if r.Method == http.MethodPost {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 		var tooBig *http.MaxBytesError
@@ -179,10 +197,45 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusBadRequest, "JSON-RPC batches are not served")
 			return
 		}
+		// A body it cannot decode, or a client's response, stays the SDK's to refuse. Same decoder as the SDK's, so both read the same method.
+		if req := decodeRequest(body); req != nil {
+			if !servedMethods[req.Method] {
+				// Never the method: the client chooses it.
+				h.log.Info("mcp_method_refused", fields...)
+				writeMethodNotFound(w, r, req)
+				return
+			}
+			fields = append(fields, zap.String("method", req.Method))
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
+	// Past here SDK code runs on goroutines of its own (jsonrpc2.handleAsync): a panic there ahead of or behind wrap ends the process, and this line names the key.
+	h.log.Info("mcp_request", fields...)
 	ctx := context.WithValue(r.Context(), callerKey{}, &caller{KeyPrincipal: p, url: h.authn.PublicBase(r)})
-	h.sdk.ServeHTTP(w, r.WithContext(ctx))
+	h.sdk.ServeHTTP(&refusalWriter{ResponseWriter: w}, r.WithContext(ctx))
+}
+
+func decodeRequest(body []byte) *jsonrpc.Request {
+	msg, err := jsonrpc.DecodeMessage(body)
+	if err != nil {
+		return nil
+	}
+	req, _ := msg.(*jsonrpc.Request)
+	return req
+}
+
+func writeMethodNotFound(w http.ResponseWriter, r *http.Request, req *jsonrpc.Request) {
+	data, err := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "method not served"}})
+	// A notification has no ID to answer with.
+	if err != nil || !req.IsCall() {
+		writeProblem(w, http.StatusNotFound, "method not served")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if r.Header.Get("MCP-Protocol-Version") >= notFoundFrom {
+		w.WriteHeader(http.StatusNotFound)
+	}
+	_, _ = w.Write(data)
 }
 
 // wrap guards twice: outside, so observe's own code cannot end the process; inside, so a handler's panic still gets its mcp_tool_call line.
@@ -190,12 +243,10 @@ func (h *handler) wrap(next mcp.MethodHandler) mcp.MethodHandler {
 	return h.guard(h.observe(h.guard(next)))
 }
 
-// observe logs every tools/call, restores the table's order the SDK sorts away, and refuses the one method that would hold a connection open.
+// observe logs every tools/call and restores the table's order the SDK sorts away.
 func (h *handler) observe(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		switch method {
-		case "subscriptions/listen":
-			return nil, &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "subscriptions are not served"}
 		case "tools/list":
 			res, err := next(ctx, method, req)
 			// On a refusal the SDK returns a typed nil beside the error.
@@ -281,6 +332,9 @@ func (h *handler) call(t *tool) mcp.ToolHandlerFor[map[string]any, any] {
 		if !ok {
 			return nil, nil, errors.New("no caller on the context")
 		}
+		if t.limited && !h.limited.Allow(c.KeyID) {
+			return errorResult("Too many calls of this kind for this key: a burst of 6, then one every 10 s, per replica. Try again later."), nil, nil
+		}
 		rec, err := h.dispatch(ctx, t, c, args)
 		switch {
 		case errors.Is(err, errInvalidArgument):
@@ -288,6 +342,7 @@ func (h *handler) call(t *tool) mcp.ToolHandlerFor[map[string]any, any] {
 		case err != nil:
 			h.log.Error("mcp_dispatch_failed", zap.String("tool", t.name), zap.String("request_id", audit.RequestID(ctx)), zap.Error(err))
 		case rec.status >= 200 && rec.status < 300:
+			// A nil Out: from any other value the SDK would build a structured field beside the text (see fence).
 			return shaped(t, rec.body.String(), args, noticeFor(c, time.Now())), nil, nil
 		case rec.status >= 400 && rec.status < 500:
 			return problemResult(rec.body.String()), nil, nil
@@ -317,7 +372,7 @@ func shaped(t *tool, body string, args map[string]any, notice string) *mcp.CallT
 
 // dispatch serves the tool's operation on inner, as REST would for the key's user.
 func (h *handler) dispatch(ctx context.Context, t *tool, c *caller, args map[string]any) (*recorder, error) {
-	ctx, cancel := context.WithTimeout(auth.WithKeyPrincipal(ctx, c.KeyPrincipal), dispatchTimeout)
+	ctx, cancel := context.WithTimeout(audit.WithAPIKey(auth.WithKeyPrincipal(ctx, c.KeyPrincipal), c.KeyID), dispatchTimeout)
 	defer cancel()
 	path := t.path
 	query := url.Values{}

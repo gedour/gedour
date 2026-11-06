@@ -332,10 +332,10 @@ func (w *Worker) finish(ctx context.Context, j job, state json.RawMessage, f *co
 			_, err = tx.Exec(ctx, `UPDATE watches SET last_run_at = $2, last_status = 'ok', last_error = NULL,
 				consecutive_failures = 0, `+scheduleNext+` WHERE id = $1`, j.id, now, next, j.due)
 		case errors.As(runErr, &rl):
-			// 001-AC11: wait for the reset instead of hammering; not a failure.
+			// 001-AC11: wait for the reset instead of hammering; not a failure. A fresh 429 outranks a run-now made before it, so no scheduleNext.
 			status = "rate_limited"
-			_, err = tx.Exec(ctx, `UPDATE watches SET last_run_at = $2, last_status = 'rate_limited', last_error = $5,
-				`+scheduleNext+` WHERE id = $1`, j.id, now, rateLimitNext(rl.Until, now), j.due, truncate(runErr.Error()))
+			_, err = tx.Exec(ctx, `UPDATE watches SET last_run_at = $2, last_status = 'rate_limited', last_error = $4,
+				next_run_at = $3, claim_token = NULL, leased_until = NULL WHERE id = $1`, j.id, now, rateLimitNext(rl.Until, now), truncate(runErr.Error()))
 		default:
 			// 001-AC10: exponential backoff from now, capped at 8 intervals.
 			status = "error"

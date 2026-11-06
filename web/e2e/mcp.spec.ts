@@ -51,10 +51,12 @@ test("use a key from the UI on /mcp, then revoke it", async ({ page, playwright,
   expect(count.status()).toBe(200);
   const { result } = await count.json();
   expect(result.isError ?? false).toBe(false);
-  expect(result.structuredContent.trust).toBe("untrusted_third_party");
+  const fence = /<untrusted-data nonce="([^"]+)">\n([\s\S]*)<\/untrusted-data nonce="\1">$/.exec(
+    result.content[0].text,
+  );
+  expect(fence).not.toBeNull();
   // The seed left bob 3 events; the keyboard spec may have read one.
-  expect(result.structuredContent.data.unread).toBeGreaterThanOrEqual(0);
-  expect(result.content[0].text).toContain("<untrusted-data nonce=");
+  expect(JSON.parse(fence?.[2] ?? "").unread).toBeGreaterThanOrEqual(0);
 
   const row = page.getByRole("row").filter({ hasText: name });
   await row.getByRole("button", { name: "Revoke" }).click();

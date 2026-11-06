@@ -763,6 +763,7 @@ func TestInboxAPI(t *testing.T) {
 		a.problemOf(t, alice, http.MethodGet, "/api/v1/inbox?"+q, nil, http.StatusBadRequest)
 	}
 	a.problemOf(t, alice, http.MethodPost, "/api/v1/inbox/read", map[string]any{"ids": []int64{}}, http.StatusBadRequest)
+	a.problemOf(t, alice, http.MethodPost, "/api/v1/inbox/read", map[string]any{"ids": nil}, http.StatusBadRequest)
 }
 
 // 005-AC1: priority through the API, default normal, unknown values refused; a row without one reads normal.

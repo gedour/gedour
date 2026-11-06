@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"maps"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -105,6 +106,44 @@ func sanitizeError(res mcp.Result, err error) {
 	}
 }
 
+// refusalWriter sanitizes what the SDK answers ahead of observe: its header-mismatch errors echo the caller's input verbatim.
+type refusalWriter struct {
+	http.ResponseWriter
+	refused bool
+}
+
+func (w *refusalWriter) WriteHeader(status int) {
+	w.refused = status >= 400
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *refusalWriter) Write(b []byte) (int, error) {
+	if !w.refused {
+		return w.ResponseWriter.Write(b)
+	}
+	if _, err := w.ResponseWriter.Write(sanitizeBody(b)); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+// sanitizeBody decodes first: in JSON a control character travels as an escape sequence. The top-level id stays as the SDK echoes it, which correlates the reply.
+func sanitizeBody(b []byte) []byte {
+	var v map[string]any
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if dec.Decode(&v) == nil {
+		clean, _ := sanitize(v).(map[string]any)
+		if id, ok := v["id"]; ok {
+			clean["id"] = id
+		}
+		if out, err := json.Marshal(clean); err == nil {
+			return out
+		}
+	}
+	return []byte(strings.Map(sanitizeRune, string(b)))
+}
+
 func errorResult(text string) *mcp.CallToolResult {
 	return textResult(text, true)
 }
@@ -122,7 +161,7 @@ func problemResult(body string) *mcp.CallToolResult {
 	return errorResult(text)
 }
 
-// fence shapes a successful answer: data is sanitized, marked untrusted, and fenced with a nonce a payload cannot have guessed.
+// fence shapes a successful answer: data is sanitized and fenced, with a warning, by a nonce a payload cannot have guessed.
 func fence(data any, notice string) *mcp.CallToolResult {
 	data = sanitize(data)
 	var buf bytes.Buffer
@@ -132,17 +171,17 @@ func fence(data any, notice string) *mcp.CallToolResult {
 	if err := enc.Encode(data); err != nil {
 		return errorResult("the result could not be encoded")
 	}
-	if buf.Len() > maxResult {
-		return errorResult("The result is over 512 KiB: call again with a smaller limit.")
-	}
 	nonce := rand.Text()
 	text := untrustedWarning + "\n<untrusted-data nonce=\"" + nonce + "\">\n" + buf.String() + "</untrusted-data nonce=\"" + nonce + "\">"
 	if notice != "" {
 		text = notice + "\n" + text
 	}
-	res := textResult(text, false)
-	res.StructuredContent = map[string]any{"trust": "untrusted_third_party", "data": data}
-	return res
+	// The block a client receives, not just the JSON inside it.
+	if len(text) > maxResult {
+		return errorResult("The result is over 512 KiB: call again with a smaller limit.")
+	}
+	// Text alone: Claude Code gives its model only the structured field when a result has one, so the fence, the warning and the notice would never reach it.
+	return textResult(text, false)
 }
 
 // noticeFor warns in a key's last days; a 401 would never reach its owner, the client's LLM does.

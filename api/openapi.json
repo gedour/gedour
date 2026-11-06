@@ -420,10 +420,7 @@
             },
             "maxItems": 500,
             "minItems": 1,
-            "type": [
-              "array",
-              "null"
-            ]
+            "type": "array"
           }
         },
         "required": [
@@ -1404,6 +1401,20 @@
           "after": {
             "description": "State after the change, secrets redacted; null on delete"
           },
+          "api_key_id": {
+            "description": "API key the change was made with; null otherwise",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api_key_name": {
+            "description": "That key's name, for its owner only: null otherwise, and once the key is gone",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "at": {
             "format": "date-time",
             "type": "string"
@@ -1443,6 +1454,8 @@
           "actor_name",
           "on_behalf_of",
           "on_behalf_of_name",
+          "api_key_id",
+          "api_key_name",
           "action",
           "target_type",
           "target_id",

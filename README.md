@@ -226,22 +226,32 @@ Or in `.mcp.json`, with the key in an environment variable:
 | `list_rules` | Routing rules, with filters | |
 | `get_rule` | One rule | |
 | `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
+| `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
+| `archive_inbox`, `unarchive_inbox` | Archive items or take them back: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
+| `run_watch` | Schedules a run of a watch the owner can write and does not wait; refused on a paused watch, a read-only share, or while the upstream's rate limit holds the watch | `write` key; a burst of 6, then one every 10 s, per key and replica |
 
-A key sees what its owner sees through the REST API: the `read` row above says what that reaches. No tool
-takes a URL, a host or a free-form object.
+A key sees what its owner sees through the REST API. A `read` key reaches the first nine rows and gets `-32602` on the
+others. A `write` key also changes inbox state and schedules watch runs, nothing else. No tool takes a URL, a host or a
+free-form object.
 
-- **Untrusted output**: release notes, titles and errors come from third parties. Every successful result fences them with
-  a nonce and a warning, and drops C0 and C1 controls but tab, LF and CR, format characters (Unicode Cf: bidi,
+`run_watch` writes `watch.run_requested` in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
+or once the key is gone. Inbox marks are not audited, as on REST; the log lines cover them.
+
+- **Untrusted output**: release notes, titles and errors come from third parties. Every successful result is one text block: any notice about the key, a warning, then the data
+  fenced with a nonce. The data drops C0 and C1 controls but tab, LF and CR, format characters (Unicode Cf: bidi,
   zero-width, tags) and U+2028, U+2029. Other invisible characters, such as variation selectors, stay. No fence stops a model that decides
   to obey: review what your client does with the tools it holds.
-- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. A body over 1 MiB gets 413,
-  a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
+- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. On top, `run_watch` has a burst of 6, then one every 10 s, per key and replica
+  (`isError`). A body over 1 MiB gets 413, a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
+- **Methods**: at every protocol version `tools/list`, `tools/call` and `notifications/cancelled`; from `2026-07-28` `server/discover`; below it (a request with no version header counts) `initialize` and `ping`.
+  `notifications/initialized` and `notifications/roots/list_changed` pass at every version, with no effect from `2026-07-28`. Any other method gets `-32601`, at 404 from `2026-07-28` and at 200 below it. An unserved notification gets a plain 404.
 - **Refusals**: a missing or invalid key gets 401, an `Origin` outside `GEDOUR_PUBLIC_URL` 403; in dev mode, only
   loopback `Host` and `Origin` pass. A dormant key still lists tools, and each call answers with the URL to sign in at.
   In a key's last 7 days, each successful result starts with a notice saying when it stops. OAuth is not offered:
   `/.well-known/` and `/mcp/` answer 404.
-- **Observability**: one `mcp_tool_call` log line per call (key ID, user ID, tool, outcome, duration, request ID, the one an internal error quotes; never the key
-  or the arguments), and the metrics `gedour_mcp_tool_calls_total{tool,outcome}` and `gedour_mcp_auth_failures_total`.
+- **Observability**: one `mcp_request` log line per request that reaches the SDK, written before it does (key ID, user ID, request ID, and the
+  JSON-RPC method when the body has a served one), and one `mcp_tool_call` line per call (key ID, user ID, tool, outcome, duration, request ID, the one an internal error quotes);
+  neither holds the key or the arguments. A refused method logs `mcp_method_refused`, without the method. In JSON format, the logger samples at 100 lines per second per message, then one in 100, but never `mcp_request`, `mcp_tool_call`, `mcp_handler_panic`, `mcp_dispatch_failed` or `mcp_dispatch_unexpected_status`. Metrics: `gedour_mcp_tool_calls_total{tool,outcome}` and `gedour_mcp_auth_failures_total`.
 
 ## Collection
 
@@ -249,7 +259,7 @@ takes a URL, a host or a free-form object.
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
   `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
-  the watch reads `running: true`, and the request is kept for when the run ends.
+  the watch reads `running: true`, and the request is kept for when the run ends, unless that run ends on the upstream's rate limit, which sets the next run; a changed target still runs at once.
 - Default schedule: `1h` for GitHub watches (unauthenticated GitHub allows 60 requests an hour per
   address), `15m` for the others; any schedule can be set explicitly.
 - Next run: interval schedules ±10 % jitter, cron schedules at their next activation (UTC). Errors back

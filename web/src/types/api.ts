@@ -36,6 +36,9 @@ export interface AuditItem {
   /** User the actor was acting as (006-AC16). */
   on_behalf_of: string | null;
   on_behalf_of_name: string;
+  /** Key the change was made with (007-AC26); its name is null for others than its owner, and once the key is gone. */
+  api_key_id: string | null;
+  api_key_name: string | null;
 }
 
 export interface AuditPage {

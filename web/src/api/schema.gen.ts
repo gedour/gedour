@@ -980,7 +980,7 @@ export interface components {
     };
     BulkInputBody: {
       /** @description Inbox item IDs; others' items are ignored */
-      ids: number[] | null;
+      ids: number[];
     };
     BulkOutputBody: {
       /** Format: int64 */
@@ -1367,6 +1367,10 @@ export interface components {
       actor_user_id: string | null;
       /** @description State after the change, secrets redacted; null on delete */
       after: unknown;
+      /** @description API key the change was made with; null otherwise */
+      api_key_id: string | null;
+      /** @description That key's name, for its owner only: null otherwise, and once the key is gone */
+      api_key_name: string | null;
       /** Format: date-time */
       at: string;
       /** @description State before the change, secrets redacted; null on create */

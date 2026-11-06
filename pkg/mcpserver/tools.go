@@ -26,6 +26,10 @@ var scopeRank = map[string]int{scopeRead: 0, scopeWrite: 1, scopeManage: 2}
 type row struct {
 	name, op, scope, desc string
 	readOnly              bool
+	// openWorld: the call makes gedour reach outside itself.
+	openWorld bool
+	// limited: the call spends the key's budget of costly calls, on top of the request limit.
+	limited bool
 	// limitDefault and limitMax narrow the operation's limit; 0 keeps the operation's value.
 	limitDefault, limitMax int
 	shape                  func(data any, args map[string]any)
@@ -45,6 +49,12 @@ var rows = []row{
 	{name: "get_rule", op: "get-rule", scope: scopeRead, readOnly: true, desc: "Read one routing rule."},
 	{name: "list_deliveries", op: "list-deliveries", scope: scopeRead, readOnly: true, limitMax: 50, shape: dropDeliveryDiagnostics,
 		desc: "List notification deliveries, newest first, without script logs or errors."},
+	{name: "mark_inbox_read", op: "read-inbox", scope: scopeWrite, desc: "Mark inbox items read. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "mark_inbox_unread", op: "unread-inbox", scope: scopeWrite, desc: "Mark inbox items unread. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "archive_inbox", op: "archive-inbox", scope: scopeWrite, desc: "Archive inbox items. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "unarchive_inbox", op: "unarchive-inbox", scope: scopeWrite, desc: "Take inbox items out of the archive. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "run_watch", op: "run-watch", scope: scopeWrite, openWorld: true, limited: true,
+		desc: "Schedule a run of a watch now; the worker runs it, this call does not wait; refused while the upstream's rate limit holds the watch. A burst of 6, then one every 10 s, per replica."},
 }
 
 // tool is a row resolved against the OpenAPI document.

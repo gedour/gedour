@@ -147,6 +147,11 @@ Fixed order, so client prompt caches hold ([spec SHOULD](https://modelcontextpro
 | `archive_inbox` | `archive-inbox` | write | false | |
 | `unarchive_inbox` | `unarchive-inbox` | write | false | |
 | `run_watch` | `run-watch` | write | false | Schedules the run through the worker; does not wait |
+
+The read and write tools also set `destructiveHint: false`: MCP defaults it to true.
+
+| Tool | Operation | Scope | `readOnlyHint` | Output changes |
+|---|---|---|---|---|
 | `get_filter_reference` | `get-filter-reference` | manage | true | |
 | `list_channels` | `list-channels` | manage | true | `id`, `name`, `type` only: rules need the IDs, nothing else leaves |
 | `create_watch` | `create-watch` | manage | false | No `credential_id` input |
@@ -187,8 +192,8 @@ host. So a request made with a key, in the REST handlers so there is one path:
   attacker's server.
 
 **Rate limits.** Per key, per replica, with the `route` limiter moved to a shared package, unchanged:
-5 requests/s with a burst of 20 on `POST /mcp` (HTTP 429 and `Retry-After`), 6 calls/minute on top for `run_watch`
-and the four manage mutations together (`isError`). `create_watch` refuses past 200 owned watches, as REST has no
+5 requests/s with a burst of 20 on `POST /mcp` (HTTP 429 and `Retry-After`), and on top a burst of 6 then one every
+10 s for `run_watch` and the four manage mutations together (`isError`). `create_watch` refuses past 200 owned watches, as REST has no
 cap and each watch costs the worker a fetch; rules already have `MaxRules`. Body capped at 1 MiB (413). Auth runs before the body is read. A wrong key costs one primary key
 lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limiter.
 
@@ -202,17 +207,21 @@ lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limit
 
 Bounded by expiry (none on a `never` key), the sign-in freshness check and revocation.
 
-**Logging.** One `mcp_tool_call` line per call: request ID, key ID, user ID, tool, outcome, duration. Never the key, the
+**Logging.** One `mcp_request` line after authentication and before the SDK sees the request (request ID, key ID, user ID, method), so the last such line before a crash names the key. One `mcp_tool_call` line per call: request ID, key ID, user ID, tool, outcome, duration. Never the key, the
 `Authorization` header or the arguments. The SDK gets no logger. Metrics: `gedour_mcp_tool_calls_total{tool,outcome}`,
-`gedour_mcp_auth_failures_total`. The audit stores key ID, name, scope and expiry, never the key or its hash.
+`gedour_mcp_auth_failures_total`. The audit stores key ID, name, scope and expiry, never the key or its hash. In JSON format the logger samples every message but `mcp_request`, `mcp_tool_call`, `mcp_handler_panic`, `mcp_dispatch_failed` and `mcp_dispatch_unexpected_status`: a dropped line would break both claims, and the sampler still caps what anyone can trigger.
 
 **Audit attribution.** Write tools reach `audit.Record` through their REST handler. A context tag, as with
-`audit.WithActing`, adds `api_key_id` to the row. Inbox marks are not audited on REST and stay so; the log line
+`audit.WithActing`, adds `api_key_id` to the row, and the audit item returns it with the key's name, only to the key's owner: the name is a private label, and others see the ID, as for a deleted key. Inbox marks are not audited on REST and stay so; the log line
 covers them.
 
 **Origin and DNS rebinding.** Origin absent: allowed, native clients send none. Origin present: must match a
 `GEDOUR_PUBLIC_URL` entry (a loopback origin in dev mode), else 403 before auth. The SDK's localhost protection is turned off if it refuses a
 legitimate proxy hop on loopback (checked in phase 2), since Origin and the dev-mode check cover the same risk.
+
+**Method allowlist.** `POST /mcp` serves `tools/list`, `tools/call` and `notifications/cancelled` at every protocol version, `server/discover` from 2026-07-28, and `initialize` and `ping` below it. `notifications/initialized` and `notifications/roots/list_changed` pass at every version, with no effect from 2026-07-28. Any other method gets `-32601` before the SDK sees it, at 404 from 2026-07-28 and at 200 below it, as older client SDKs read a 404 as a transport failure. An unserved notification gets a plain 404, as it has no ID to answer. Fewer SDK decoders are reachable, `subscriptions/listen` included.
+
+**Crash surface.** The SDK runs each message on a goroutine it spawns, with no `recover` and no option for one (go-sdk v1.8.0). Our guard covers tool handlers and the receiving middleware. A panic in SDK code ahead of or behind them would kill the process. `TestMCPOddRequestsSurvive` sends targeted shapes against that code and none panics; a decoder bug remains possible, is reachable only with a valid key, costs a pod restart, and `mcp_request` names the key. A body the SDK refuses at 400 or above is sanitized before it leaves, as the SDK echoes method and tool names raw.
 
 **Discovery probes.** `GET /` serves the SPA on any path, so `/.well-known/oauth-protected-resource/mcp` would
 answer HTML with 200 to a client probing for OAuth. `GET /.well-known/` and `GET /mcp/` answer 404, the latter for path-suffixed probes.
@@ -245,8 +254,8 @@ Data from third-party sources (release notes, tags, titles, error messages). Rep
 ```
 
 - The nonce is random per response, so a payload cannot close the fence.
-- `structuredContent` holds `{"trust": "untrusted_third_party", "data": ...}`.
-- Before both, every string, map keys included, loses C0 and C1 controls except tab, LF and CR, every format
+- No `structuredContent`: Claude Code 2.1.318 passes only that field to the model when a result has it, which would drop the fence, the warning and the key notices. The spec's SHOULD pairs text with structured content; a result may be text alone.
+- Before fencing, every string, map keys included, loses C0 and C1 controls except tab, LF and CR, every format
   character (Unicode category Cf: bidi controls, zero-width characters, U+FEFF, Unicode tags) and the line and
   paragraph separators U+2028 and U+2029. Emoji joined by U+200D come apart. Variation selectors and other blank characters stay: this removes known smuggling characters, not every invisible one.
 - `ServerOptions.Instructions` and each list tool's description repeat the warning.
@@ -308,11 +317,11 @@ Tools:
 - [ ] **AC23** `tools/list` returns 9 tools to a `read` key, 14 to a `write` key and all 20 to a `manage` key, in the table's order, with `cacheScope: private`. A key calling a tool above its scope gets `-32602` and nothing changes.
 - [ ] **AC24** Each read tool returns the REST data of that user. Alice's key on Bob's watch gets `isError` not found. A shared watch reads. `run_watch` on a read-only share gets `isError` forbidden.
 - [ ] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog.
-- [ ] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`. A REST audit row has `api_key_id` null. The audit view shows the key's name, or its ID once the key is gone.
-- [ ] **AC27** Every successful result fences its text with a nonce differing between two calls, and `structuredContent` has `trust` and `data`. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
-- [ ] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it, in text and in `structuredContent`. Tab and newline stay.
+- [ ] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`, and so does a key's call while the upstream's rate limit holds the watch (`last_status` `rate_limited`, `next_run_at` ahead): a person's "run now" may override that hold, an unattended client may not. A 429 ending a run outranks a run-now made during that run. A REST audit row has `api_key_id` null. The audit view shows the key's name to its owner, and its ID to others or once the key is gone.
+- [ ] **AC27** Every successful result is one text block fenced with a nonce differing between two calls, with no `structuredContent`, and a real client's model receives the fence. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
+- [ ] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it. Tab and newline stay.
 - [ ] **AC29** `list_inbox` cuts a 64 KiB body at 8 KiB and says so; `list_deliveries` has no `logs` and no `last_error`; `list_watches` says `truncated` when it returns as many as its limit; `limit` above the tool's max gets `isError`; a result over 512 KiB gets `isError` asking for a smaller `limit`.
-- [ ] **AC30** Past the burst, `POST /mcp` gets 429 with `Retry-After`, per key. The 7th `run_watch` in a minute gets `isError`. A body over 1 MiB gets 413.
+- [ ] **AC30** Past the burst, `POST /mcp` gets 429 with `Retry-After`, per key. The 7th `run_watch` in a burst gets `isError`, and one more passes after 10 s. A body over 1 MiB gets 413.
 - [ ] **AC31** Logs captured over the AC15 to AC30 scenarios never contain a key or arguments, and contain one `mcp_tool_call` per call. Both metrics move.
 
 - [ ] **AC40** 7 days or less before a key's effective end, every successful result starts with the matching notice from the Account state section, outside the fence, naming the date and a configured public URL even under a forged `Host` (dev mode: its checked loopback `Host`). 8 days before, no notice. A dormant key's message and this notice appear only to a caller holding that key.
@@ -329,7 +338,7 @@ Manage:
 - [ ] **AC36** With a key, a config naming an unknown host gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
 - [ ] **AC37** `create_rule` and `update_rule` keep the REST checks: another user's channel or an unreadable watch gets `isError`, a bad filter gets `isError` with the field, `MaxRules` holds.
 - [ ] **AC38** `list_channels` returns only `id`, `name` and `type`: a webhook channel's URL and `last4` appear nowhere in the result.
-- [ ] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a minute, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
+- [ ] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
 
 ## Phases
 

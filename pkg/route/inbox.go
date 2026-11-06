@@ -53,7 +53,7 @@ type countOutput struct {
 
 type bulkInput struct {
 	Body struct {
-		IDs []int64 `json:"ids" minItems:"1" maxItems:"500" doc:"Inbox item IDs; others' items are ignored"`
+		IDs []int64 `json:"ids" nullable:"false" minItems:"1" maxItems:"500" doc:"Inbox item IDs; others' items are ignored"`
 	}
 }
 

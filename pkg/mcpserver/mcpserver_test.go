@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -91,13 +92,87 @@ func TestBuildToolsRefuses(t *testing.T) {
 
 // The real table builds against nothing but its own operations: a typo in it fails here too.
 func TestCatalogOrder(t *testing.T) {
-	want := []string{"count_inbox", "list_inbox", "list_watches", "get_watch", "list_watch_events", "list_watch_states", "list_rules", "get_rule", "list_deliveries"}
+	want := []string{"count_inbox", "list_inbox", "list_watches", "get_watch", "list_watch_events", "list_watch_states", "list_rules", "get_rule", "list_deliveries",
+		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch"}
 	if len(rows) != len(want) {
 		t.Fatalf("%d rows", len(rows))
 	}
 	for i, r := range rows {
 		if r.name != want[i] {
 			t.Errorf("row %d: %s, want %s", i, r.name, want[i])
+		}
+	}
+}
+
+// 007-AC30: a burst of 6, then one every 10 s, on the real constants: the refusal says so, and the fake clock proves it.
+func TestLimitedRefill(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := testHandler(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }), []row{{name: "b", op: "bare", scope: scopeWrite}})
+		call := h.call(&tool{row: row{name: "b", limited: true}, method: "GET", path: "/api/v1/bare"})
+		spend := func() *mcp.CallToolResult {
+			res, _, err := call(callCtx(auth.KeyPrincipal{KeyID: "k"}), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return res
+		}
+		for i := range 6 {
+			if res := spend(); res.IsError {
+				t.Fatalf("call %d: %+v", i+1, res)
+			}
+		}
+		res := spend()
+		if !res.IsError || !strings.Contains(textOf(t, res), "a burst of 6, then one every 10 s, per replica") {
+			t.Fatalf("7th: %+v", res)
+		}
+		time.Sleep(9 * time.Second)
+		if !spend().IsError {
+			t.Fatal("refilled before 10 s")
+		}
+		time.Sleep(11 * time.Second) // the refused call above took no token: 20 s since the bucket emptied
+		for i, wantRefused := range []bool{false, false, true} {
+			if spend().IsError != wantRefused {
+				t.Fatalf("20 s must give back exactly 2: call %d", i+1)
+			}
+		}
+		time.Sleep(10 * time.Minute)
+		for i := range 6 {
+			if spend().IsError {
+				t.Fatalf("a long wait refills to the burst: call %d", i+1)
+			}
+		}
+		if !spend().IsError {
+			t.Fatal("the bucket holds more than the burst")
+		}
+	})
+}
+
+// The top-level id stays as the SDK echoes it, or the reply no longer correlates; everything else is sanitized, and so is a plain-text answer.
+func TestSanitizeBody(t *testing.T) {
+	rlo := string(rune(0x202E))
+	for _, tt := range []struct{ name, in, want string }{
+		{"string id", `{"id":"a` + rlo + `b","error":{"message":"m` + rlo + `"}}`, `{"error":{"message":"m"},"id":"a` + rlo + `b"}`},
+		{"escaped control in the id", `{"id":"a\u0001b","error":{"message":"m\u0001"}}`, `{"error":{"message":"m"},"id":"a\u0001b"}`},
+		// The SDK echoes a larger ID lossily: this keeps what it echoes exact, not what the caller sent.
+		{"number id as the SDK echoes it", `{"id":-9223372036854775808,"error":{"message":"m"}}`, `{"error":{"message":"m"},"id":-9223372036854775808}`},
+		{"nested id is data", `{"error":{"data":{"id":"a` + rlo + `"}}}`, `{"error":{"data":{"id":"a"}}}`},
+		{"no id", `{"error":{"message":"m` + rlo + `"}}`, `{"error":{"message":"m"}}`},
+		{"plain text", "bad" + rlo + " payload\n", "bad payload\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := string(sanitizeBody([]byte(tt.in))); got != tt.want {
+				t.Fatalf("%q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Read and write tools say they destroy nothing, as MCP's default says they may; manage's edits keep the default.
+func TestDestructiveHint(t *testing.T) {
+	for scope, want := range map[string]*bool{scopeRead: new(false), scopeWrite: new(false), scopeManage: nil} {
+		got := (&tool{row: row{scope: scope}}).sdkTool().Annotations.DestructiveHint
+		if (got == nil) != (want == nil) || (got != nil && *got) {
+			t.Errorf("%s: %v", scope, got)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"regexp"
 	"slices"
@@ -175,6 +176,7 @@ var (
 
 // reference is the unit of the time gates: case mapping and a regular expression, the work of the worst filters. It
 // calls no code of this package, so a slower filter does not slow it, and a slower machine slows both.
+// Ceiling: expr calls these same strings and regexp functions, so a Go release slowing them cancels out here; the cost model is the deterministic guard.
 func reference() {
 	for range 4 {
 		referenceSink = strings.ToUpper(strings.ToLower(referenceText))
@@ -188,7 +190,7 @@ func timed(f func()) time.Duration {
 	return time.Since(start)
 }
 
-// referenceWindow caps how long one run's reference runs: a rule set takes seconds, and noise averages out well before.
+// referenceWindow caps how long one run's reference runs: a worst shape takes 500 ms under the race detector, and noise averages out well before.
 const referenceWindow = 250 * time.Millisecond
 
 // references is what f costs in references, the median of the runs, so one outlier either way changes nothing. The
@@ -207,6 +209,17 @@ func references(f func(), runs int) float64 {
 	}
 	slices.Sort(ratios)
 	return ratios[runs/2]
+}
+
+// interleaved is what n runs of f cost in references, with one reference after each run: over a span of seconds,
+// contention that hits f hits the references too, wherever in the span it falls.
+func interleaved(f func(), n int) float64 {
+	var took, spent time.Duration
+	for range n {
+		took += timed(f)
+		spent += timed(reference)
+	}
+	return float64(took) / (float64(spent) / float64(n))
 }
 
 // Each allowed shape stays under the gate on every worst payload (004-AC10). The cost model is the deterministic guard.
@@ -236,7 +249,8 @@ func TestWorstCaseTiming(t *testing.T) {
 	}
 }
 
-// The gate fails a shape that got slower, on any machine: 6 runs of the slowest shape stand for a regression.
+// The gate fails a shape that got slower: enough runs of the slowest shape for twice the gate stand for a regression,
+// so a faster filter only means more runs.
 func TestWorstCaseTimingCatchesSlowdown(t *testing.T) {
 	env := sample
 	env.Event.Payload = maxPayload()
@@ -248,13 +262,14 @@ func TestWorstCaseTimingCatchesSlowdown(t *testing.T) {
 			slowest, most = progs[src], took
 		}
 	}
+	runs := int(math.Ceil(2 * filterGate / most))
 	slowed := func() {
-		for range 6 {
+		for range runs {
 			_, _ = Match(slowest, env)
 		}
 	}
 	if got := references(slowed, 3); got <= filterGate {
-		t.Fatalf("6 times the slowest shape took %.1f references, under the gate of %.0f", got, filterGate)
+		t.Fatalf("%d runs of the slowest shape took %.1f references, under the gate of %.0f", runs, got, filterGate)
 	}
 }
 
@@ -278,11 +293,7 @@ func TestRuleSetBound(t *testing.T) {
 		slices.SortFunc(srcs, func(a, b string) int { return cmp.Compare(times[b], times[a]) })
 		var slowest float64
 		for _, src := range srcs[:3] {
-			took := references(func() {
-				for range 100 {
-					_, _ = Match(progs[src], env)
-				}
-			}, 1)
+			took := interleaved(func() { _, _ = Match(progs[src], env) }, 100)
 			slowest = max(slowest, took)
 			if took > ruleSetGate {
 				t.Errorf("%s payload: 100 × %.60q took %.0f references, past %.0f", name, src, took, ruleSetGate)

@@ -171,19 +171,37 @@ func TestRetargetResetsBaseline(t *testing.T) {
 		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); n != 0 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("retarget kept %d rows, next=%v", n, w.NextRunAt)
 	}
-	// 008: a new-items box keeps the states and the schedule, and drops only the ETags.
+	// 008: checking a new-items box keeps the states, drops the ETags and makes the watch due for its baseline.
 	seed()
 	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true}}, http.StatusOK, &w)
 	if s, c := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID),
-		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 || time.Until(w.NextRunAt) < 24*time.Hour {
+		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("box checked: states=%d cache=%d next=%v", s, c, w.NextRunAt)
 	}
+	// A box staying on is no change; the second box going on is.
+	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true}}, http.StatusOK, &w)
+	if time.Until(w.NextRunAt) < 24*time.Hour {
+		t.Fatalf("box staying on made the watch due: next=%v", w.NextRunAt)
+	}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true, "new_prs": true}}, http.StatusOK, &w)
+	if time.Until(w.NextRunAt) > time.Minute {
+		t.Fatalf("second box checked: next=%v", w.NextRunAt)
+	}
+	// Unchecking changes nothing on the schedule.
+	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
 	a.exec(t, `INSERT INTO http_cache (watch_id, url, etag) VALUES ($1, 'https://api.github.com/x', '"e"')`, w.ID)
 	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools"}}, http.StatusOK, &w)
 	if s, c := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID),
-		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 {
-		t.Fatalf("box unchecked: states=%d cache=%d", s, c)
+		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 || time.Until(w.NextRunAt) < 24*time.Hour {
+		t.Fatalf("box unchecked: states=%d cache=%d next=%v", s, c, w.NextRunAt)
 	}
+	// A paused watch stays paused: its first run after the resume takes the baseline.
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"paused": true, "config": map[string]any{"repo": "golang/tools", "new_issues": true}}, http.StatusOK, &w)
+	if a.countRows(t, `SELECT count(*) FROM watches WHERE id = $1 AND paused`, w.ID) != 1 {
+		t.Fatal("box checked on a paused watch resumed it")
+	}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"paused": false, "config": map[string]any{"repo": "golang/tools"}}, http.StatusOK, &w)
 	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/go", "new_prs": true}}, http.StatusOK, &w)
 	if n := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); n != 0 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("repo and box changed: states=%d next=%v", n, w.NextRunAt)

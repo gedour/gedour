@@ -405,7 +405,7 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 			}
 		}
 		held := viaKey && rateLimitHeld(before)
-		if !held && (retargeted || next.Schedule != before.Schedule || (before.Paused && !next.Paused)) {
+		if !held && (retargeted || next.Schedule != before.Schedule || (before.Paused && !next.Paused) || boxChecked(before.Config, next.Config)) {
 			if _, err := tx.Exec(ctx, `UPDATE watches SET next_run_at = now() WHERE id = $1`, in.ID); err != nil {
 				return err
 			}

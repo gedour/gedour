@@ -145,3 +145,9 @@ Repository states grow by up to 50 numbers.
 - With a box on, both requests are unconditional: a 304 on one list would end the run before the other.
 - Default schedule `1h` for `github_issue`, like `github_pr`: the unauthenticated GitHub budget is 60
   requests an hour.
+- Checking a box (off to on) makes the watch due now, or an item opened before the next run lands in the baseline
+  and is never reported. A `rate_limited` hold still stands for an API key, as for any other edit. Unchecking moves
+  nothing. What stays: an item opened before that first run succeeds (seconds, unless it fails or a hold applies) is
+  in the baseline.
+- A paused watch stays paused and keeps the gap: its first run after the resume takes the baseline, so items opened
+  between the check and the resume are not reported. Resume first to avoid it.

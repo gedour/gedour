@@ -534,7 +534,7 @@ func TestMCPManageKnownHosts(t *testing.T) {
 	})
 }
 
-// 007-AC41: update_watch cannot walk past the rate-limit hold: schedule, unpause and retarget leave next_run_at alone on a key, and move it on a session or with no hold.
+// 007-AC41: update_watch cannot walk past the rate-limit hold: schedule, unpause, a checked box and retarget leave next_run_at alone on a key, and move it on a session or with no hold.
 func TestMCPManageHold(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
@@ -542,7 +542,7 @@ func TestMCPManageHold(t *testing.T) {
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	hold := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	set := func(status string, at time.Time) {
-		m.exec(t, `UPDATE watches SET last_status = $2, next_run_at = $3, paused = true, schedule = '1h' WHERE id = $1`, w.ID, status, at)
+		m.exec(t, `UPDATE watches SET last_status = $2, next_run_at = $3, paused = true, schedule = '1h', config = config - 'new_issues' WHERE id = $1`, w.ID, status, at)
 	}
 	nextRun := func() time.Time {
 		var at time.Time
@@ -552,6 +552,11 @@ func TestMCPManageHold(t *testing.T) {
 	edits := map[string]func(n int) map[string]any{
 		"schedule": func(int) map[string]any { return map[string]any{"schedule": "3h"} },
 		"unpause":  func(int) map[string]any { return map[string]any{"paused": false} },
+		"box": func(int) map[string]any {
+			var repo string
+			m.scan(t, `SELECT config->>'repo' FROM watches WHERE id = $1`, []any{w.ID}, &repo)
+			return map[string]any{"config": map[string]any{"repo": repo, "new_issues": true}}
+		},
 		"retarget": func(n int) map[string]any {
 			return map[string]any{"config": map[string]any{"repo": fmt.Sprintf("a/b%d", n)}}
 		},

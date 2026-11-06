@@ -115,3 +115,136 @@ test("menus, tooltips and the drawer open without CSP violations", async ({ page
   await page.getByRole("button", { name: /^Theme:/ }).click();
   await expect(page.getByRole("menuitemradio", { name: "Light" })).toBeVisible();
 });
+
+// The sticky bar covers the document's top edge, by a height that depends on the act-as banner.
+const barBottom = (page: Page) =>
+  page.evaluate(
+    () => document.querySelector("header")?.parentElement?.getBoundingClientRect().bottom,
+  );
+
+/** Serves the shell acting or not, with 40 inbox rows and 40 watches so the document scrolls. */
+async function longLists(page: Page, acting: boolean) {
+  await page.route("**/api/v1/me", async (route) => {
+    const res = await route.fetch();
+    const me = (await res.json()) as object;
+    const acting_as = acting ? { id: "x", email: "b@example.test", display_name: "B" } : null;
+    await route.fulfill({ response: res, json: { ...me, acting_as } });
+  });
+  const stamp = new Date().toISOString();
+  const watchRef = { id: "w", name: "Long list", kind: "github_repo" };
+  await page.route(/\/api\/v1\/inbox\?/, (route) =>
+    route.fulfill({
+      json: {
+        items: Array.from({ length: 40 }, (_, i) => ({
+          id: i + 1,
+          created_at: stamp,
+          read_at: stamp,
+          archived_at: null,
+          priority: "normal",
+          event: {
+            id: i + 1,
+            type: "release",
+            occurred_at: stamp,
+            observed_at: stamp,
+            payload: { tag: `v${i}` },
+          },
+          watch: watchRef,
+        })),
+      },
+    }),
+  );
+  await page.route(/\/api\/v1\/watches(\?|$)/, (route) =>
+    route.fulfill({
+      json: {
+        items: Array.from({ length: 40 }, (_, i) => ({
+          id: `w${i}`,
+          name: `Long ${i}`,
+          kind: "github_repo",
+          config: {
+            repo: `o/r${i}`,
+            include_prereleases: false,
+            api_url: "https://api.github.com",
+          },
+          credential_id: null,
+          schedule: "15m",
+          paused: false,
+          owner_id: "x",
+          owner_name: "A",
+          permission: "owner",
+          created_at: stamp,
+          updated_at: stamp,
+          next_run_at: stamp,
+          last_run_at: null,
+          last_status: null,
+          last_error: null,
+          consecutive_failures: 0,
+          running: false,
+        })),
+      },
+    }),
+  );
+}
+
+/** The focused element's top against the bar's bottom; positive when it clears the bar. */
+const focusClearance = (page: Page) =>
+  page.evaluate(() => {
+    const bar =
+      document.querySelector("header")?.parentElement?.getBoundingClientRect().bottom ?? 0;
+    return (document.activeElement?.getBoundingClientRect().top ?? 0) - bar;
+  });
+
+test("the skip link shows on top of the bar and moves focus to the content", async ({ page }) => {
+  await page.goto("/watches");
+  await expect(page.getByRole("heading", { level: 1, name: "Watches" })).toBeVisible();
+  await page.keyboard.press("Tab");
+  const link = page.getByRole("link", { name: "Skip to content" });
+  await expect(link).toBeFocused();
+  const onTop = await link.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el;
+  });
+  expect(onTop).toBe(true);
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#main")).toBeFocused();
+  const h1 = await page.getByRole("heading", { level: 1 }).boundingBox();
+  expect(h1?.y).toBeGreaterThanOrEqual((await barBottom(page)) ?? Infinity);
+});
+
+for (const [width, height] of [
+  [1280, 800],
+  [375, 760],
+] as const) {
+  for (const acting of [false, true]) {
+    test(`focus clears the sticky bar at ${width} px, ${acting ? "acting" : "not acting"}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height });
+      await longLists(page, acting);
+
+      await page.goto("/inbox");
+      await expect(page.locator("#inbox-item-40")).toBeAttached();
+      expect(await barBottom(page)).toBe(acting ? 100 : 56);
+      for (let i = 0; i < 39; i++) await page.keyboard.press("j");
+      await expect(page.locator("#inbox-item-40")).toBeFocused();
+      for (let i = 0; i < 20; i++) {
+        await page.keyboard.press("k");
+        expect(await focusClearance(page)).toBeGreaterThanOrEqual(0);
+      }
+
+      await page.goto("/watches");
+      const rows = page.getByRole("list", { name: "Watches" }).getByRole("link");
+      await expect(rows).toHaveCount(40);
+      await rows.last().focus();
+      for (let i = 0; i < 40; i++) {
+        await page.keyboard.press("Shift+Tab");
+        expect(await focusClearance(page)).toBeGreaterThanOrEqual(0);
+      }
+
+      // The bar and the sidebar are sticky: focus inside them leaves the page where it is.
+      await page.evaluate(() => window.scrollTo(0, 400));
+      await page.getByRole("button", { name: /^Theme:/ }).focus();
+      expect(await page.evaluate(() => window.scrollY)).toBe(400);
+    });
+  }
+}

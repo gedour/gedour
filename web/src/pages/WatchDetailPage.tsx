@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { Field, inputClass } from "@/components/ui/field";
 import { ActivityTabs, StatusCard } from "@/components/WatchActivity";
-import { KindIcon, PausedBadge, SharedBadge } from "@/components/WatchBits";
+import { DeleteWatchWarning, KindIcon, PausedBadge, SharedBadge } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { fieldErrors, problemText } from "@/lib/problems";
 import {
@@ -363,7 +363,7 @@ function DangerZone({ watch }: { watch: Watch }) {
             Danger zone
           </h2>
           <p className="text-sm text-muted">
-            Deleting removes the watch and its shares. Its audit history stays.
+            Deleting cannot be undone. The audit history of the watch stays.
           </p>
         </div>
         <Button variant="danger" onClick={() => setOpen(true)}>
@@ -371,13 +371,15 @@ function DangerZone({ watch }: { watch: Watch }) {
           Delete watch
         </Button>
       </div>
-      <Dialog open={open} title={`Delete ${watch.name}?`} onClose={() => setOpen(false)}>
-        <p className="text-sm text-muted">
-          gedour stops following <span className="font-mono">{targetSummary(watch)}</span>. This
-          cannot be undone.
-        </p>
+      <Dialog
+        open={open}
+        title={`Delete ${watch.name}?`}
+        onClose={() => setOpen(false)}
+        dismissible={!del.isPending}
+      >
+        <DeleteWatchWarning />
         <DialogActions>
-          <Button variant="ghost" onClick={() => setOpen(false)} autoFocus>
+          <Button variant="ghost" disabled={del.isPending} onClick={() => setOpen(false)} autoFocus>
             Cancel
           </Button>
           <Button variant="danger" disabled={del.isPending} onClick={() => del.mutate()}>

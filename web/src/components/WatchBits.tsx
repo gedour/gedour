@@ -47,6 +47,17 @@ export function SharedBadge({ watch }: { watch: Pick<Watch, "permission" | "owne
 }
 
 /** Coloured dot for the run status; the label is always in the accessible name, visible on demand. */
+/** What a delete takes with it, for everyone: the cascades of migrations 00004 and 00005. */
+export function DeleteWatchWarning() {
+  return (
+    <p className="text-sm text-muted">
+      Deleting a watch also removes its shares, its events and every rule on it, including rules of
+      users it is shared with. Every user's inbox items and deliveries for those events go too. This
+      cannot be undone.
+    </p>
+  );
+}
+
 export function StatusDot({
   watch,
   showLabel = false,

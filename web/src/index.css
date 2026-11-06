@@ -61,6 +61,12 @@
   #root {
     height: 100%;
   }
+  /* Clears the sticky bar, focus ring included. Not scroll-padding on the root: focus entering the
+     sticky bar or sidebar would scroll the page. */
+  main,
+  main * {
+    scroll-margin-top: calc(var(--shell-top) + 0.5rem);
+  }
   body {
     @apply bg-bg font-sans text-ink antialiased;
   }

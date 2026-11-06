@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Clock, Play, Plus, Search, Trash2 } from "lucide-react";
-import { createContext, use, useId, useState } from "react";
+import { createContext, use, useEffect, useId, useRef, useState, type Ref } from "react";
 import { Link } from "react-router";
 
 import { deleteWatch, listWatches, runAllWatches } from "@/api/client";
@@ -9,7 +9,13 @@ import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { inputClass } from "@/components/ui/field";
-import { KindIcon, PausedBadge, SharedBadge, StatusDot } from "@/components/WatchBits";
+import {
+  DeleteWatchWarning,
+  KindIcon,
+  PausedBadge,
+  SharedBadge,
+  StatusDot,
+} from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { problemText } from "@/lib/problems";
 import { describeSchedule, KINDS, targetSummary } from "@/lib/watchKinds";
@@ -18,7 +24,8 @@ import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
 import type { SharedFilter, Watch, WatchKind } from "@/types/api";
 
-// The search term, marked in each row where the server's case-insensitive substring match hit it.
+// The search term, marked in the name and target a row shows. The server also matches the whole
+// config, so a row can match with no mark.
 const SearchTerm = createContext("");
 
 function Highlight({ text }: { text: string }) {
@@ -48,10 +55,10 @@ const SHARED: { value: SharedFilter; label: string }[] = [
   { value: "with_me", label: "Shared with me" },
 ];
 
-export function NewWatchButton() {
+export function NewWatchButton({ ref }: { ref?: Ref<HTMLAnchorElement> }) {
   return (
     <Button variant="primary" asChild>
-      <Link to="/watches/new">
+      <Link ref={ref} to="/watches/new">
         <Plus aria-hidden />
         New watch
       </Link>
@@ -138,17 +145,16 @@ function DeleteSelected({
         open={open}
         title={`Delete ${n} watch${n === 1 ? "" : "es"}?`}
         onClose={() => setOpen(false)}
+        dismissible={!del.isPending}
       >
-        <p className="text-sm text-muted">
-          gedour stops following them and drops their shares. This cannot be undone.
-        </p>
+        <DeleteWatchWarning />
         <ul className="max-h-48 list-inside list-disc overflow-y-auto text-sm">
           {watches.map((w) => (
             <li key={w.id}>{w.name}</li>
           ))}
         </ul>
         <DialogActions>
-          <Button variant="ghost" onClick={() => setOpen(false)} autoFocus>
+          <Button variant="ghost" disabled={del.isPending} onClick={() => setOpen(false)} autoFocus>
             Cancel
           </Button>
           <Button variant="danger" disabled={del.isPending} onClick={() => del.mutate()}>
@@ -180,6 +186,16 @@ export function WatchesPage({ item }: { item: NavItem }) {
   const owned = (query.data ?? []).filter((w) => w.permission === "owner");
   const chosen = owned.filter((w) => selected.has(w.id));
   const allSelected = owned.length > 0 && chosen.length === owned.length;
+  const newWatch = useRef<HTMLAnchorElement>(null);
+  const selecting = chosen.length > 0;
+  const wasSelecting = useRef(false);
+  // The toolbar leaves with the focused button in it. Focus elsewhere, as in a filter field, stays put.
+  useEffect(() => {
+    if (wasSelecting.current && !selecting && document.activeElement === document.body) {
+      newWatch.current?.focus();
+    }
+    wasSelecting.current = selecting;
+  }, [selecting]);
   const toggle = (id: string) =>
     setSelected((s) => {
       const next = new Set(s);
@@ -205,7 +221,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
           </div>
           <div className="flex flex-wrap gap-2">
             <RunAllButton />
-            <NewWatchButton />
+            <NewWatchButton ref={newWatch} />
           </div>
         </div>
 
@@ -310,7 +326,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex min-h-9 items-center">
-              {chosen.length === 0 ? (
+              {!selecting ? (
                 <span className="text-sm text-muted">
                   {query.data.length} watch{query.data.length === 1 ? "" : "es"}
                 </span>
@@ -349,7 +365,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
                   watch={w}
                   now={now}
                   selected={selected.has(w.id)}
-                  selecting={chosen.length > 0}
+                  selecting={selecting}
                   onToggle={() => toggle(w.id)}
                 />
               ))}

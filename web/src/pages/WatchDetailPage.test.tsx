@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -144,6 +144,24 @@ describe("WatchDetailPage", () => {
     );
     expect(await screen.findByRole("heading", { level: 1, name: "Watches" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Deleted Go releases");
+  });
+
+  it("warns what the delete removes and holds the dialog open while it runs", async () => {
+    mockApi({
+      "/api/v1/watches/w1": (_: URL, init?: RequestInit) =>
+        init?.method === "DELETE" ? pending() : Response.json(watch()),
+      "/api/v1/watches/w1/shares": { items: [] },
+    });
+    renderApp("/watches/w1");
+    await userEvent.click(await screen.findByRole("button", { name: "Delete watch" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/its shares, its events and every rule on it/);
+    expect(dialog).toHaveTextContent(/Every user's inbox items and deliveries/);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(false);
+    (dialog as HTMLDialogElement).close();
+    expect(screen.getByRole("dialog")).toHaveAttribute("open");
   });
 
   it("reports a failed delete and a failed pause", async () => {

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -230,6 +230,95 @@ describe("WatchesPage", () => {
     expect(lastCall(fn, "/api/v1/watches/b", "DELETE")).toBeDefined();
     await waitFor(() => expect(screen.queryByText("A")).not.toBeInTheDocument());
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+  });
+
+  it("names everything the delete removes, for every user", async () => {
+    mockApi({ "/api/v1/watches": { items: [watch()] } });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 1 watch?" });
+    expect(dialog).toHaveTextContent(/its shares, its events and every rule on it/);
+    expect(dialog).toHaveTextContent(/rules of users it is shared with/);
+    expect(dialog).toHaveTextContent(/Every user's inbox items and deliveries/);
+  });
+
+  it("holds the dialog open while the delete runs", async () => {
+    mockApi({
+      "/api/v1/watches": { items: [watch()] },
+      "/api/v1/watches/w1": pending,
+    });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(true);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(false);
+    // A browser may close it past the cancelled Escape.
+    (dialog as HTMLDialogElement).close();
+    expect(screen.getByRole("dialog")).toHaveAttribute("open");
+  });
+
+  describe("when the toolbar leaves", () => {
+    const withSelection = async () => {
+      mockApi({
+        "/api/v1/watches": {
+          items: [watch({ id: "a", name: "A" }), watch({ id: "b", name: "B" })],
+        },
+        "/api/v1/watches/a": () => new Response(null, { status: 204 }),
+        "/api/v1/watches/b": () => new Response(null, { status: 204 }),
+      });
+      renderApp("/watches");
+      await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+      await userEvent.click(screen.getByRole("button", { name: "Select all 2" }));
+      return screen.getByRole("toolbar", { name: "Bulk actions" });
+    };
+    const newWatch = () => screen.getByRole("link", { name: "New watch" });
+
+    for (const name of ["Clear", "Select none"]) {
+      it(`focus moves to New watch on ${name}`, async () => {
+        const bar = await withSelection();
+        within(bar).getByRole("button", { name }).focus();
+        await userEvent.keyboard("{Enter}");
+        expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+        expect(newWatch()).toHaveFocus();
+      });
+    }
+
+    it("focus moves to New watch when the delete removes the whole selection", async () => {
+      const bar = await withSelection();
+      await userEvent.click(within(bar).getByRole("button", { name: "Delete" }));
+      await userEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+      );
+      expect(await screen.findByRole("status")).toHaveTextContent("Deleted 2 watches");
+      expect(newWatch()).toHaveFocus();
+    });
+
+    it("focus stays in the search field when a filter empties the selection", async () => {
+      mockApi({
+        "/api/v1/watches": (url: URL) =>
+          Response.json({
+            items: url.searchParams.get("q") ? [] : [watch({ id: "a", name: "A" })],
+          }),
+      });
+      renderApp("/watches");
+      await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+      const search = screen.getByRole("searchbox", { name: "Search" });
+      await userEvent.type(search, "x");
+      await waitFor(() => expect(screen.queryByRole("toolbar")).not.toBeInTheDocument());
+      expect(search).toHaveFocus();
+    });
+
+    it("the page does not take the focus on load", async () => {
+      mockApi({ "/api/v1/watches": { items: [watch()] } });
+      renderApp("/watches");
+      await screen.findByRole("button", { name: "Select: Go releases" });
+      expect(document.body).toHaveFocus();
+    });
   });
 
   it("keeps the watches it could not delete selected", async () => {

@@ -346,6 +346,46 @@ func TestWatchDeleteRacingRouter(t *testing.T) {
 	}
 }
 
+// What the delete dialogs promise: everything hanging off the watch goes, other users' rows included.
+func TestWatchDeleteRemovesSharedUsersData(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
+	var w, other watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &other)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
+	var hook channelJSON
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
+	var onWatch, everyWatch ruleJSON
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID, "channel_ids": []string{hook.ID}}, http.StatusCreated, &onWatch)
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "every watch", "channel_ids": []string{hook.ID}}, http.StatusCreated, &everyWatch)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k'), ($2, 't', '{}', 'k')`, w.ID, other.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT u, e.id FROM events e, unnest($1::uuid[]) u`, []string{alice.id, bob.id})
+	a.exec(t, `INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT id, $1, $2 FROM events`, onWatch.ID, hook.ID)
+
+	a.mustCall(t, alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil, http.StatusNoContent, nil)
+
+	for _, tt := range []struct {
+		what string
+		sql  string
+		args []any
+		want int
+	}{
+		{"shares", `SELECT count(*) FROM watch_shares WHERE watch_id = $1`, []any{w.ID}, 0},
+		{"bob's rule on the watch", `SELECT count(*) FROM rules WHERE id = $1`, []any{onWatch.ID}, 0},
+		{"events", `SELECT count(*) FROM events WHERE watch_id = $1`, []any{w.ID}, 0},
+		{"inbox items of both users, other watch's event", `SELECT count(*) FROM inbox_items`, nil, 2},
+		{"deliveries, other watch's event", `SELECT count(*) FROM deliveries`, nil, 1},
+		{"bob's rule on every watch", `SELECT count(*) FROM rules WHERE id = $1`, []any{everyWatch.ID}, 1},
+		{"bob's channel", `SELECT count(*) FROM channels WHERE id = $1`, []any{hook.ID}, 1},
+		{"audit row", `SELECT count(*) FROM audit_log WHERE action = 'watch.deleted' AND target_id = $1`, []any{w.ID}, 1},
+	} {
+		if n := a.countRows(t, tt.sql, tt.args...); n != tt.want {
+			t.Errorf("%s: %d rows, want %d", tt.what, n, tt.want)
+		}
+	}
+}
+
 // The purged account's rules on a watch it was shared, the higher id inserted first: a purge deleting them
 // in scan order would hold the higher and wait on the lower while the watch's delete, locking them in id
 // order, holds the lower and waits on the higher. A KEY SHARE (the router's) on the lower parks the purge.

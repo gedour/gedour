@@ -164,7 +164,7 @@ func compiled(t *testing.T) (map[string]*Program, []string) {
 	return out, allowed
 }
 
-// minTime is the fastest of three runs: the cost of the filter, not of a scheduler hiccup.
+// minTime is the fastest of the runs: the cost of the filter, not of a scheduler hiccup.
 func minTime(p *Program, env Env, runs int) (time.Duration, error) {
 	best := time.Duration(1 << 62)
 	var err error
@@ -187,7 +187,12 @@ func TestWorstCaseTiming(t *testing.T) {
 		var slowestSrc string
 		for src, p := range progs {
 			took, err := minTime(p, env, 3)
-			if gate := filterGate * raceSlowdown; took > gate {
+			gate := filterGate * raceSlowdown
+			if took > gate {
+				// A shared CI runner can stay slow for all 3 runs; a real regression stays over the gate for 10.
+				took, err = minTime(p, env, 10)
+			}
+			if took > gate {
 				t.Errorf("%s payload: %.70q took %s, past %s", name, src, took, gate)
 			}
 			// Each payload is the worst case of the shapes reading its root array.

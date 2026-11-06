@@ -28,6 +28,8 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Node 25+ enables Web Storage by default; its global localStorage hides jsdom's and throws.
+    execArgv: ["--no-experimental-webstorage"],
     setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true,

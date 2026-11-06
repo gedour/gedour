@@ -42,8 +42,12 @@ test("alice deletes several watches at once", async ({ page }) => {
       return window.scrollY > 0 && header?.top === 0 && sidebar?.bottom === window.innerHeight;
     });
   expect(await shellHolds()).toBe(true);
-  await page.getByRole("checkbox", { name: `Select: Bulk one ${t}` }).check();
-  await page.getByRole("checkbox", { name: `Select: Bulk two ${t}` }).check();
+  await page.getByRole("button", { name: `Select: Bulk one ${t}` }).click();
+  await page.getByRole("button", { name: `Select: Bulk two ${t}` }).click();
+  await expect(page.getByRole("button", { name: `Select: Bulk two ${t}` })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page
     .getByRole("toolbar", { name: "Bulk actions" })
     .getByRole("button", { name: "Delete" })

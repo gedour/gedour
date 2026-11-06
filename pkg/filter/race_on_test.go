@@ -2,5 +2,5 @@
 
 package filter
 
-// raceSlowdown scales time bounds under the race detector, which runs this code about 20 times slower.
+// raceSlowdown divides the filter count of the timed property test: the race detector runs this code about 20 times slower.
 const raceSlowdown = 20

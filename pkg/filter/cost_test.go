@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"math/rand/v2"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -164,36 +166,62 @@ func compiled(t *testing.T) (map[string]*Program, []string) {
 	return out, allowed
 }
 
-// minTime is the fastest of the runs: the cost of the filter, not of a scheduler hiccup.
-func minTime(p *Program, env Env, runs int) (time.Duration, error) {
-	best := time.Duration(1 << 62)
-	var err error
-	for range runs {
-		start := time.Now()
-		_, err = Match(p, env)
-		best = min(best, time.Since(start))
+var (
+	referenceText    = strings.Repeat("éǅ", 1<<13)
+	referenceHay     = strings.Repeat("é1", 1<<9)
+	referencePattern = regexp.MustCompile(`(?i)[\pL\pN]{12}z`)
+	referenceSink    string
+)
+
+// reference is the unit of the time gates: case mapping and a regular expression, the work of the worst filters. It
+// calls no code of this package, so a slower filter does not slow it, and a slower machine slows both.
+func reference() {
+	for range 4 {
+		referenceSink = strings.ToUpper(strings.ToLower(referenceText))
 	}
-	return best, err
+	referenceSink = strconv.FormatBool(referencePattern.MatchString(referenceHay))
 }
 
-// Each allowed shape stays under the gate, 2.5 times the 45 ms measured, on every worst payload (004-AC10). The
-// cost model is the deterministic guard.
+func timed(f func()) time.Duration {
+	start := time.Now()
+	f()
+	return time.Since(start)
+}
+
+// referenceWindow caps how long one run's reference runs: a rule set takes seconds, and noise averages out well before.
+const referenceWindow = 250 * time.Millisecond
+
+// references is what f costs in references, the median of the runs, so one outlier either way changes nothing. The
+// reference runs for as long as f took: a short one could land in a quiet gap of a runner whose load comes in bursts.
+func references(f func(), runs int) float64 {
+	ratios := make([]float64, runs)
+	for i := range ratios {
+		took := timed(f)
+		n := 0
+		var spent time.Duration
+		for n == 0 || spent < min(took, referenceWindow) {
+			spent += timed(reference)
+			n++
+		}
+		ratios[i] = float64(took) / (float64(spent) / float64(n))
+	}
+	slices.Sort(ratios)
+	return ratios[runs/2]
+}
+
+// Each allowed shape stays under the gate on every worst payload (004-AC10). The cost model is the deterministic guard.
 func TestWorstCaseTiming(t *testing.T) {
 	progs, allowed := compiled(t)
 	for name, payload := range allPayloads() {
 		env := sample
 		env.Event.Payload = payload()
-		var slowest time.Duration
+		var slowest float64
 		var slowestSrc string
 		for src, p := range progs {
-			took, err := minTime(p, env, 3)
-			gate := filterGate * raceSlowdown
-			if took > gate {
-				// A shared CI runner can stay slow for all 3 runs; a real regression stays over the gate for 10.
-				took, err = minTime(p, env, 10)
-			}
-			if took > gate {
-				t.Errorf("%s payload: %.70q took %s, past %s", name, src, took, gate)
+			var err error
+			took := references(func() { _, err = Match(p, env) }, 3)
+			if took > filterGate {
+				t.Errorf("%s payload: %.70q took %.1f references, past %.0f", name, src, took, filterGate)
 			}
 			// Each payload is the worst case of the shapes reading its root array.
 			own := strings.Contains(src, "pairs") == (name == "pairs") && name != "max" && (payloads[name] == nil || !strings.Contains(src, "payload.body") && !strings.Contains(src, "event.type]"))
@@ -204,11 +232,33 @@ func TestWorstCaseTiming(t *testing.T) {
 				slowest, slowestSrc = took, src
 			}
 		}
-		t.Logf("%s payload: slowest allowed %s: %.80s", name, slowest, slowestSrc)
+		t.Logf("%s payload: slowest allowed %.1f references: %.80s", name, slowest, slowestSrc)
 	}
 }
 
-// One user's whole rule set (100 rules) of the same worst filter takes about 4.5 s measured, gated at 2.5 times that,
+// The gate fails a shape that got slower, on any machine: 6 runs of the slowest shape stand for a regression.
+func TestWorstCaseTimingCatchesSlowdown(t *testing.T) {
+	env := sample
+	env.Event.Payload = maxPayload()
+	var slowest *Program
+	var most float64
+	progs, allowed := compiled(t)
+	for _, src := range allowed {
+		if took := references(func() { _, _ = Match(progs[src], env) }, 3); took > most {
+			slowest, most = progs[src], took
+		}
+	}
+	slowed := func() {
+		for range 6 {
+			_, _ = Match(slowest, env)
+		}
+	}
+	if got := references(slowed, 3); got <= filterGate {
+		t.Fatalf("6 times the slowest shape took %.1f references, under the gate of %.0f", got, filterGate)
+	}
+}
+
+// One user's whole rule set (100 rules) of the same worst filter takes about 4.5 s measured, gated in references,
 // on every payload (004-AC10). That spends the router's 2 s batch budget (route.routeBudget), checked between
 // events, so such an event ends its batch. Only the slowest shapes of each payload run 100 times: a rule set is
 // its filter's time, and the others are far below.
@@ -223,22 +273,22 @@ func TestRuleSetBound(t *testing.T) {
 		srcs := slices.Collect(maps.Keys(progs))
 		times := map[string]time.Duration{}
 		for _, src := range srcs {
-			times[src], _ = minTime(progs[src], env, 1)
+			times[src] = timed(func() { _, _ = Match(progs[src], env) })
 		}
 		slices.SortFunc(srcs, func(a, b string) int { return cmp.Compare(times[b], times[a]) })
-		var slowest time.Duration
+		var slowest float64
 		for _, src := range srcs[:3] {
-			start := time.Now()
-			for range 100 {
-				_, _ = Match(progs[src], env)
-			}
-			took := time.Since(start)
+			took := references(func() {
+				for range 100 {
+					_, _ = Match(progs[src], env)
+				}
+			}, 1)
 			slowest = max(slowest, took)
-			if gate := ruleSetGate * raceSlowdown; took > gate {
-				t.Errorf("%s payload: 100 × %.60q took %s, past %s", name, src, took, gate)
+			if took > ruleSetGate {
+				t.Errorf("%s payload: 100 × %.60q took %.0f references, past %.0f", name, src, took, ruleSetGate)
 			}
 		}
-		t.Logf("%s payload: slowest rule set %s", name, slowest)
+		t.Logf("%s payload: slowest rule set %.0f references", name, slowest)
 	}
 }
 
@@ -294,8 +344,8 @@ func TestCostModelProperty(t *testing.T) {
 			t.Fatalf("%q: cost %d but %v", src, c, err)
 		}
 		for name, env := range envs {
-			if took, _ := minTime(p, env, 5); took > filterGate*raceSlowdown {
-				t.Errorf("%s payload: cost %d, %s: %.100q", name, c, took, src)
+			if took := references(func() { _, _ = Match(p, env) }, 3); took > filterGate {
+				t.Errorf("%s payload: cost %d, %.1f references: %.100q", name, c, took, src)
 			}
 		}
 		checked++

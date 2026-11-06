@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
-import { lastCall, pending, watch } from "@/test/watches";
+import { lastCall, pending, problem, watch } from "@/test/watches";
 
 describe("WatchesPage", () => {
   it("runs all watches and reports how many were scheduled", async () => {
@@ -138,5 +138,65 @@ describe("WatchesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByLabelText("Search")).toHaveValue("");
     expect(await screen.findByText("Go releases")).toBeInTheDocument();
+  });
+
+  it("deletes the selected owned watches after confirmation", async () => {
+    let items = [
+      watch({ id: "a", name: "A" }),
+      watch({ id: "b", name: "B" }),
+      watch({ id: "c", name: "C", permission: "rw", owner_name: "Bob" }),
+    ];
+    const del = (id: string) => () => {
+      items = items.filter((w) => w.id !== id);
+      return new Response(null, { status: 204 });
+    };
+    const fn = mockApi({
+      "/api/v1/watches": () => Response.json({ items }),
+      "/api/v1/watches/a": del("a"),
+      "/api/v1/watches/b": del("b"),
+    });
+    renderApp("/watches");
+    expect(await screen.findByRole("checkbox", { name: "Select: C" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    expect(screen.getByRole("checkbox", { name: "Select: A" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select: C" })).not.toBeChecked();
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    expect(bar).toHaveTextContent("2 selected");
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete 2 watches?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(lastCall(fn, "/api/v1/watches/a", "DELETE")).toBeUndefined();
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Deleted 2 watches");
+    expect(lastCall(fn, "/api/v1/watches/b", "DELETE")).toBeDefined();
+    await waitFor(() => expect(screen.queryByText("A")).not.toBeInTheDocument());
+    expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
+  });
+
+  it("keeps the watches it could not delete selected", async () => {
+    mockApi({
+      "/api/v1/watches": { items: [watch({ id: "a", name: "A" }), watch({ id: "b", name: "B" })] },
+      "/api/v1/watches/a": () => new Response(null, { status: 204 }),
+      "/api/v1/watches/b": () => problem(403, "nope"),
+    });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select: A" }));
+    const b = screen.getByRole("checkbox", { name: "Select: B" });
+    await userEvent.click(b);
+    await userEvent.click(b);
+    expect(b).not.toBeChecked();
+    await userEvent.click(b);
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+    expect(await screen.findByText("Could not delete 1 of 2: nope")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select: A" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Select: B" })).toBeChecked();
   });
 });

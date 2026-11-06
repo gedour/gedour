@@ -1,12 +1,13 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Play, Plus, Search } from "lucide-react";
+import { Clock, Play, Plus, Search, Trash2 } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
-import { listWatches, runAllWatches } from "@/api/client";
+import { deleteWatch, listWatches, runAllWatches } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { inputClass } from "@/components/ui/field";
 import { KindIcon, PausedBadge, SharedBadge, StatusDot } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
@@ -62,7 +63,81 @@ function RunAllButton() {
   );
 }
 
+function DeleteSelected({
+  watches,
+  onDone,
+}: {
+  watches: Watch[];
+  onDone: (failed: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const client = useQueryClient();
+  const toast = useToast();
+  const n = watches.length;
+  const del = useMutation({
+    // No bulk endpoint: one DELETE per watch, a failure leaves the others deleted.
+    mutationFn: () =>
+      Promise.all(
+        watches.map((w) =>
+          deleteWatch(w.id).then(
+            () => ({ id: w.id, error: undefined as unknown }),
+            (error: unknown) => ({ id: w.id, error }),
+          ),
+        ),
+      ),
+    onSuccess: (results) => {
+      const failed = new Set<string>();
+      let reason: unknown;
+      for (const { id, error } of results) {
+        if (error === undefined) {
+          client.removeQueries({ queryKey: ["watch", id] });
+          continue;
+        }
+        failed.add(id);
+        reason ??= error;
+      }
+      void client.invalidateQueries({ queryKey: ["watches"] });
+      setOpen(false);
+      onDone(failed);
+      const sent = results.length;
+      if (failed.size === 0) toast(`Deleted ${sent} watch${sent === 1 ? "" : "es"}`);
+      else toast(`Could not delete ${failed.size} of ${sent}: ${problemText(reason)}`, "error");
+    },
+  });
+  return (
+    <>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        <Trash2 aria-hidden />
+        Delete
+      </Button>
+      <Dialog
+        open={open}
+        title={`Delete ${n} watch${n === 1 ? "" : "es"}?`}
+        onClose={() => setOpen(false)}
+      >
+        <p className="text-sm text-muted">
+          gedour stops following them and drops their shares. This cannot be undone.
+        </p>
+        <ul className="max-h-48 list-inside list-disc overflow-y-auto text-sm">
+          {watches.map((w) => (
+            <li key={w.id}>{w.name}</li>
+          ))}
+        </ul>
+        <DialogActions>
+          <Button variant="ghost" onClick={() => setOpen(false)} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger" disabled={del.isPending} onClick={() => del.mutate()}>
+            {del.isPending ? "Deleting…" : "Delete"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
 export function WatchesPage({ item }: { item: NavItem }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<WatchKind | "">("");
   const [shared, setShared] = useState<SharedFilter>("all");
@@ -77,6 +152,16 @@ export function WatchesPage({ item }: { item: NavItem }) {
     refetchInterval: 30_000,
   });
   const now = new Date();
+  // Only owners can delete; ids hidden by a filter stay selected but out of the action.
+  const owned = (query.data ?? []).filter((w) => w.permission === "owner");
+  const chosen = owned.filter((w) => selected.has(w.id));
+  const allSelected = owned.length > 0 && chosen.length === owned.length;
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   const clear = () => {
     setQ("");
     setKind("");
@@ -198,22 +283,82 @@ export function WatchesPage({ item }: { item: NavItem }) {
           <EmptyState title={item.emptyTitle} body={item.emptyBody} action={<NewWatchButton />} />
         )
       ) : (
-        <ul aria-label="Watches" className="flex flex-col gap-2">
-          {query.data.map((w) => (
-            <WatchRow key={w.id} watch={w} now={now} />
-          ))}
-        </ul>
+        <div className="flex flex-col gap-3">
+          <div className="flex min-h-9 flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5">
+            <input
+              type="checkbox"
+              aria-label="Select all"
+              checked={allSelected}
+              disabled={owned.length === 0}
+              ref={(el) => {
+                if (el) el.indeterminate = chosen.length > 0 && !allSelected;
+              }}
+              onChange={() =>
+                setSelected(allSelected ? new Set() : new Set(owned.map((w) => w.id)))
+              }
+              className="size-4 accent-beacon"
+            />
+            {chosen.length === 0 ? (
+              <span className="text-sm text-muted">
+                {query.data.length} watch{query.data.length === 1 ? "" : "es"}
+              </span>
+            ) : (
+              <div
+                role="toolbar"
+                aria-label="Bulk actions"
+                className="flex flex-wrap items-center gap-1"
+              >
+                <span className="mr-2 text-sm font-medium">{chosen.length} selected</span>
+                <DeleteSelected watches={chosen} onDone={setSelected} />
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              </div>
+            )}
+          </div>
+          <ul aria-label="Watches" className="flex flex-col gap-2">
+            {query.data.map((w) => (
+              <WatchRow
+                key={w.id}
+                watch={w}
+                now={now}
+                selected={selected.has(w.id)}
+                onToggle={() => toggle(w.id)}
+              />
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
 }
 
-function WatchRow({ watch, now }: { watch: Watch; now: Date }) {
+function WatchRow({
+  watch,
+  now,
+  selected,
+  onToggle,
+}: {
+  watch: Watch;
+  now: Date;
+  selected: boolean;
+  onToggle: () => void;
+}) {
+  const owner = watch.permission === "owner";
   return (
-    <li>
+    <li className="flex items-center gap-3">
+      <input
+        type="checkbox"
+        aria-label={`Select: ${watch.name}`}
+        title={owner ? undefined : "Only the owner can delete it"}
+        checked={owner && selected}
+        disabled={!owner}
+        onChange={onToggle}
+        className="size-4 shrink-0 accent-beacon"
+      />
       <Link
         to={`/watches/${watch.id}`}
-        className="group flex items-center gap-4 rounded-xl border border-line bg-surface px-4 py-3.5 transition-colors hover:border-beacon/50 hover:bg-beacon-soft/30"
+        className="group flex min-w-0 flex-1 items-center gap-4 rounded-xl border border-line bg-surface px-4 py-3.5 transition-colors hover:border-beacon/50 hover:bg-beacon-soft/30"
       >
         <KindIcon kind={watch.kind} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">

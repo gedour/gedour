@@ -203,7 +203,7 @@ func newWorker(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger, box *secr
 
 func workerClient(cfg config.Config, guard *netguard.Guard) *http.Client {
 	return guard.Client(netguard.Options{Timeout: 30 * time.Second, MaxRedirects: 5, HTTPHosts: cfg.AllowHTTPHosts,
-		StripOnCrossHost: []string{"Authorization", "Private-Token"}})
+		StripOnCrossHost: []string{"Authorization", "Private-Token", "Referer"}})
 }
 
 func newServer(addr string, h http.Handler) *http.Server {

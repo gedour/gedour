@@ -1,6 +1,6 @@
 # 007 — MCP server and API keys
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-05
 
@@ -16,7 +16,7 @@ The API accepts only a browser session with a CSRF token, so nothing unattended 
 gedour exposes an MCP server at `/mcp`. A user creates an API key on a new page, sees it once, and puts it
 in their MCP client. The client then reads that user's inbox, watches, events, rules and deliveries,
 with a `write` key marks inbox items and asks a watch to run, and with a `manage` key creates and edits watches
-and rules. It sees what the user sees in the UI, and never channel targets, credentials, scripts or admin
+and rules. It sees what the user sees in the UI, and never channel targets, credential secrets, scripts or admin
 functions. Keys can be revoked, expire unless created without an end date, and stop working when the account is
 disabled, purged or loses its access.
 
@@ -195,10 +195,12 @@ host. So a request made with a key, in the REST handlers so there is one path:
   a chosen path to other hosts. `?` and `#` in these URLs are refused, even empty, as they would cut the collector's
   own path.
 
-A known host may answer a redirect to another host. The worker follows it with no `Authorization` or
-`Private-Token`, and records that host in the run's fetch log (measured, `TestWorkerRedirectExposesNoCredential`).
-That host learns the path the known host forwards, which can hold the key's `repo`, `project` or `repository`, a
-few hundred characters at most, at a destination the known host picks and the key does not. A person attaching a credential to a key-made watch is a
+A known host may answer a redirect to another host: the worker follows it with no `Authorization`,
+`Private-Token` or `Referer`, and that host learns the path the known host forwards. A registry's challenge names a token host:
+it learns the repository in `scope`, plus the registry credential only on a watch that has one, so never on a key's
+own watch. Either way the run's fetch log records the host (measured, `TestWorkerRedirectExposesNoCredential`). What
+that host reads can hold the key's `repo`, `project` or `repository`, a few hundred characters at most, at a
+destination the known host picks and the key does not. A person attaching a credential to a key-made watch is a
 person's decision.
 
 **Rate limits.** Per key, per replica, with the `route` limiter moved to a shared package, unchanged:
@@ -211,9 +213,9 @@ lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limit
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
-| read | Owner's inbox with release notes, owned and shared watches with config, rules with filters, deliveries with their channel's name and without logs or errors | Credentials, channel targets, scripts, audit, other users, admin, other keys |
+| read | Owner's inbox with release notes, owned and shared watches with config, their owner's name and ID and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
 | write | Also inbox state, and scheduling a run of a watch the owner can write | Creating or changing anything else |
-| manage | Also the list of channels, creating and editing rules and watches, within the host and credential rules above | Credentials, channel targets, delete, shares |
+| manage | Also the list of channels, creating and editing rules and watches, within the host and credential rules above | Credential secrets, channel targets, delete, shares |
 
 Bounded by expiry (none on a `never` key), the sign-in freshness check and revocation.
 
@@ -251,8 +253,8 @@ no taint field, and no marking stops a model that decides to obey. So the defenc
    channel target, no script, no unknown host, no credential. Exfiltration through the client's other tools is the
    client's to gate. A fully hijacked key does at worst:
    - `write`: marks inbox items and schedules watch runs.
-   - `manage`: also routes events to the owner's existing channels, adds watches on known hosts with a name of
-     its choosing that reaches those channels' titles, and **silences alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2). Audited with the key's ID. Give
+   - `manage`: also routes events to the owner's existing channels, adds watches on known hosts, with a name of
+     its choosing and text and links from a repository it controls reaching those channels' messages, and **silences alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2). Audited with the key's ID. Give
      `manage` to clients that confirm writes with a human.
 2. **Output marks all of it as untrusted.** Every field, as a per-field list would rot.
 
@@ -293,63 +295,63 @@ README section: creating a key, `claude mcp add` and `.mcp.json` examples, tool 
 
 Keys:
 
-- [ ] **AC1** `POST /api/v1/api-keys` returns the key once with prefix `gdr_`. The row holds its SHA-256 and display prefix, never the key. `GET` never returns it.
-- [ ] **AC2** A duration other than 7, 30, 90, 365 or `never` gets 400; absent means 90; `never` stores no `expires_at` and such a key works past 365 days. A scope other than `read`, `write`, `manage` gets 400; absent means `read`.
-- [ ] **AC3** The 11th active key gets 409. Revoked and expired keys do not count. A creation deletes the caller's keys dead for over 30 days and no one else's.
-- [ ] **AC4** Key routes need a session and CSRF: no CSRF gets 403, a bearer key gets 401.
-- [ ] **AC5** Creating a key while acting as a user gets 409. Listing works. Revoking works and audits `on_behalf_of`.
-- [ ] **AC6** Revoking or reading another user's key gets 404.
-- [ ] **AC7** After a revoke the key's next `/mcp` call gets 401. A second revoke gets 204.
-- [ ] **AC8** `api_key.created` and `api_key.revoked` audit rows hold ID, name, scope and expiry. No `audit_log` row contains the key, its hash, or a `[redacted]` in place of those fields.
-- [ ] **AC9** `last_used_at` moves on use, at most once a minute.
+- [x] **AC1** `POST /api/v1/api-keys` returns the key once with prefix `gdr_`. The row holds its SHA-256 and display prefix, never the key. `GET` never returns it.
+- [x] **AC2** A duration other than 7, 30, 90, 365 or `never` gets 400; absent means 90; `never` stores no `expires_at` and such a key works past 365 days. A scope other than `read`, `write`, `manage` gets 400; absent means `read`.
+- [x] **AC3** The 11th active key gets 409. Revoked and expired keys do not count. A creation deletes the caller's keys dead for over 30 days and no one else's.
+- [x] **AC4** Key routes need a session and CSRF: no CSRF gets 403, a bearer key gets 401.
+- [x] **AC5** Creating a key while acting as a user gets 409. Listing works. Revoking works and audits `on_behalf_of`.
+- [x] **AC6** Revoking or reading another user's key gets 404.
+- [x] **AC7** After a revoke the key's next `/mcp` call gets 401. A second revoke gets 204.
+- [x] **AC8** `api_key.created` and `api_key.revoked` audit rows hold ID, name, scope and expiry. No `audit_log` row contains the key, its hash, or a `[redacted]` in place of those fields.
+- [x] **AC9** `last_used_at` moves on use, at most once a minute.
 
 Account state:
 
-- [ ] **AC10** Disabling an account revokes its keys in the same tx (next call 401). Re-enabling leaves them revoked.
-- [ ] **AC11** Purging deletes the keys in the purge tx and the preview counts them. Audit rows naming them stay.
-- [ ] **AC12** A sign-in refused for `missing_role` revokes the user's active keys, deletes their sessions (the old session gets 401) and audits it, even when the request's context is cancelled. A refusal for a disabled account changes nothing more.
-- [ ] **AC13** A key whose owner has no successful sign-in within the max age goes dormant, a `never` key included: `tools/list` answers, each `tools/call` gets `isError` with the sign-in URL and reads no data. A new sign-in wakes it. The list reports `effective_until`. Dev mode skips the check.
-- [ ] **AC14** An admin's key lists the same tools as a non-admin's and reads only the admin's data. Startup fails on a tool row naming an unknown operation or a path under `auth.AdminPrefix`.
+- [x] **AC10** Disabling an account revokes its keys in the same tx (next call 401). Re-enabling leaves them revoked.
+- [x] **AC11** Purging deletes the keys in the purge tx and the preview counts them. Audit rows naming them stay.
+- [x] **AC12** A sign-in refused for `missing_role` revokes the user's active keys, deletes their sessions (the old session gets 401) and audits it, even when the request's context is cancelled. A refusal for a disabled account changes nothing more.
+- [x] **AC13** A key whose owner has no successful sign-in within the max age goes dormant, a `never` key included: `tools/list` answers, each `tools/call` gets `isError` with the sign-in URL and reads no data. A new sign-in wakes it. The list reports `effective_until`. Dev mode skips the check.
+- [x] **AC14** An admin's key lists the same tools as a non-admin's and reads only the admin's data. Startup fails on a tool row naming an unknown operation or a path under `auth.AdminPrefix`.
 
 Transport and auth:
 
-- [ ] **AC15** With a valid key, `server/discover`, `tools/list` and `tools/call` work at protocol `2026-07-28`, through the official SDK client.
-- [ ] **AC16** A client at `2025-11-25` sending `initialize`, then `tools/list`, works without a session ID.
-- [ ] **AC17** `GET` and `DELETE /mcp` get 405, never the SPA. A mismatched `Mcp-Name` gets 400 `-32020`. An unknown protocol version gets 400 `-32022`.
-- [ ] **AC18** Absent Origin passes. A listed Origin passes. Any other gets 403 without touching the key table. In dev mode a non-loopback Host gets 403.
-- [ ] **AC19** No key, a malformed key, an unknown, revoked or expired key, and a disabled owner's key all get an identical 401 with `WWW-Authenticate: Bearer` and no `resource_metadata`. A key in the query string is ignored. A valid session cookie on `/mcp` gets 401.
-- [ ] **AC20** A database failure during lookup answers 5xx, never 401.
-- [ ] **AC21** `GET /.well-known/oauth-protected-resource/mcp` `GET /.well-known/oauth-authorization-server` and `GET /mcp/.well-known/oauth-protected-resource` get 404, not HTML.
-- [ ] **AC22** A session cookie on an `/api` mutation without CSRF still gets 403, with or without a bearer key beside it. A bearer key alone on any `/api` path but the public ones gets 401.
+- [x] **AC15** With a valid key, `server/discover`, `tools/list` and `tools/call` work at protocol `2026-07-28`, through the official SDK client.
+- [x] **AC16** A client at `2025-11-25` sending `initialize`, then `tools/list`, works without a session ID.
+- [x] **AC17** `GET` and `DELETE /mcp` get 405, never the SPA. A mismatched `Mcp-Name` gets 400 `-32020`. An unknown protocol version gets 400 `-32022`.
+- [x] **AC18** Absent Origin passes. A listed Origin passes. Any other gets 403 without touching the key table. In dev mode a non-loopback Host gets 403.
+- [x] **AC19** No key, a malformed key, an unknown, revoked or expired key, and a disabled owner's key all get an identical 401 with `WWW-Authenticate: Bearer` and no `resource_metadata`. A key in the query string is ignored. A valid session cookie on `/mcp` gets 401.
+- [x] **AC20** A database failure during lookup answers 5xx, never 401.
+- [x] **AC21** `GET /.well-known/oauth-protected-resource/mcp` `GET /.well-known/oauth-authorization-server` and `GET /mcp/.well-known/oauth-protected-resource` get 404, not HTML.
+- [x] **AC22** A session cookie on an `/api` mutation without CSRF still gets 403, with or without a bearer key beside it. A bearer key alone on any `/api` path but the public ones gets 401.
 
 Tools:
 
-- [ ] **AC23** `tools/list` returns 9 tools to a `read` key, 14 to a `write` key and all 20 to a `manage` key, in the table's order, with `cacheScope: private`. A key calling a tool above its scope gets `-32602` and nothing changes.
-- [ ] **AC24** Each read tool returns the REST data of that user. Alice's key on Bob's watch gets `isError` not found. A shared watch reads. `run_watch` on a read-only share gets `isError` forbidden.
-- [ ] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog.
-- [ ] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`, and so does a key's call while the upstream's rate limit holds the watch (`last_status` `rate_limited`, `next_run_at` ahead): a person's "run now" may override that hold, an unattended client may not. A 429 ending a run outranks a run-now made during that run. A REST audit row has `api_key_id` null. The audit view shows the key's name to its owner, and its ID to others or once the key is gone.
-- [ ] **AC27** Every successful result is one text block fenced with a nonce differing between two calls, with no `structuredContent`, and a real client's model receives the fence. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
-- [ ] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it. Tab and newline stay.
-- [ ] **AC29** `list_inbox` cuts a 64 KiB body at 8 KiB and says so; `list_deliveries` has no `logs` and no `last_error`; `list_watches` says `truncated` when it returns as many as its limit; `limit` above the tool's max gets `isError`; a result over 512 KiB gets `isError` asking for a smaller `limit`.
-- [ ] **AC30** Past the burst, `POST /mcp` gets 429 with `Retry-After`, per key. The 7th `run_watch` in a burst gets `isError`, and one more passes after 10 s. A body over 1 MiB gets 413.
-- [ ] **AC31** Logs captured over the AC15 to AC30 scenarios never contain a key or arguments, and contain one `mcp_tool_call` per call. Both metrics move.
+- [x] **AC23** `tools/list` returns 9 tools to a `read` key, 14 to a `write` key and all 20 to a `manage` key, in the table's order, with `cacheScope: private`. A key calling a tool above its scope gets `-32602` and nothing changes.
+- [x] **AC24** Each read tool returns the REST data of that user. Alice's key on Bob's watch gets `isError` not found. A shared watch reads. `run_watch` on a read-only share gets `isError` forbidden.
+- [x] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog.
+- [x] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`, and so does a key's call while the upstream's rate limit holds the watch (`last_status` `rate_limited`, `next_run_at` ahead): a person's "run now" may override that hold, an unattended client may not. A 429 ending a run outranks a run-now made during that run. A REST audit row has `api_key_id` null. The audit view shows the key's name to its owner, and its ID to others or once the key is gone.
+- [x] **AC27** Every successful result is one text block fenced with a nonce differing between two calls, with no `structuredContent`, and a real client's model receives the fence. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
+- [x] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it. Tab and newline stay.
+- [x] **AC29** `list_inbox` cuts a 64 KiB body at 8 KiB and says so; `list_deliveries` has no `logs` and no `last_error`; `list_watches` says `truncated` when it returns as many as its limit; `limit` above the tool's max gets `isError`; a result over 512 KiB gets `isError` asking for a smaller `limit`.
+- [x] **AC30** Past the burst, `POST /mcp` gets 429 with `Retry-After`, per key. The 7th `run_watch` in a burst gets `isError`, and one more passes after 10 s. A body over 1 MiB gets 413.
+- [x] **AC31** Logs captured over the AC15 to AC30 scenarios never contain a key or arguments, and contain one `mcp_tool_call` per call. Both metrics move.
 
-- [ ] **AC40** 7 days or less before a key's effective end, every successful result starts with the matching notice from the Account state section, outside the fence, naming the date and a configured public URL even under a forged `Host` (dev mode: its checked loopback `Host`). 8 days before, no notice. A dormant key's message and this notice appear only to a caller holding that key.
+- [x] **AC40** 7 days or less before a key's effective end, every successful result starts with the matching notice from the Account state section, outside the fence, naming the date and a configured public URL even under a forged `Host` (dev mode: its checked loopback `Host`). 8 days before, no notice. A dormant key's message and this notice appear only to a caller holding that key.
 
 UI and interop:
 
-- [ ] **AC32** The API keys page lists name, scope, prefix, created, last used and effective end. It creates through a native dialog, shows the key once with a copy button and a client snippet using this instance's URL, and revokes after a confirmation. Empty, loading and error states exist; 375 px, keyboard and a11y specs pass; the CSP guard stays green.
-- [ ] **AC33** The README's `claude mcp add` command, run with a real Claude Code against a local gedour, lists the tools and calls `count_inbox`.
+- [x] **AC32** The API keys page lists name, scope, prefix, created, last used and effective end. It creates through a native dialog, shows the key once with a copy button and a client snippet using this instance's URL, and revokes after a confirmation. Empty, loading and error states exist; 375 px, keyboard and a11y specs pass; the CSP guard stays green.
+- [x] **AC33** The README's `claude mcp add` command, run with a real Claude Code against a local gedour, lists the tools and calls `count_inbox`.
 
 Manage:
 
-- [ ] **AC34** Sent with a key, `create-watch` and `update-watch` refuse a `credential_id`, even one the key's owner holds, whatever the entry path. The same calls on a session still work.
-- [ ] **AC35** With a key, changing the config of a watch that has a credential gets `isError`, for the owner too, on `api_url`, `base_url` and `registry` alike; changing its name, schedule or paused state works. The same change on a session still works.
-- [ ] **AC36** With a key, a config naming an unknown host, or a path not saved on it, gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
-- [ ] **AC37** `create_rule` and `update_rule` keep the REST checks: another user's channel or an unreadable watch gets `isError`, a bad filter gets `isError` with the field, `MaxRules` holds.
-- [ ] **AC38** `list_channels` returns only `id`, `name` and `type`: a webhook channel's URL and `last4` appear nowhere in the result.
-- [ ] **AC41** During a rate-limit hold, a key's `update_watch` changing schedule, paused or target leaves `next_run_at` alone. The same edit on a session moves it.
-- [ ] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
+- [x] **AC34** Sent with a key, `create-watch` and `update-watch` refuse a `credential_id`, even one the key's owner holds, whatever the entry path. The same calls on a session still work.
+- [x] **AC35** With a key, changing the config of a watch that has a credential gets `isError`, for the owner too, on `api_url`, `base_url` and `registry` alike; changing its name, schedule or paused state works. The same change on a session still works.
+- [x] **AC36** With a key, a config naming an unknown host, or a path not saved on it, gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
+- [x] **AC37** `create_rule` and `update_rule` keep the REST checks: another user's channel or an unreadable watch gets `isError`, a bad filter gets `isError` with the field, `MaxRules` holds.
+- [x] **AC38** `list_channels` returns only `id`, `name` and `type`: a webhook channel's URL and `last4` appear nowhere in the result.
+- [x] **AC41** During a rate-limit hold, a key's `update_watch` changing schedule, paused or target leaves `next_run_at` alone. The same edit on a session moves it.
+- [x] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
 
 ## Phases
 

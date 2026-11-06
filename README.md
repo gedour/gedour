@@ -57,7 +57,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 | `GEDOUR_OIDC_REQUIRED_ROLE` | | Role needed to sign in; empty lets any authenticated user in |
 | `GEDOUR_OIDC_ADMIN_ROLE` | | Role that makes an admin, and also grants sign-in; empty means no admin |
 | `GEDOUR_PUBLIC_URL` | (required with OIDC) | Comma-separated browser-facing base URLs, one per host (e.g. `https://gedour.example.com,https://gedour.internal.example.com`). A request uses the entry whose `host:port` matches its `Host` header, else the first; the redirect URI is `<url>/auth/callback` |
-| `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
+| `GEDOUR_DEV_USER` | | Dev single-user mode: every `/api` and `/auth` request runs as this user, and `/mcp` still takes a key. All three answer only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
 | `GEDOUR_API_KEY_SIGNIN_MAX_AGE` | `720h` | An API key goes dormant when its owner has not signed in for this long; a sign-in wakes it. Keep it above `GEDOUR_SESSION_TTL`, or a user with a live session sees a dormant key with no sign-in to do. No effect in dev mode, but must still be a positive duration |
@@ -181,12 +181,15 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
-| `read` (default) | Your inbox with release notes, owned and shared watches with their config, rules with filters, deliveries with their channel's name and without logs or errors | Credentials, channel targets, scripts, audit, other users, admin, other keys |
+| `read` (default) | Your inbox with release notes, owned and shared watches with their config, their owner's name and ID and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
 | `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
-| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credentials, channel targets, delete, shares |
+| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete, shares |
 
-A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, and route events to your
-existing channels: give it only to clients that confirm writes with a person. Keys never open the REST API, which stays session-only.
+A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, route events to your existing
+channels, and put a watch name of its choosing, and text and links from a repository it controls, in their
+messages: give it only to clients that confirm writes with a person. It opens no new destination, with one limit: a
+known host that forwards a request's path on a redirect, or names a token host in a registry challenge, carries the
+key's `repo`, `project` or `repository` to wherever that host says, with no credential. Keys never open the REST API, which stays session-only.
 
 Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
 expiry, never the key or its hash.
@@ -248,7 +251,7 @@ A `manage` key has three refusals, because a config decides where gedour sends r
 
 While the upstream's rate limit holds a watch, a key's `update_watch` leaves its next run where it is: a new schedule, an unpause or a new config take effect, the run waits. A session's edit still runs it at once.
 
-A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization` and `Private-Token` when leaving the original host. A registry's token challenge names its token host the same way, with no credential on a key's watch.
+A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization`, `Private-Token` and `Referer` when leaving the original host. A registry's token challenge names its token host the same way, with no credential on a key's watch.
 
 `run_watch` writes `watch.run_requested`, and the manage edits their usual `watch.*` and `rule.*` rows, in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
 or once the key is gone. Inbox marks are not audited, as on REST; the log lines cover them.
@@ -291,7 +294,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
-  redirects included; a redirect to another host drops `Authorization` and `PRIVATE-TOKEN`. Environment
+  redirects included; a redirect to another host drops `Authorization`, `PRIVATE-TOKEN` and `Referer`. Environment
   proxies are ignored. `GEDOUR_ALLOW_PRIVATE_NETS` opens chosen ranges.
 - Metrics: `gedour_collector_runs_total{kind,status}`, `gedour_collector_run_duration_seconds{kind}`,
   `gedour_events_total{kind,type}`, `gedour_watches_due`.

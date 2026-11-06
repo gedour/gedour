@@ -31,7 +31,7 @@ func (h *hostRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`[]`))
 }
 
-// 007-AC36: a known host may send the worker elsewhere, with the worker's real client. The other host reads only the path the known host chose, and never a credential. A key's own watch has none (007-AC34), and one that has it cannot be retargeted (007-AC35).
+// 007-AC36: a known host may send the worker elsewhere, with the worker's real client. The other host reads only the path the known host chose, with no Referer, and a credential only at a registry's token host, on a watch that has one. A key's own watch has none (007-AC34), and one that has it cannot be retargeted (007-AC35).
 func TestWorkerRedirectExposesNoCredential(t *testing.T) {
 	const secret = "s3cret-token-value"
 	cred := &collect.Credential{Kind: "t", Username: "robot", Secret: secret}
@@ -50,6 +50,8 @@ func TestWorkerRedirectExposesNoCredential(t *testing.T) {
 		// challenge makes the known host answer the registry's 401 instead of a redirect.
 		challenge   bool
 		sentByKnown string
+		// wantBasic: the registry's own challenge names the token host, so a watch's Basic credential goes there by design.
+		wantBasic bool
 	}{
 		{name: "github, with a credential", kind: "github_release", cred: cred, sentByKnown: "Authorization",
 			cfg: func(k string) map[string]any { return map[string]any{"repo": "a/b", "api_url": k} }},
@@ -68,6 +70,10 @@ func TestWorkerRedirectExposesNoCredential(t *testing.T) {
 		{name: "path-preserving host, with a credential", kind: "gitlab_release", cred: cred, sentByKnown: "Private-Token", preserve: true, wantURI: "/api/v4/projects/a%2Fb/releases?per_page=50",
 			cfg: func(k string) map[string]any { return map[string]any{"project": "a/b", "base_url": k} }},
 		{name: "registry token realm, a key's watch", kind: "oci_tags", challenge: true,
+			cfg: func(k string) map[string]any {
+				return map[string]any{"repository": "a/b", "registry": strings.TrimPrefix(k, "http://")}
+			}},
+		{name: "registry token realm, with a credential", kind: "oci_tags", challenge: true, cred: cred, wantBasic: true,
 			cfg: func(k string) map[string]any {
 				return map[string]any{"repository": "a/b", "registry": strings.TrimPrefix(k, "http://")}
 			}},
@@ -116,8 +122,15 @@ func TestWorkerRedirectExposesNoCredential(t *testing.T) {
 				t.Fatalf("the known host got no %s: this test measures nothing", tt.sentByKnown)
 			}
 			for _, r := range other.seen {
-				if r.Header.Get("Authorization") != "" || r.Header.Get("Private-Token") != "" {
-					t.Errorf("a credential reached the other host: %v", r.Header)
+				auth := r.Header.Get("Authorization")
+				if tt.wantBasic != strings.HasPrefix(auth, "Basic ") || (!tt.wantBasic && auth != "") || r.Header.Get("Private-Token") != "" {
+					t.Errorf("credential at the other host, want Basic %v: %v", tt.wantBasic, r.Header)
+				}
+				if r.Header.Get("Referer") != "" {
+					t.Errorf("Referer at the other host: %v", r.Header.Get("Referer"))
+				}
+				if tt.challenge && r.URL.Query().Get("scope") != "repository:a/b:pull" {
+					t.Errorf("token host read scope %q", r.URL.Query().Get("scope"))
 				}
 				dump, _ := json.Marshal(r.Header)
 				if strings.Contains(string(dump)+r.URL.String(), secret) {

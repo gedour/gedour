@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,6 +26,7 @@ import (
 	"github.com/gedour/gedour/pkg/audit"
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
+	"github.com/gedour/gedour/pkg/watch"
 )
 
 type nested struct {
@@ -70,6 +73,7 @@ func TestBuildToolsRefuses(t *testing.T) {
 		{"admin path", row{name: "x", op: "admin-thing", scope: scopeRead}, auth.AdminPrefix},
 		{"unknown scope", row{name: "x", op: "bare", scope: "admin"}, "unknown scope"},
 		{"limit on an operation without one", row{name: "x", op: "bare", scope: scopeRead, limitMax: 5}, "no limit"},
+		{"hidden input the operation no longer has", row{name: "x", op: "bare", scope: scopeRead, hidden: []string{"credential_id"}}, "credential_id"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := buildTools(sampleDoc(), []row{tt.r}); err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -93,7 +97,8 @@ func TestBuildToolsRefuses(t *testing.T) {
 // The real table builds against nothing but its own operations: a typo in it fails here too.
 func TestCatalogOrder(t *testing.T) {
 	want := []string{"count_inbox", "list_inbox", "list_watches", "get_watch", "list_watch_events", "list_watch_states", "list_rules", "get_rule", "list_deliveries",
-		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch"}
+		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch",
+		"get_filter_reference", "list_channels", "create_watch", "update_watch", "create_rule", "update_rule"}
 	if len(rows) != len(want) {
 		t.Fatalf("%d rows", len(rows))
 	}
@@ -167,13 +172,71 @@ func TestSanitizeBody(t *testing.T) {
 	}
 }
 
-// Read and write tools say they destroy nothing, as MCP's default says they may; manage's edits keep the default.
+// Read and write tools say they destroy nothing, as MCP's default says they may; manage's edits keep the default, its reads do not.
 func TestDestructiveHint(t *testing.T) {
-	for scope, want := range map[string]*bool{scopeRead: new(false), scopeWrite: new(false), scopeManage: nil} {
-		got := (&tool{row: row{scope: scope}}).sdkTool().Annotations.DestructiveHint
-		if (got == nil) != (want == nil) || (got != nil && *got) {
-			t.Errorf("%s: %v", scope, got)
+	for _, tt := range []struct {
+		r    row
+		want *bool
+	}{
+		{row{scope: scopeRead}, new(false)},
+		{row{scope: scopeWrite}, new(false)},
+		{row{scope: scopeManage, readOnly: true}, new(false)},
+		{row{scope: scopeManage}, nil},
+	} {
+		got := (&tool{row: tt.r}).sdkTool().Annotations.DestructiveHint
+		if (got == nil) != (tt.want == nil) || (got != nil && *got) {
+			t.Errorf("%+v: %v", tt.r, got)
 		}
+	}
+}
+
+// 007-AC25: a hidden input leaves the schema, its required list and the dispatch map.
+func TestHiddenInput(t *testing.T) {
+	tools, err := buildTools(sampleDoc(), []row{{name: "s", op: "sample", scope: scopeWrite, hidden: []string{"name", "sub"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	props := tools[0].schema["properties"].(map[string]any)
+	if props["name"] != nil || props["sub"] != nil || tools[0].in["name"] != "" || strings.Join(tools[0].schema["required"].([]string), ",") != "id" {
+		t.Fatalf("%+v", tools[0].schema)
+	}
+}
+
+// A config's fields reach both tools from the structs, so a new one cannot be forgotten.
+func TestConfigFieldsInDescriptions(t *testing.T) {
+	structs := map[string]any{watch.KindGitHubRelease: watch.GitHubReleaseConfig{}, watch.KindGitHubPR: watch.GitHubPRConfig{}, watch.KindGitLabRelease: watch.GitLabReleaseConfig{},
+		watch.KindGitLabMR: watch.GitLabMRConfig{}, watch.KindOCITags: watch.OCITagsConfig{}}
+	if len(structs) != len(watch.Kinds) {
+		t.Fatalf("%d structs for %d kinds", len(structs), len(watch.Kinds))
+	}
+	for _, r := range rows {
+		if r.name != "create_watch" && r.name != "update_watch" {
+			continue
+		}
+		for _, kind := range watch.Kinds {
+			_, list, found := strings.Cut(r.desc, kind+": ")
+			if !found {
+				t.Fatalf("%s: no %s", r.name, kind)
+			}
+			list, _, _ = strings.Cut(list, ";")
+			st := reflect.TypeOf(structs[kind])
+			for i := range st.NumField() {
+				name, _, _ := strings.Cut(st.Field(i).Tag.Get("json"), ",")
+				if !slices.Contains(strings.Split(strings.TrimRight(strings.SplitN(list, ".", 2)[0], " "), ", "), name) {
+					t.Errorf("%s: %s lacks %s in %q", r.name, kind, name, list)
+				}
+			}
+		}
+	}
+}
+
+// 007-AC38: only what a rule needs survives, whatever the REST body grows.
+func TestBriefChannels(t *testing.T) {
+	data := map[string]any{"items": []any{map[string]any{"id": "i", "name": "n", "type": "webhook", "config": map[string]any{"url": "u"}, "last4": "abcd", "new_field": 1}}}
+	briefChannels(data, nil)
+	got, _ := json.Marshal(data)
+	if want := `{"items":[{"id":"i","name":"n","type":"webhook"}]}`; string(got) != want {
+		t.Fatalf("%s", got)
 	}
 }
 

@@ -82,6 +82,15 @@ func dropDeliveryDiagnostics(data any, _ map[string]any) {
 	}
 }
 
+// briefChannels keeps what a rule needs: config names the target, last4 is part of a secret, and any field added later stays out.
+func briefChannels(data any, _ map[string]any) {
+	for _, it := range items(data) {
+		if item, ok := it.(map[string]any); ok {
+			maps.DeleteFunc(item, func(k string, _ any) bool { return k != "id" && k != "name" && k != "type" })
+		}
+	}
+}
+
 // markTruncated says when a listing may have been cut, as this REST operation has no cursor.
 func markTruncated(data any, args map[string]any) {
 	if m, ok := data.(map[string]any); ok && scalar(args["limit"]) == strconv.Itoa(len(items(data))) {

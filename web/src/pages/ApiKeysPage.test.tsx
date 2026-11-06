@@ -124,7 +124,11 @@ describe("ApiKeysPage", () => {
     );
     await userEvent.type(within(dialog).getByLabelText("Name"), "laptop");
     await userEvent.click(within(dialog).getByRole("radio", { name: "Manage" }));
-    expect(within(dialog).getByText(/silence alerts/)).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "A hijacked manage key can silence alerts by disabling a rule or pausing a watch, and route events to your existing channels: give it only to clients that confirm writes with a person.",
+      ),
+    ).toBeInTheDocument();
     await userEvent.selectOptions(within(dialog).getByLabelText("Duration"), "never");
     expect(within(dialog).getByText(/no end date\. It still stops/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Create key" }));

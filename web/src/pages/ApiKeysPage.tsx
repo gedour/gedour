@@ -290,9 +290,9 @@ function CreateDialog({ open, onClose }: { open: boolean; onClose: () => void })
           </fieldset>
           {scope === "manage" && (
             <p className="inline-flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
-              <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />A manage key can
-              silence alerts by disabling a rule or pausing a watch. Give it only to clients that
-              confirm writes with a person.
+              <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />A hijacked manage key
+              can silence alerts by disabling a rule or pausing a watch, and route events to your
+              existing channels: give it only to clients that confirm writes with a person.
             </p>
           )}
           <Field

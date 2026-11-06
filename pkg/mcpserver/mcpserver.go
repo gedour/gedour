@@ -136,8 +136,8 @@ func (t *tool) sdkTool() *mcp.Tool {
 		desc += " " + untrustedWarning
 	}
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: t.readOnly, OpenWorldHint: new(t.openWorld)}
-	// MCP's default is true, which fits only manage's edits: read and write tools destroy nothing.
-	if t.scope != scopeManage {
+	// MCP's default is true, which fits only manage's edits: read and write tools destroy nothing, nor do manage's reads.
+	if t.readOnly || t.scope != scopeManage {
 		annotations.DestructiveHint = new(false)
 	}
 	return &mcp.Tool{Name: t.name, Description: desc, InputSchema: t.schema, Annotations: annotations}

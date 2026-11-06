@@ -98,6 +98,7 @@
 - Tests sending several calls per key mind the burst of 20 (`keyBurst`).
 - SDK code runs on its own goroutines (`jsonrpc2.handleAsync`, `readIncoming`), out of `net/http`'s recover. `wrap` guards what is below it; a panic ahead of it or behind it ends the process. Keep `servedMethods` narrow, and a new shape the source says could panic goes in `TestMCPOddRequestsSurvive`.
 - A write tool's audit row gets `api_key_id` from `dispatch` (`audit.WithAPIKey`). Budget-spending rows set `limited`. `audit.APIKeyID` says a request came with a key, for checks only a key must pass.
+- A row's `hidden` inputs leave its schema, and a handler refuses them too: `createWatch` and `updateWatch` hold the key's credential, retarget, known-host, cap and rate-limit-hold checks. Compare a target, host and path, with `comparableTarget`, never with `strings.ToLower` or a suffix: U+0130 and U+212A fold to ASCII.
 - An authenticated `/mcp` line that must never drop goes in `unsampled` (`cmd/gedour/main.go`); anything reachable without a key stays sampled.
 
 ## Kubernetes

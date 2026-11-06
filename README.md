@@ -183,10 +183,10 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 |---|---|---|
 | `read` (default) | Your inbox with release notes, owned and shared watches with their config, rules with filters, deliveries with their channel's name and without logs or errors | Credentials, channel targets, scripts, audit, other users, admin, other keys |
 | `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
-| `manage` | Also the list of channels, creating and editing rules and watches | Credentials, channel targets, delete, shares |
+| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credentials, channel targets, delete, shares |
 
-A `manage` key can silence alerts by disabling a rule or pausing a watch: give it only to clients that confirm
-writes with a person. Keys never open the REST API, which stays session-only.
+A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, and route events to your
+existing channels: give it only to clients that confirm writes with a person. Keys never open the REST API, which stays session-only.
 
 Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
 expiry, never the key or its hash.
@@ -228,21 +228,36 @@ Or in `.mcp.json`, with the key in an environment variable:
 | `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
 | `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
 | `archive_inbox`, `unarchive_inbox` | Archive items or take them back: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
-| `run_watch` | Schedules a run of a watch the owner can write and does not wait; refused on a paused watch, a read-only share, or while the upstream's rate limit holds the watch | `write` key; a burst of 6, then one every 10 s, per key and replica |
+| `run_watch` | Schedules a run of a watch the owner can write and does not wait; refused on a paused watch, a read-only share, or while the upstream's rate limit holds the watch | `write` key; shared budget |
+| `get_filter_reference` | What a rule's filter may use, and its limits | `manage` key |
+| `list_channels` | Your channels: ID, name and type, nothing else | `manage` key |
+| `create_watch` | Creates a watch without a credential | `manage` key; shared budget; refused past 200 owned watches |
+| `update_watch` | Changes a watch's name, config, schedule or paused state | `manage` key; shared budget |
+| `create_rule`, `update_rule` | Create or change a routing rule, with the same checks as the UI | `manage` key; shared budget; at most 100 rules |
 
 A key sees what its owner sees through the REST API. A `read` key reaches the first nine rows and gets `-32602` on the
-others. A `write` key also changes inbox state and schedules watch runs, nothing else. No tool takes a URL, a host or a
-free-form object.
+others. A `write` key also changes inbox state and schedules watch runs, nothing else. A `manage` key reaches every row.
+Only `create_watch` and `update_watch` take a free-form object, `config`. No tool takes a credential, and no input names a URL or a host
+outside that `config`. The shared budget is a burst of 6, then one every 10 s, per key and replica, across `run_watch` and the four edits.
 
-`run_watch` writes `watch.run_requested` in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
+A `manage` key has three refusals, because a config decides where gedour sends requests and with which token:
+
+- **No credential**: `create_watch` and `update_watch` refuse `credential_id`, even one you hold, and cannot detach one. A private repository starts in the UI.
+- **No retarget of a watch with a credential**: its config cannot change through a key, yours included, or an injected prompt could send your token to another host. Name, schedule and paused still work.
+- **Known hosts only**: `api_url`, `base_url` and `registry` must name, with no path, the kind's default (GitHub kinds `api.github.com`, GitLab kinds `gitlab.com`, `oci_tags` `docker.io` or `ghcr.io`), or the host and path of a watch you own, not one shared with you. A default on another kind is refused, even if a watch of yours saved it. A new host or path starts in the UI, so a URL cannot carry data to an attacker's server, nor through a known host's redirect. Targets compare exactly, after folding ASCII host case, a trailing dot, a default port and a trailing `/`. `?` and `#` are refused for everyone. A non-ASCII host compares as it was saved: its punycode form is another host, and a homoglyph of a known host is refused.
+
+While the upstream's rate limit holds a watch, a key's `update_watch` leaves its next run where it is: a new schedule, an unpause or a new config take effect, the run waits. A session's edit still runs it at once.
+
+A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization` and `Private-Token` when leaving the original host. A registry's token challenge names its token host the same way, with no credential on a key's watch.
+
+`run_watch` writes `watch.run_requested`, and the manage edits their usual `watch.*` and `rule.*` rows, in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
 or once the key is gone. Inbox marks are not audited, as on REST; the log lines cover them.
 
 - **Untrusted output**: release notes, titles and errors come from third parties. Every successful result is one text block: any notice about the key, a warning, then the data
   fenced with a nonce. The data drops C0 and C1 controls but tab, LF and CR, format characters (Unicode Cf: bidi,
   zero-width, tags) and U+2028, U+2029. Other invisible characters, such as variation selectors, stay. No fence stops a model that decides
   to obey: review what your client does with the tools it holds.
-- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. On top, `run_watch` has a burst of 6, then one every 10 s, per key and replica
-  (`isError`). A body over 1 MiB gets 413, a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
+- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. On top, the shared budget above answers `isError`. A body over 1 MiB gets 413, a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
 - **Methods**: at every protocol version `tools/list`, `tools/call` and `notifications/cancelled`; from `2026-07-28` `server/discover`; below it (a request with no version header counts) `initialize` and `ping`.
   `notifications/initialized` and `notifications/roots/list_changed` pass at every version, with no effect from `2026-07-28`. Any other method gets `-32601`, at 404 from `2026-07-28` and at 200 below it. An unserved notification gets a plain 404.
 - **Refusals**: a missing or invalid key gets 401, an `Origin` outside `GEDOUR_PUBLIC_URL` 403; in dev mode, only
@@ -540,7 +555,7 @@ from another namespace, or a webhook, Nextcloud Talk server, script fetch or wat
 `make k8s-smoke` builds the image, creates a kind cluster (`gedour-smoke`), deploys `deploy/k8s/test` (the
 base plus a throwaway PostgreSQL, the fake upstream, dev mode and the network policy; test only), and
 checks: gedour waits for PostgreSQL, started only afterwards, then 2 web and 2 worker pods are ready
-without restarts, `/healthz` and `/livez` answer through both Services, a script dry run
+without restarts, `/healthz` and `/livez` answer through both Services, `/mcp` with an API key (401 without, tools listed with), a script dry run
 and a script over its memory cap (killed, pod alive), a watch run and script deliveries on the workers.
 Then it brings up `compose.yaml` under a fresh project and checks the dev-mode UI, `/api/v1/me` and
 `/metrics`. Cluster, compose project and the images the smoke built are removed at the end. Needs kind

@@ -148,7 +148,7 @@ Fixed order, so client prompt caches hold ([spec SHOULD](https://modelcontextpro
 | `unarchive_inbox` | `unarchive-inbox` | write | false | |
 | `run_watch` | `run-watch` | write | false | Schedules the run through the worker; does not wait |
 
-The read and write tools also set `destructiveHint: false`: MCP defaults it to true.
+The read tools, write tools and the two manage reads also set `destructiveHint: false`: MCP defaults it to true.
 
 | Tool | Operation | Scope | `readOnlyHint` | Output changes |
 |---|---|---|---|---|
@@ -187,14 +187,24 @@ host. So a request made with a key, in the REST handlers so there is one path:
 - **Never changes the config of a watch that has a credential.** The existing sharee check in `updateWatch` also
   applies to keys, owner's included. Without it, an injected prompt moves `api_url` and the owner's token goes
   to that host. Name, schedule and pause still work.
-- **Only targets a known host.** Known means `api.github.com`, `gitlab.com`, `docker.io`, `ghcr.io`, or a host in
-  one of the owner's watches. A new host goes through the UI first. This keeps the URL from carrying data to an
-  attacker's server.
+- **Only targets a known host.** Known means the kind's own default (`api.github.com` for GitHub kinds, `gitlab.com`
+  for GitLab kinds, `docker.io` and `ghcr.io` for OCI tags), or a non-default host or path in one of the owner's watches; a saved default opens no other kind. A new host goes through the UI first. This keeps the URL from carrying data to an
+  attacker's server. Hosts compare exactly after folding ASCII case, a trailing dot and a default port. No IDNA
+  or Unicode folding: a homoglyph is refused, and a saved Unicode or punycode host matches only its own form.
+  The path counts too: none on a default host, a saved one on a saved host, as `docker.io` and `ghcr.io` redirect
+  a chosen path to other hosts. `?` and `#` in these URLs are refused, even empty, as they would cut the collector's
+  own path.
+
+A known host may answer a redirect to another host. The worker follows it with no `Authorization` or
+`Private-Token`, and records that host in the run's fetch log (measured, `TestWorkerRedirectExposesNoCredential`).
+That host learns the path the known host forwards, which can hold the key's `repo`, `project` or `repository`, a
+few hundred characters at most, at a destination the known host picks and the key does not. A person attaching a credential to a key-made watch is a
+person's decision.
 
 **Rate limits.** Per key, per replica, with the `route` limiter moved to a shared package, unchanged:
 5 requests/s with a burst of 20 on `POST /mcp` (HTTP 429 and `Retry-After`), and on top a burst of 6 then one every
 10 s for `run_watch` and the four manage mutations together (`isError`). `create_watch` refuses past 200 owned watches, as REST has no
-cap and each watch costs the worker a fetch; rules already have `MaxRules`. Body capped at 1 MiB (413). Auth runs before the body is read. A wrong key costs one primary key
+cap and each watch costs the worker a fetch; rules already have `MaxRules`. During an upstream's rate-limit hold, a key's `update_watch` leaves `next_run_at` alone, as a schedule change, an unpause or a retarget would otherwise walk past the hold. Body capped at 1 MiB (413). Auth runs before the body is read. A wrong key costs one primary key
 lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limiter.
 
 **What a leaked key reaches.**
@@ -241,8 +251,8 @@ no taint field, and no marking stops a model that decides to obey. So the defenc
    channel target, no script, no unknown host, no credential. Exfiltration through the client's other tools is the
    client's to gate. A fully hijacked key does at worst:
    - `write`: marks inbox items and schedules watch runs.
-   - `manage`: also routes events to the owner's existing channels, adds watches on known hosts, and **silences
-     alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2). Audited with the key's ID. Give
+   - `manage`: also routes events to the owner's existing channels, adds watches on known hosts with a name of
+     its choosing that reaches those channels' titles, and **silences alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2). Audited with the key's ID. Give
      `manage` to clients that confirm writes with a human.
 2. **Output marks all of it as untrusted.** Every field, as a per-field list would rot.
 
@@ -335,9 +345,10 @@ Manage:
 
 - [ ] **AC34** Sent with a key, `create-watch` and `update-watch` refuse a `credential_id`, even one the key's owner holds, whatever the entry path. The same calls on a session still work.
 - [ ] **AC35** With a key, changing the config of a watch that has a credential gets `isError`, for the owner too, on `api_url`, `base_url` and `registry` alike; changing its name, schedule or paused state works. The same change on a session still works.
-- [ ] **AC36** With a key, a config naming an unknown host gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
+- [ ] **AC36** With a key, a config naming an unknown host, or a path not saved on it, gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
 - [ ] **AC37** `create_rule` and `update_rule` keep the REST checks: another user's channel or an unreadable watch gets `isError`, a bad filter gets `isError` with the field, `MaxRules` holds.
 - [ ] **AC38** `list_channels` returns only `id`, `name` and `type`: a webhook channel's URL and `last4` appear nowhere in the result.
+- [ ] **AC41** During a rate-limit hold, a key's `update_watch` changing schedule, paused or target leaves `next_run_at` alone. The same edit on a session moves it.
 - [ ] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
 
 ## Phases
@@ -366,7 +377,7 @@ Manage:
 ### Phase 4 — Manage tools
 
 - Work: the 6 manage tools; a key flag on the context read by `watch` for the credential, config and host checks; watch cap; shared mutation limit; `list_channels` shaping; README's warning on `manage`.
-- **Covers**: AC23 (manage part), AC25 (`config`), AC34 to AC39.
+- **Covers**: AC23 (manage part), AC25 (`config`), AC34 to AC39, AC41.
 - **Data model impact**: none.
 - **DoD**: `make test` exits 0 with AC34 to AC36 run through `/mcp` and through a session on the same watch; `make e2e` exits 0 with a key creating a rule on `/mcp` and the rule showing in the UI; `make coverage` exits 0 on both floors; `pre-commit run --all-files` exits 0.
 
@@ -413,6 +424,8 @@ None. Answered by babs:
 - `never` is not the default, and does not skip the sign-in check: that check is the only bound left on such a key.
 - A key cannot attach a credential, retarget one, or reach a new host: these are this spec's additions to Q2, as `manage` would otherwise hand the owner's tokens to an injected prompt. Cost: a private repository or a new host starts in the UI. Overturnable, at that risk.
 - No delete tool: Q2 asked for creation and edition.
+- A read-write sharee on a session can add a host to the owner's known set by retargeting a watch with no credential. REST allows that retarget, and exploiting it takes a malicious sharee and a hijacked key: accepted.
+- The 200-watch cap on a key is soft, without a lock: two concurrent creates may overshoot by one.
 - No FK on `audit_log.api_key_id`: the purge deletes keys and the audit log is append-only.
 - Disable revokes rather than blocks: a key behaves as a session, and an operator re-enabling an account does not silently reopen a leak.
 - Limits are constants but the sign-in max age, which an operator's IdP policy decides.

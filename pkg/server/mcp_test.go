@@ -981,7 +981,7 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	limits := map[string][2]float64{"list_inbox": {20, 50}, "list_watches": {50, 200}, "list_watch_events": {50, 50}, "list_watch_states": {20, 50}, "list_deliveries": {50, 50}}
-	if len(list.Tools) != len(readTools)+len(writeTools) {
+	if len(list.Tools) != len(readTools)+len(writeTools)+len(manageTools) {
 		t.Fatalf("%d tools", len(list.Tools))
 	}
 	ops := map[string]string{"mark_inbox_read": "read-inbox", "mark_inbox_unread": "unread-inbox"}
@@ -1013,6 +1013,9 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 							required = append(required, p.Name)
 						}
 					}
+					if tool.Name == "create_watch" || tool.Name == "update_watch" {
+						delete(want, "credential_id")
+					}
 					if l, ok := limits[tool.Name]; ok {
 						want["limit"]["default"], want["limit"]["maximum"] = l[0], l[1]
 					}
@@ -1037,7 +1040,8 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 				if strings.Contains(lower, "url") || strings.Contains(lower, "host") || lower == "credential_id" {
 					t.Errorf("input %q", name)
 				}
-				if prop["type"] == "object" && prop["properties"] == nil {
+				isConfig := name == "config" && (tool.Name == "create_watch" || tool.Name == "update_watch")
+				if prop["type"] == "object" && prop["properties"] == nil && !isConfig {
 					t.Errorf("free-form object %q", name)
 				}
 			}

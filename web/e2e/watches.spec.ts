@@ -25,6 +25,28 @@ async function bobPage(browser: Browser, baseURL: string | undefined) {
   return { page, violations, close: () => context.close() };
 }
 
+test("alice deletes several watches at once", async ({ page }) => {
+  const t = tag();
+  for (const n of ["one", "two", "three"]) await createWatch(page, `Bulk ${n} ${t}`);
+  await page.goto("/watches");
+  await page.getByLabel("Search").fill(t);
+  const list = page.getByRole("list", { name: "Watches" });
+  await expect(list.getByRole("listitem")).toHaveCount(3);
+  await page.getByRole("checkbox", { name: `Select: Bulk one ${t}` }).check();
+  await page.getByRole("checkbox", { name: `Select: Bulk two ${t}` }).check();
+  await page
+    .getByRole("toolbar", { name: "Bulk actions" })
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await page
+    .getByRole("dialog", { name: "Delete 2 watches?" })
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Deleted 2 watches");
+  await expect(list.getByRole("listitem")).toHaveCount(1);
+  await expect(list).toContainText(`Bulk three ${t}`);
+});
+
 // 001-AC4: one watch of each kind through the UI (one by URL paste), edit, pause, resume, delete.
 test("alice creates, edits, pauses, resumes and deletes watches of every kind", async ({
   page,

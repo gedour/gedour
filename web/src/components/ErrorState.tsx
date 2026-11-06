@@ -6,10 +6,12 @@ export function ErrorState({
   title,
   error,
   onRetry,
+  retryLabel = "Retry",
 }: {
   title: string;
   error: Error;
   onRetry: () => void;
+  retryLabel?: string;
 }) {
   return (
     <div
@@ -20,7 +22,7 @@ export function ErrorState({
       <p className="text-sm text-muted">{error.message}</p>
       <Button variant="outline" onClick={onRetry}>
         <RotateCw aria-hidden />
-        Retry
+        {retryLabel}
       </Button>
     </div>
   );

@@ -89,6 +89,9 @@ export const navigation = {
   go(url: string) {
     window.location.assign(url);
   },
+  reload() {
+    window.location.reload();
+  },
 };
 
 const SAFE = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -196,6 +199,20 @@ export async function logout(): Promise<string> {
 /** Ends the session and leaves for the provider's logout, or the signed-out page. */
 export async function signOut(): Promise<void> {
   navigation.go(await logout());
+}
+
+export function reloadPage(): void {
+  navigation.reload();
+}
+
+/** Whether the server answers. Not request(): its answer must never change the auth state. */
+export async function serverReachable(): Promise<boolean> {
+  try {
+    const res = await fetch("/healthz", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Promise<AuditPage> {

@@ -95,6 +95,81 @@ describe("summarizeEvent", () => {
       "PR #12 commented by bob",
       "change",
     ],
+    // 008-AC12: the two new-item events, mirrored in pkg/notify/message.go.
+    [
+      ev("issue.opened", { ...pr, author: "alice", labels: ["bug"] }),
+      "New issue",
+      "Issue #12 opened by alice",
+      "change",
+    ],
+    // 008-AC12: the github_issue events, mirrored in pkg/notify/message.go.
+    [
+      ev("issue.state_changed", { ...pr, from: "open", to: "closed", state_reason: "not_planned" }),
+      "State",
+      "Issue #12 closed (not planned)",
+      "bad",
+    ],
+    [
+      ev("issue.state_changed", { ...pr, from: "open", to: "closed", state_reason: "completed" }),
+      "State",
+      "Issue #12 closed (completed)",
+      "good",
+    ],
+    [
+      ev("issue.state_changed", { ...pr, from: "open", to: "closed", state_reason: "" }),
+      "State",
+      "Issue #12 closed",
+      "bad",
+    ],
+    [
+      ev("issue.state_changed", { ...pr, from: "closed", to: "closed", state_reason: "duplicate" }),
+      "State",
+      "Issue #12 closed (duplicate)",
+      "bad",
+    ],
+    [
+      ev("issue.state_changed", { ...pr, from: "closed", to: "closed", state_reason: "completed" }),
+      "State",
+      "Issue #12 closed (completed)",
+      "good",
+    ],
+    // A server keeping the old reason on reopen: still a reopen, not a happy close.
+    [
+      ev("issue.state_changed", { ...pr, from: "closed", to: "open", state_reason: "completed" }),
+      "State",
+      "Issue #12 reopened",
+      "change",
+    ],
+    [
+      ev("issue.state_changed", { ...pr, from: "closed", to: "open", state_reason: "reopened" }),
+      "State",
+      "Issue #12 reopened",
+      "change",
+    ],
+    [
+      ev("issue.labels_changed", { ...pr, from: ["bug"], to: ["bug", "triage"] }),
+      "Labels",
+      "Issue #12 labels: bug, triage",
+      "change",
+    ],
+    [
+      ev("issue.labels_changed", { ...pr, from: ["bug"], to: [] }),
+      "Labels",
+      "Issue #12 labels: none",
+      "change",
+    ],
+    [
+      ev("issue.commented", { ...pr, author: "alice", excerpt: "Same here." }),
+      "Comment",
+      "Issue #12 commented by alice",
+      "change",
+    ],
+    [
+      ev("pr.opened", { ...pr, author: "alice", labels: [] }),
+      "New PR",
+      "PR #12 opened by alice",
+      "change",
+    ],
     [
       ev("mr.state_changed", { ...mr, from: "opened", to: "merged" }),
       "State",

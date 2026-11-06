@@ -4,7 +4,7 @@ export function watch(over: Partial<Watch> = {}): Watch {
   return {
     id: "w1",
     name: "Go releases",
-    kind: "github_release",
+    kind: "github_repo",
     config: { repo: "golang/go", include_prereleases: false, api_url: "https://api.github.com" },
     credential_id: null,
     schedule: "15m",

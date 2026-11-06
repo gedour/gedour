@@ -1,12 +1,18 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { expect, gate, SEED, test, UPSTREAM } from "./fixtures";
+import { enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE });
 
 const SHOTS = process.env.E2E_SHOTS_DIR;
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+
+/** Types a filter into the focused field, replacing what a previous attempt typed. */
+const retype = (page: Page) => async (text: string, attempt: number) => {
+  if (attempt > 0) await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type(text);
+};
 
 /** Asserts target has keyboard focus with a visible indicator: its own outline or its card's ring. */
 async function expectFocusVisible(target: Locator) {
@@ -51,7 +57,7 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(page.getByRole("heading", { level: 1, name: "New watch" })).toBeVisible();
   await tabTo(page, page.getByLabel("Paste a URL"));
   await page.keyboard.type("https://github.com/cli/cli/releases");
-  await expect(page.getByText("Recognized: GitHub releases")).toBeVisible();
+  await expect(page.getByText("Recognized: GitHub repository")).toBeVisible();
   await tabTo(page, page.getByLabel("API URL (optional)"));
   await page.keyboard.type(UPSTREAM);
   await tabTo(page, page.getByLabel("Name"));
@@ -80,8 +86,7 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await page.keyboard.type(name);
   await expect(watches.locator("option:checked")).toHaveText(name);
   await tabTo(page, page.getByLabel("Expression"));
-  await page.keyboard.type('event.type == "release.published"');
-  await expect(page.getByText("Valid filter")).toBeVisible();
+  await enterFilter(page, 'event.type == "release.published"', retype(page));
   await tabTo(page, page.getByRole("button", { name: "Create rule" }));
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/rules$/);
@@ -132,8 +137,7 @@ test("set a rule's priority and filter the inbox, by keyboard only", async ({ pa
   await expect(priority).toHaveValue("high");
   await tabTo(page, page.getByLabel("Expression"));
   // Matches nothing: bob's seeded items stay as they are.
-  await page.keyboard.type('event.type == "none"');
-  await expect(page.getByText("Valid filter")).toBeVisible();
+  await enterFilter(page, 'event.type == "none"', retype(page));
   await tabTo(page, page.getByRole("button", { name: "Create rule" }));
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/rules$/);

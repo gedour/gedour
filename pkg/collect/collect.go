@@ -78,8 +78,9 @@ func (k kind[C, S]) Diff(old, new json.RawMessage) ([]Event, error) {
 // Collectors returns the collector of every watch kind.
 func Collectors() map[string]Collector {
 	return map[string]Collector{
-		watch.KindGitHubRelease: kind[watch.GitHubReleaseConfig, ReleaseState]{collectGitHubReleases, diffReleases},
+		watch.KindGitHubRepo:    kind[watch.GitHubRepoConfig, ReleaseState]{collectGitHubRepo, diffReleases},
 		watch.KindGitHubPR:      kind[watch.GitHubPRConfig, PRState]{collectGitHubPR, diffPR},
+		watch.KindGitHubIssue:   kind[watch.GitHubIssueConfig, IssueState]{collectGitHubIssue, diffIssue},
 		watch.KindGitLabRelease: kind[watch.GitLabReleaseConfig, ReleaseState]{collectGitLabReleases, diffReleases},
 		watch.KindGitLabMR:      kind[watch.GitLabMRConfig, MRState]{collectGitLabMR, diffMR},
 		watch.KindOCITags:       kind[watch.OCITagsConfig, TagState]{collectOCITags, diffTags},

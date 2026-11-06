@@ -57,7 +57,10 @@ function github(parts: string[]): Recognized | null {
   if ((section === "pull" || section === "pulls") && number) {
     return { kind: "github_pr", config: { repo, number } };
   }
-  return { kind: "github_release", config: { repo } };
+  if (section === "issues" && number) {
+    return { kind: "github_issue", config: { repo, number } };
+  }
+  return { kind: "github_repo", config: { repo } };
 }
 
 function gitlab(u: URL, parts: string[], dotCom: boolean): Recognized | null {

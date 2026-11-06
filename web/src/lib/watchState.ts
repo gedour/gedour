@@ -22,6 +22,14 @@ export interface PRState {
   head_sha: string;
   url: string;
 }
+export interface IssueState {
+  number: number;
+  state: string;
+  state_reason: string;
+  title: string;
+  labels: string[] | null;
+  url: string;
+}
 export interface MRState {
   iid: number;
   state: string;
@@ -42,7 +50,7 @@ export interface TagState {
 export function stateLine(kind: WatchKind, state: unknown): string {
   if (!state || typeof state !== "object") return "empty";
   switch (kind) {
-    case "github_release":
+    case "github_repo":
     case "gitlab_release": {
       const rs = (state as ReleaseState).releases ?? [];
       const latest = rs.find((r) => !r.draft);
@@ -51,6 +59,11 @@ export function stateLine(kind: WatchKind, state: unknown): string {
     case "github_pr": {
       const s = state as PRState;
       return `${s.state}${s.draft ? " (draft)" : ""} · review ${s.review_decision.replaceAll("_", " ")} · CI ${s.ci}`;
+    }
+    case "github_issue": {
+      const s = state as IssueState;
+      const labels = s.labels ?? [];
+      return `${issueStateText(s)}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
     }
     case "gitlab_mr": {
       const s = state as MRState;
@@ -61,4 +74,11 @@ export function stateLine(kind: WatchKind, state: unknown): string {
       return `${s.count} tag${s.count === 1 ? "" : "s"}${s.highest ? `, highest ${s.highest}` : ""}`;
     }
   }
+}
+
+/** "open", "closed" or "closed (not planned)": GitHub sets a reason on reopen too, only a close shows it. */
+export function issueStateText(s: Pick<IssueState, "state" | "state_reason">): string {
+  return s.state === "closed" && s.state_reason
+    ? `closed (${s.state_reason.replaceAll("_", " ")})`
+    : s.state;
 }

@@ -66,7 +66,7 @@ export const FILTER_FIELDS: FilterField[] = [
   { expr: "event.payload.cves", hint: "releases: CVE ids found in the notes, uppercased" },
   { expr: "event.occurred_at", hint: "upstream time (else when gedour saw it)" },
   { expr: "watch.name", hint: "the watch's name" },
-  { expr: "watch.kind", hint: '"github_release", "oci_tags"…' },
+  { expr: "watch.kind", hint: '"github_repo", "oci_tags"…' },
   { expr: 'semver_gt(event.payload.tag, "v1.0.0")', hint: "true when the tag is a higher version" },
   {
     expr: 'event.payload.tag matches "^v[0-9]+[.]"',

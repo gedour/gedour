@@ -260,6 +260,36 @@ describe("InboxPage", () => {
     expect(within(panel).queryByText("Release notes")).not.toBeInTheDocument();
   });
 
+  // 008-AC12: a new issue reads as one line, its labels as one row; an empty label list is left out.
+  it("shows a new issue and its labels", async () => {
+    const opened = (id: number, type: string, labels: string[]) =>
+      inboxItem(id, {
+        event: {
+          id,
+          type,
+          occurred_at: yesterday(),
+          observed_at: yesterday(),
+          payload: {
+            number: 12 + id,
+            title: "Crash",
+            author: "alice",
+            labels,
+            url: "https://github.com/o/r/issues/13",
+          },
+        },
+      });
+    inboxServer([opened(1, "issue.opened", ["bug", "ui"]), opened(2, "pr.opened", [])]);
+    renderApp("/inbox");
+    await userEvent.click(await screen.findByRole("button", { name: /Issue #13 opened by alice/ }));
+    const panel = screen.getByRole("complementary", { name: "Issue #13 opened by alice" });
+    expect(within(panel).getByRole("region", { name: "Details" })).toHaveTextContent(
+      "labelsbug, ui",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /PR #14 opened by alice/ }));
+    const pr = screen.getByRole("complementary", { name: "PR #14 opened by alice" });
+    expect(within(pr).getByRole("region", { name: "Details" })).not.toHaveTextContent("labels");
+  });
+
   it("closes the panel with Escape or its button", async () => {
     inboxServer([inboxItem(1, { read_at: yesterday() })]);
     renderApp("/inbox");

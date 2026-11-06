@@ -201,15 +201,15 @@ func (f *fake) total() map[string]int {
 func TestExactlyOnceAcrossReplicas(t *testing.T) {
 	e := newEnv(t)
 	for i := range 50 {
-		e.addWatch(t, "github_release", fmt.Sprintf(`{"n": %d}`, i), "1m")
+		e.addWatch(t, "github_repo", fmt.Sprintf(`{"n": %d}`, i), "1m")
 	}
 	slow := func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		time.Sleep(2 * time.Millisecond) // keeps both replicas claiming at once
 		return json.RawMessage(`{"v":1}`), nil
 	}
 	f1, f2 := newFake(slow), newFake(slow)
-	w1 := e.worker(t, connect(t, e.url), map[string]collect.Collector{"github_release": f1})
-	w2 := e.worker(t, connect(t, e.url), map[string]collect.Collector{"github_release": f2})
+	w1 := e.worker(t, connect(t, e.url), map[string]collect.Collector{"github_repo": f1})
+	w2 := e.worker(t, connect(t, e.url), map[string]collect.Collector{"github_repo": f2})
 	for k := range 10 {
 		e.clock.set(t0.Add(time.Duration(k) * time.Minute))
 		var wg sync.WaitGroup
@@ -233,7 +233,7 @@ func TestExactlyOnceAcrossReplicas(t *testing.T) {
 	if a, b := sum(f1.total()), sum(f2.total()); a+b != 500 || a == 0 || b == 0 {
 		t.Fatalf("runs split %d + %d, want 500 shared by both", a, b)
 	}
-	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_release", "ok")); got != 500 {
+	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_repo", "ok")); got != 500 {
 		t.Fatalf("runs metric %v", got)
 	}
 }
@@ -242,7 +242,7 @@ func TestExactlyOnceAcrossReplicas(t *testing.T) {
 // the lease; replaying a change inserts no duplicate event.
 func TestBaselineLeaseAndDedup(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	state := `{"v":1}`
 	var mu sync.Mutex
 	f := newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
@@ -250,7 +250,7 @@ func TestBaselineLeaseAndDedup(t *testing.T) {
 		defer mu.Unlock()
 		return json.RawMessage(state), nil
 	})
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": f})
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": f})
 
 	tick(t, w)
 	if n := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id); n != 1 {
@@ -305,16 +305,16 @@ func TestBaselineLeaseAndDedup(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id); n != 2 {
 		t.Fatalf("unchanged run stored a state: %d", n)
 	}
-	if got := testutil.ToFloat64(e.m.events.WithLabelValues("github_release", "fake.changed")); got != 1 {
+	if got := testutil.ToFloat64(e.m.events.WithLabelValues("github_repo", "fake.changed")); got != 1 {
 		t.Fatalf("events metric %v", got)
 	}
 }
 
 func TestStateHistoryPruned(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	n := 0
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		n++
 		return json.RawMessage(fmt.Sprintf(`{"v":%d}`, n)), nil
 	})})
@@ -334,7 +334,7 @@ func TestStateHistoryPruned(t *testing.T) {
 // one success recovers.
 func TestBackoffAndRecovery(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "10m")
+	id := e.addWatch(t, "github_repo", `{}`, "10m")
 	fail := errors.New(strings.Repeat("é", 600) + "upstream exploded")
 	f := newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		if fail != nil {
@@ -342,7 +342,7 @@ func TestBackoffAndRecovery(t *testing.T) {
 		}
 		return json.RawMessage(`{}`), nil
 	})
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": f})
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": f})
 	now := t0
 	for i, wantDelay := range []time.Duration{10, 20, 40, 80, 80} {
 		e.clock.set(now)
@@ -362,7 +362,7 @@ func TestBackoffAndRecovery(t *testing.T) {
 	if r := e.row(t, id); *r.status != "ok" || r.failures != 0 || r.lastErr != nil || !r.next.Equal(now.Add(10*time.Minute)) {
 		t.Fatalf("recovery: %+v", r)
 	}
-	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_release", "error")); got != 5 {
+	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_repo", "error")); got != 5 {
 		t.Fatalf("error runs metric %v", got)
 	}
 	if Backoff(time.Minute, 0) != time.Minute || Backoff(time.Minute, 1000) != 8*time.Minute {
@@ -373,12 +373,12 @@ func TestBackoffAndRecovery(t *testing.T) {
 // 001-AC11: a rate limit sets the next run to the reset time (capped at 1 h), keeps the failure count.
 func TestRateLimitDelaysNextRun(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET consecutive_failures = 2 WHERE id = $1`, id); err != nil {
 		t.Fatal(err)
 	}
 	var until time.Time
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		return nil, &collect.RateLimitError{Until: until, URL: "https://api.github.com/x"}
 	})})
 	for _, tt := range []struct {
@@ -397,7 +397,7 @@ func TestRateLimitDelaysNextRun(t *testing.T) {
 			t.Fatalf("until +%v: %s failures=%d next=+%v", tt.until, *r.status, r.failures, r.next.Sub(now))
 		}
 	}
-	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_release", "rate_limited")); got != 3 {
+	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_repo", "rate_limited")); got != 3 {
 		t.Fatalf("rate limited metric %v", got)
 	}
 }
@@ -418,7 +418,7 @@ func TestGitLabRateLimitEndToEnd(t *testing.T) {
 	}
 }
 
-// 001-AC7, 001-AC8, 001-AC11: the real github_release collector through the worker: baseline, a 304
+// 001-AC7, 001-AC8, 001-AC11: the real github_repo collector through the worker: baseline, a 304
 // on the stored ETag (state untouched), then fixture B's events.
 func TestRealCollectorETagAndEvents(t *testing.T) {
 	e := newEnv(t)
@@ -429,7 +429,7 @@ func TestRealCollectorETagAndEvents(t *testing.T) {
 		up.ServeHTTP(w, r)
 	}))
 	defer srv.Close()
-	id := e.addWatch(t, "github_release", fmt.Sprintf(`{"repo": "cli/cli", "api_url": %q, "include_prereleases": true}`, srv.URL), "1m")
+	id := e.addWatch(t, "github_repo", fmt.Sprintf(`{"repo": "cli/cli", "api_url": %q, "include_prereleases": true}`, srv.URL), "1m")
 	w := e.worker(t, e.pool, collect.Collectors())
 	for k, set := range []string{"a", "a", "b"} {
 		up.SetFixture(set)
@@ -460,6 +460,43 @@ func TestRealCollectorETagAndEvents(t *testing.T) {
 	}
 }
 
+// developReleaseStateA is fixture A's state as develop (a6e4705) stored it, before the kind rename: a literal,
+// so a change of the state shape that would make migrated watches fire shows here.
+const developReleaseStateA = `{"releases":[
+{"tag":"v2.105.0","name":"GitHub CLI 2.105.0","prerelease":false,"draft":true,"published_at":null,"url":"https://github.com/cli/cli/releases/tag/untagged-105"},
+{"tag":"v2.104.0-rc.1","name":"GitHub CLI 2.104.0-rc.1","prerelease":true,"draft":false,"published_at":"2026-10-20T15:02:11Z","url":"https://github.com/cli/cli/releases/tag/v2.104.0-rc.1"},
+{"tag":"v2.103.2","name":"GitHub CLI 2.103.2","prerelease":false,"draft":false,"published_at":"2026-10-10T18:44:52Z","url":"https://github.com/cli/cli/releases/tag/v2.103.2"},
+{"tag":"v2.103.1","name":"GitHub CLI 2.103.1","prerelease":false,"draft":false,"published_at":"2026-10-01T12:10:03Z","url":"https://github.com/cli/cli/releases/tag/v2.103.1"}]}`
+
+// 008-AC1: a migrated github_repo watch keeps the state develop stored; its next run on unchanged upstream data
+// fetches, diffs against that state and emits nothing.
+func TestMigratedRepoWatchNextRunQuiet(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	var inm []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inm = append(inm, r.Header.Get("If-None-Match"))
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	id := e.addWatch(t, "github_repo", fmt.Sprintf(`{"repo": "cli/cli", "api_url": %q, "include_prereleases": true}`, srv.URL), "1m")
+	// A foreign hash: the run must diff instead of taking the unchanged-hash short-cut.
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_states (watch_id, state, state_hash) VALUES ($1, $2, 'stored-before-008')`,
+		id, developReleaseStateA); err != nil {
+		t.Fatal(err)
+	}
+	tick(t, e.worker(t, e.pool, collect.Collectors()))
+	if r := e.row(t, id); *r.status != "ok" {
+		t.Fatalf("%s %v", *r.status, *r.lastErr)
+	}
+	if len(inm) != 1 || inm[0] != "" {
+		t.Fatalf("want one unconditional fetch: %q", inm)
+	}
+	if n := e.count(t, `SELECT count(*) FROM events WHERE watch_id = $1`, id); n != 0 {
+		t.Fatalf("events %d", n)
+	}
+}
+
 // 004-AC1, 004-AC6: through PostgreSQL, the events carry the notes and the stored states do not; a later
 // edit of a release's notes alone changes nothing. A NUL in the notes does not fail the run.
 func TestReleaseNotesInEventsNotStates(t *testing.T) {
@@ -481,7 +518,7 @@ func TestReleaseNotesInEventsNotStates(t *testing.T) {
 		defer mu.Unlock()
 		page = s
 	}
-	id := e.addWatch(t, "github_release", fmt.Sprintf(`{"repo":"o/r","api_url":%q,"include_prereleases":true}`, srv.URL), "1m")
+	id := e.addWatch(t, "github_repo", fmt.Sprintf(`{"repo":"o/r","api_url":%q,"include_prereleases":true}`, srv.URL), "1m")
 	w := e.worker(t, e.pool, collect.Collectors())
 	run := func(k int) {
 		t.Helper()
@@ -564,7 +601,7 @@ func TestCredential(t *testing.T) {
 func TestStaleRuns(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	retarget := e.addWatch(t, "github_release", `{"a": 1}`, "1m")
+	retarget := e.addWatch(t, "github_repo", `{"a": 1}`, "1m")
 	gone := e.addWatch(t, "github_pr", `{"b": 1}`, "1m")
 	release := newFake(func(_ context.Context, cfg string, _ *collect.Credential) (json.RawMessage, error) {
 		if cfg == `{"a": 1}` {
@@ -576,7 +613,7 @@ func TestStaleRuns(t *testing.T) {
 		return json.RawMessage(cfg), nil
 	})
 	w := e.worker(t, e.pool, map[string]collect.Collector{
-		"github_release": release,
+		"github_repo": release,
 		"github_pr": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 			_, err := e.pool.Exec(ctx, `DELETE FROM watches WHERE id = $1`, gone)
 			return json.RawMessage(`{}`), err
@@ -607,9 +644,9 @@ func TestStaleRuns(t *testing.T) {
 func TestRunDrainsAndReleases(t *testing.T) {
 	t.Run("finishes in-flight", func(t *testing.T) {
 		e := newEnv(t)
-		id := e.addWatch(t, "github_release", `{}`, "1m")
+		id := e.addWatch(t, "github_repo", `{}`, "1m")
 		started, release := make(chan struct{}), make(chan struct{})
-		w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+		w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 			close(started)
 			<-release
 			return json.RawMessage(`{}`), nil
@@ -628,7 +665,7 @@ func TestRunDrainsAndReleases(t *testing.T) {
 		// 001-AC31: the gauge counts due watches; this one is scheduled a minute ahead now.
 		w.updateDue(context.Background())
 		e.clock.set(t0.Add(time.Minute))
-		e.addWatch(t, "github_release", `{"other": 1}`, "1m")
+		e.addWatch(t, "github_repo", `{"other": 1}`, "1m")
 		w.updateDue(context.Background())
 		if got := testutil.ToFloat64(e.m.due); got != 2 {
 			t.Fatalf("due gauge %v", got)
@@ -636,9 +673,9 @@ func TestRunDrainsAndReleases(t *testing.T) {
 	})
 	t.Run("releases past the drain timeout", func(t *testing.T) {
 		e := newEnv(t)
-		id := e.addWatch(t, "github_release", `{}`, "1m")
+		id := e.addWatch(t, "github_repo", `{}`, "1m")
 		started := make(chan struct{})
-		w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(ctx context.Context, _ string, _ *collect.Credential) (json.RawMessage, error) {
+		w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(ctx context.Context, _ string, _ *collect.Credential) (json.RawMessage, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, ctx.Err()
@@ -752,9 +789,9 @@ func TestRunNowDuringRunAgainstOutcome(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t)
-			id := e.addWatch(t, "github_release", `{}`, "1m")
+			id := e.addWatch(t, "github_repo", `{}`, "1m")
 			started, release := make(chan struct{}, 1), make(chan struct{})
-			w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+			w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 				started <- struct{}{}
 				<-release
 				return nil, tt.runErr
@@ -787,9 +824,9 @@ func TestRunNowDuringRunAgainstOutcome(t *testing.T) {
 // cannot start a second run: the lease is apart from next_run_at. The request is kept for after.
 func TestRunNowDuringRunWaitsForTheLease(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	seq := newSequenced(1)
-	cs := map[string]collect.Collector{"github_release": newFake(seq.collect)}
+	cs := map[string]collect.Collector{"github_repo": newFake(seq.collect)}
 	w1, w2 := e.worker(t, e.pool, cs), e.worker(t, connect(t, e.url), cs)
 	tick(t, w1) // baseline v0
 
@@ -825,9 +862,9 @@ func TestRunNowDuringRunWaitsForTheLease(t *testing.T) {
 // finish is discarded, so an older fetch never overwrites a newer state.
 func TestLateFinishAfterLostLeaseIsDiscarded(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	seq := newSequenced(1)
-	cs := map[string]collect.Collector{"github_release": newFake(seq.collect)}
+	cs := map[string]collect.Collector{"github_repo": newFake(seq.collect)}
 	w1, w2 := e.worker(t, e.pool, cs), e.worker(t, connect(t, e.url), cs)
 	tick(t, w1)
 	e.clock.set(t0.Add(time.Minute))
@@ -842,7 +879,7 @@ func TestLateFinishAfterLostLeaseIsDiscarded(t *testing.T) {
 	if latest != `{"v": 2}` || strings.Join(events, ",") != `{"v": 0}>{"v":2}` {
 		t.Fatalf("stale finish landed: latest %s, events %v", latest, events)
 	}
-	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_release", statusDiscarded)); got != 1 {
+	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_repo", statusDiscarded)); got != 1 {
 		t.Fatalf("discarded metric %v", got)
 	}
 	if n := e.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND claim_token IS NULL AND leased_until IS NULL`, id); n != 1 {
@@ -854,8 +891,8 @@ func TestLateFinishAfterLostLeaseIsDiscarded(t *testing.T) {
 // expired run context.
 func TestRunTimeoutIsAnError(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "10m")
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(ctx context.Context, _ string, _ *collect.Credential) (json.RawMessage, error) {
+	id := e.addWatch(t, "github_repo", `{}`, "10m")
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(ctx context.Context, _ string, _ *collect.Credential) (json.RawMessage, error) {
 		<-ctx.Done()
 		return nil, fmt.Errorf("GET x: %w", ctx.Err())
 	})})
@@ -874,10 +911,10 @@ func TestRunTimeoutIsAnError(t *testing.T) {
 // and a finish that still fails is stored as an error with backoff, lease freed.
 func TestStoreFailures(t *testing.T) {
 	e := newEnv(t)
-	nulState := e.addWatch(t, "github_release", `{"a": 1}`, "10m")
-	nulErr := e.addWatch(t, "github_release", `{"b": 1}`, "10m")
-	broken := e.addWatch(t, "github_release", `{"c": 1}`, "10m")
-	w := e.worker(t, e.pool, map[string]collect.Collector{"github_release": newFake(func(_ context.Context, cfg string, _ *collect.Credential) (json.RawMessage, error) {
+	nulState := e.addWatch(t, "github_repo", `{"a": 1}`, "10m")
+	nulErr := e.addWatch(t, "github_repo", `{"b": 1}`, "10m")
+	broken := e.addWatch(t, "github_repo", `{"c": 1}`, "10m")
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(_ context.Context, cfg string, _ *collect.Credential) (json.RawMessage, error) {
 		switch cfg {
 		case `{"a": 1}`:
 			return json.RawMessage(`{"v":"a\u0000b","k\u0000":[" \u0000"]}`), nil
@@ -904,7 +941,7 @@ func TestStoreFailures(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM watches WHERE claim_token IS NULL AND leased_until IS NULL`); n != 3 {
 		t.Fatalf("leases freed on %d of 3 watches", n)
 	}
-	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_release", "error")); got != 2 {
+	if got := testutil.ToFloat64(e.m.runs.WithLabelValues("github_repo", "error")); got != 2 {
 		t.Fatalf("error runs metric %v", got)
 	}
 	if _, err := collect.StripNUL(json.RawMessage(`{"\u0000`)); err == nil {
@@ -930,7 +967,7 @@ func TestNewRejectsRunTimeoutPastLease(t *testing.T) {
 // Leases run on the database clock: a worker clock far off does not shorten or stretch them.
 func TestLeaseUsesDatabaseClock(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	e.clock.set(t0.Add(-365 * 24 * time.Hour * 10)) // a decade behind
 	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET next_run_at = $2 WHERE id = $1`, id, e.clock.now()); err != nil {
 		t.Fatal(err)
@@ -947,14 +984,14 @@ func TestLeaseUsesDatabaseClock(t *testing.T) {
 // 006-AC8: a disabled owner's watch keeps collecting, so the users it is shared with keep their events.
 func TestDisabledOwnerKeepsCollecting(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{}`, "1m")
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
 	if _, err := e.pool.Exec(context.Background(), `UPDATE users SET disabled_at = now() WHERE id = $1`, e.user); err != nil {
 		t.Fatal(err)
 	}
 	f := newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	})
-	tick(t, e.worker(t, e.pool, map[string]collect.Collector{"github_release": f}))
+	tick(t, e.worker(t, e.pool, map[string]collect.Collector{"github_repo": f}))
 	if f.total()[`{}`] != 1 || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 1 {
 		t.Fatalf("runs %v", f.total())
 	}
@@ -963,7 +1000,7 @@ func TestDisabledOwnerKeepsCollecting(t *testing.T) {
 // A retry that finds the claim gone reports the failure as not recorded, whatever the failed attempt wrote.
 func TestRecordStoreFailureRetryDropsStaleResult(t *testing.T) {
 	e := newEnv(t)
-	id := e.addWatch(t, "github_release", `{"repo":"a/b"}`, "1h")
+	id := e.addWatch(t, "github_repo", `{"repo":"a/b"}`, "1h")
 	const token = "00000000-0000-4000-8000-000000000001"
 	ctx := context.Background()
 	if _, err := e.pool.Exec(ctx, `UPDATE watches SET claim_token = $2 WHERE id = $1`, id, token); err != nil {

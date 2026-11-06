@@ -34,7 +34,7 @@ func TestNextRun(t *testing.T) {
 
 func TestDefaultScheduleFor(t *testing.T) {
 	expected := map[string]string{
-		KindGitHubRelease: "1h", KindGitHubPR: "1h",
+		KindGitHubRepo: "1h", KindGitHubPR: "1h", KindGitHubIssue: "1h",
 		KindGitLabRelease: "15m", KindGitLabMR: "15m", KindOCITags: "15m",
 	}
 	// A new kind must pick its default here, not inherit 15m silently.

@@ -166,7 +166,7 @@ func TestScriptDryRun(t *testing.T) {
 
 	var dr dryRunJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/scripts/dry-run", map[string]any{"source": src,
-		"sample": map[string]any{"type": "release.published", "payload": map[string]any{"tag": "v9"}, "watch": map[string]any{"name": "Demo", "kind": "github_release"}}}, http.StatusOK, &dr)
+		"sample": map[string]any{"type": "release.published", "payload": map[string]any{"tag": "v9"}, "watch": map[string]any{"name": "Demo", "kind": "github_repo"}}}, http.StatusOK, &dr)
 	if !dr.OK || dr.Outcome != "ok" || dr.Result != `{"status":200,"watch":"Demo"}` || !slices.Equal(dr.Logs, []string{"got release.published v9"}) {
 		t.Fatalf("dry run: %+v", dr)
 	}
@@ -181,7 +181,7 @@ func TestScriptDryRun(t *testing.T) {
 	var s scriptJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/scripts", map[string]any{"name": "Hook", "source": src}, http.StatusCreated, &s)
 	var wid string
-	if err := a.pool.QueryRow(t.Context(), `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'cli/cli', 'github_release', '{}') RETURNING id::text`, alice.id).Scan(&wid); err != nil {
+	if err := a.pool.QueryRow(t.Context(), `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'cli/cli', 'github_repo', '{}') RETURNING id::text`, alice.id).Scan(&wid); err != nil {
 		t.Fatal(err)
 	}
 	var eid int64

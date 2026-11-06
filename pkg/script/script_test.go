@@ -32,7 +32,7 @@ func sampleInput() Input {
 	return InputOf(notify.Delivery{
 		ID:    42,
 		Event: notify.Event{Type: "release.published", OccurredAt: &at, Payload: map[string]any{"tag": "v1.2.3", "url": "https://github.com/cli/cli/releases/v1.2.3"}},
-		Watch: notify.Watch{ID: "w1", Name: "cli/cli", Kind: "github_release"},
+		Watch: notify.Watch{ID: "w1", Name: "cli/cli", Kind: "github_repo"},
 		Rule:  &notify.Rule{ID: "r1", Name: "Releases"},
 	})
 }
@@ -98,7 +98,7 @@ func TestServe(t *testing.T) {
 				log(event.summary, watch.name, rule.name, delivery_id, ctx.watch.kind, ctx.delivery_id);
 				return {ok: true, url: e.url};
 			}`,
-			logs:   []string{`tag v1.2.3 {"n":1} [1,2] null undefined Error: x`, "v1.2.3 published cli/cli Releases 42 github_release 42"},
+			logs:   []string{`tag v1.2.3 {"n":1} [1,2] null undefined Error: x`, "v1.2.3 published cli/cli Releases 42 github_repo 42"},
 			result: `{"ok":true,"url":"https://github.com/cli/cli/releases/v1.2.3"}`},
 		{name: "no capability", outcome: OutcomeOK,
 			src: `function main() {

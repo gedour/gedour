@@ -121,7 +121,7 @@ func TestPriorityMigration(t *testing.T) {
 	for _, sql := range []string{
 		`INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`,
 		`INSERT INTO rules (owner_id, name) SELECT id, 'r' FROM users`,
-		`INSERT INTO watches (owner_id, name, kind, config) SELECT id, 'w', 'github_release', '{}' FROM users`,
+		`INSERT INTO watches (owner_id, name, kind, config) SELECT id, 'w', 'oci_tags', '{}' FROM users`,
 		`INSERT INTO events (watch_id, type, payload, dedup_key) SELECT id, 'release.published', '{}', 'k' FROM watches`,
 		`INSERT INTO inbox_items (user_id, event_id) SELECT u.id, e.id FROM users u, events e`,
 	} {

@@ -535,12 +535,15 @@ function InboxRow({
   );
 }
 
+// Payload lists of names, shown comma-separated and hidden when empty.
+const LISTS = new Set(["cves", "labels"]);
+
 function payloadRows(payload: Record<string, unknown>): [string, string][] {
   return Object.entries(payload)
-    .filter(([k, v]) => k !== "url" && k !== "body" && !(k === "cves" && isEmptyList(v)))
+    .filter(([k, v]) => k !== "url" && k !== "body" && !(LISTS.has(k) && isEmptyList(v)))
     .map(([k, v]) => [
       k,
-      k === "cves" && Array.isArray(v)
+      LISTS.has(k) && Array.isArray(v)
         ? v.join(", ")
         : typeof v === "string"
           ? v

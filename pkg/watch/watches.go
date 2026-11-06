@@ -28,7 +28,7 @@ type Watch struct {
 type Spec struct {
 	ID           string         `json:"id" format:"uuid"`
 	Name         string         `json:"name"`
-	Kind         string         `json:"kind" enum:"github_release,github_pr,gitlab_release,gitlab_mr,oci_tags"`
+	Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
 	Config       map[string]any `json:"config" doc:"Per-kind settings, normalized (defaults filled)"`
 	CredentialID *string        `json:"credential_id" format:"uuid" nullable:"true"`
 	Schedule     string         `json:"schedule" doc:"Go duration (1m to 168h) or 5-field cron expression"`
@@ -59,7 +59,7 @@ type idPath struct {
 }
 
 type listWatchesInput struct {
-	Kind   string `query:"kind" enum:"github_release,github_pr,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
+	Kind   string `query:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
 	Q      string `query:"q" maxLength:"200" doc:"Case-insensitive match on the name or the config"`
 	Shared string `query:"shared" enum:"mine,with_me,all" default:"all" doc:"Owned by the caller, shared with them, or both"`
 	Limit  int    `query:"limit" minimum:"1" maximum:"500" default:"500"`
@@ -74,7 +74,7 @@ type listWatchesOutput struct {
 type createWatchInput struct {
 	Body struct {
 		Name         string         `json:"name" minLength:"1" maxLength:"200"`
-		Kind         string         `json:"kind" enum:"github_release,github_pr,gitlab_release,gitlab_mr,oci_tags"`
+		Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
 		Config       map[string]any `json:"config"`
 		CredentialID string         `json:"credential_id,omitempty" format:"uuid" doc:"Owned credential of the kind's family"`
 		Schedule     string         `json:"schedule,omitempty" doc:"Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise"`
@@ -359,18 +359,20 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		if len(errs) > 0 {
 			return huma.Error400BadRequest("invalid watch", errs...)
 		}
-		retargeted := !reflect.DeepEqual(next.Config, before.Config)
+		// Authz reads any config change, a box included: a box spends the owner's token on another call.
+		changed := !reflect.DeepEqual(next.Config, before.Config)
+		retargeted := !sameTarget(next.Config, before.Config)
 		// The config decides where the owner's credential is sent: a sharee retargeting it could hand the
 		// token to another host or read the owner's private repositories with it. A hijacked key could too, owner's included.
-		if before.CredentialID != nil && retargeted {
+		if before.CredentialID != nil && changed {
 			if viaKey {
 				return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
 			}
 			if levelOf(before.Permission) < levelOwner {
-				return huma.Error403Forbidden("only the owner can change the target of a watch that uses their credential")
+				return huma.Error403Forbidden("only the owner can change the config of a watch that uses their credential")
 			}
 		}
-		if viaKey && retargeted {
+		if viaKey && changed {
 			if err := checkKnownHost(ctx, tx, me, before.Kind, next.Config); err != nil {
 				return err
 			}
@@ -393,6 +395,11 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 			if _, err := tx.Exec(ctx, `DELETE FROM watch_states WHERE watch_id = $1`, in.ID); err != nil {
 				return err
 			}
+			if _, err := tx.Exec(ctx, `DELETE FROM http_cache WHERE watch_id = $1`, in.ID); err != nil {
+				return err
+			}
+		} else if changed {
+			// A box toggled: states stay, ETags go, so a boxes-off run cannot 304 onto numbers stored while a box was on.
 			if _, err := tx.Exec(ctx, `DELETE FROM http_cache WHERE watch_id = $1`, in.ID); err != nil {
 				return err
 			}

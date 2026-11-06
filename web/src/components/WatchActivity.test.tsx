@@ -344,6 +344,33 @@ describe("StatePanel", () => {
     expect(within(mr).queryByRole("link", { name: "Ship" })).not.toBeInTheDocument();
   });
 
+  it("renders an issue summary", async () => {
+    mockApi(
+      routes(watch({ kind: "github_issue" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              number: 9400,
+              state: "closed",
+              state_reason: "not_planned",
+              title: "Exits 0",
+              labels: ["bug", "wontfix"],
+              url: "https://github.com/cli/cli/issues/9400",
+              comments: [],
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(await screen.findByRole("link", { name: "Exits 0" })).toBeInTheDocument();
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveTextContent("#9400");
+    expect(panel).toHaveTextContent("closed (not planned)");
+    expect(panel).toHaveTextContent("bugwontfix");
+  });
+
   // 001-AC12: the tag list is searchable and marks the highest semver.
   it("renders tags with search", async () => {
     const tags = Array.from({ length: 320 }, (_, i) => `1.${i}`);

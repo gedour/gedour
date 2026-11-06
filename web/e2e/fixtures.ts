@@ -92,3 +92,18 @@ export async function api(page: Page) {
 export async function setFixture(page: Page, set: "a" | "b") {
   expect((await page.request.post(`${UPSTREAM}/_fixture/${set}`)).status()).toBe(204);
 }
+
+/** Enters a rule filter until its preview reads "Valid filter"; a retry adds parentheses, so it is a new query, not a cached 429. */
+export async function enterFilter(
+  page: Page,
+  filter: string,
+  enter: (text: string, attempt: number) => Promise<void>,
+) {
+  let attempt = 0;
+  // Parallel specs signed in as one user share its preview budget: a 429 shows "Could not check" until it refills.
+  await expect(async () => {
+    const text = "(".repeat(attempt) + filter + ")".repeat(attempt);
+    await enter(text, attempt++);
+    await expect(page.getByText("Valid filter")).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 10_000 });
+}

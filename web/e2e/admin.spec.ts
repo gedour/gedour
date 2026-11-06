@@ -115,7 +115,7 @@ test("an admin transfers a watch and back", async ({ page }) => {
   const credId = ((await cred.json()) as { id: string }).id;
   const created = await call("POST", "/api/v1/watches", {
     name,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     credential_id: credId,
     config: { repo: "cli/cli", api_url: UPSTREAM },

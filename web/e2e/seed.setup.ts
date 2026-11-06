@@ -22,7 +22,7 @@ test("seed bob's inbox", async ({ page }) => {
   const before = await unread();
   const res = await call("POST", "/api/v1/watches", {
     name: SEED.watch,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });

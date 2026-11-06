@@ -1,0 +1,215 @@
+[
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9514",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/pull/9514",
+    "id": 3000009514,
+    "node_id": "PR_kwDOA9514",
+    "number": 9514,
+    "title": "Bump github.com/spf13/cobra to 1.11.0",
+    "user": {
+      "login": "dependabot[bot]",
+      "id": 109514,
+      "type": "Bot"
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-11-03T06:00:05Z",
+    "updated_at": "2026-11-03T06:00:05Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Fixes a small thing.",
+    "draft": false,
+    "pull_request": {
+      "url": "https://api.github.com/repos/cli/cli/pulls/9514",
+      "html_url": "https://github.com/cli/cli/pull/9514",
+      "diff_url": "https://github.com/cli/cli/pull/9514.diff",
+      "patch_url": "https://github.com/cli/cli/pull/9514.patch",
+      "merged_at": null
+    }
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9513",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/issues/9513",
+    "id": 3000009513,
+    "node_id": "I_kwDOA9513",
+    "number": 9513,
+    "title": "`gh pr checks --watch` exits 0 on a cancelled run",
+    "user": {
+      "login": "alice-q",
+      "id": 109513,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 457897705,
+        "node_id": "LA_bug",
+        "url": "https://api.github.com/repos/cli/cli/labels/bug",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": false,
+        "description": "Something isn't working"
+      },
+      {
+        "id": 926680830,
+        "node_id": "LA_enhancement",
+        "url": "https://api.github.com/repos/cli/cli/labels/enhancement",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": false,
+        "description": "New feature or request"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-11-02T14:22:09Z",
+    "updated_at": "2026-11-02T14:22:09Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Steps to reproduce are in the description."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9512",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/pull/9512",
+    "id": 3000009512,
+    "node_id": "PR_kwDOA9512",
+    "number": 9512,
+    "title": "Add --json output to `gh cache list`",
+    "user": {
+      "login": "marisol-t",
+      "id": 109512,
+      "type": "User"
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-11-01T10:15:00Z",
+    "updated_at": "2026-11-01T10:15:00Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Fixes a small thing.",
+    "draft": false,
+    "pull_request": {
+      "url": "https://api.github.com/repos/cli/cli/pulls/9512",
+      "html_url": "https://github.com/cli/cli/pull/9512",
+      "diff_url": "https://github.com/cli/cli/pull/9512.diff",
+      "patch_url": "https://github.com/cli/cli/pull/9512.patch",
+      "merged_at": null
+    }
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9511",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/issues/9511",
+    "id": 3000009511,
+    "node_id": "I_kwDOA9511",
+    "number": 9511,
+    "title": "`gh repo clone` ignores the configured git protocol",
+    "user": {
+      "login": "jun-o",
+      "id": 109511,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 457897705,
+        "node_id": "LA_bug",
+        "url": "https://api.github.com/repos/cli/cli/labels/bug",
+        "name": "bug",
+        "color": "d73a4a",
+        "default": false,
+        "description": "Something isn't working"
+      }
+    ],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-10-31T08:02:41Z",
+    "updated_at": "2026-10-31T08:02:41Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Steps to reproduce are in the description."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9509",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/issues/9509",
+    "id": 3000009509,
+    "node_id": "I_kwDOA9509",
+    "number": 9509,
+    "title": "Support filtering `gh run list` by actor",
+    "user": {
+      "login": "rosa-v",
+      "id": 109509,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 926680830,
+        "node_id": "LA_enhancement",
+        "url": "https://api.github.com/repos/cli/cli/labels/enhancement",
+        "name": "enhancement",
+        "color": "a2eeef",
+        "default": false,
+        "description": "New feature or request"
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-10-29T17:40:12Z",
+    "updated_at": "2026-10-29T17:40:12Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Steps to reproduce are in the description."
+  },
+  {
+    "url": "https://api.github.com/repos/cli/cli/issues/9508",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/pull/9508",
+    "id": 3000009508,
+    "node_id": "PR_kwDOA9508",
+    "number": 9508,
+    "title": "Bump golang.org/x/crypto to 0.45.0",
+    "user": {
+      "login": "dependabot[bot]",
+      "id": 109508,
+      "type": "Bot"
+    },
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 0,
+    "created_at": "2026-10-28T06:00:03Z",
+    "updated_at": "2026-10-28T06:00:03Z",
+    "closed_at": null,
+    "author_association": "CONTRIBUTOR",
+    "body": "Fixes a small thing.",
+    "draft": false,
+    "pull_request": {
+      "url": "https://api.github.com/repos/cli/cli/pulls/9508",
+      "html_url": "https://github.com/cli/cli/pull/9508",
+      "diff_url": "https://github.com/cli/cli/pull/9508.diff",
+      "patch_url": "https://github.com/cli/cli/pull/9508.patch",
+      "merged_at": null
+    }
+  }
+]

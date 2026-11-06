@@ -61,7 +61,7 @@ func receiver(t *testing.T, code int) (*httptest.Server, *received) {
 var sample = Delivery{ID: 42,
 	Event: Event{ID: 7, Type: "release.published", ObservedAt: time.Date(2026, 11, 4, 11, 0, 0, 0, time.UTC),
 		Payload: map[string]any{"tag": "v1.2.3", "url": "https://github.com/o/r/releases/v1.2.3"}},
-	Watch: Watch{ID: "w1", Name: "o/r", Kind: "github_release"},
+	Watch: Watch{ID: "w1", Name: "o/r", Kind: "github_repo"},
 	Rule:  &Rule{ID: "r1", Name: "releases"}}
 
 func webhookChannel(url string) Channel {

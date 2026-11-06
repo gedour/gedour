@@ -5,16 +5,26 @@ import { recognize } from "@/lib/watchUrl";
 describe("recognize", () => {
   // 001-AC4: a pasted URL or reference pre-fills the kind and config of the new-watch form.
   it.each([
-    ["https://github.com/golang/go", "github_release", { repo: "golang/go" }],
-    ["https://github.com/golang/go/releases", "github_release", { repo: "golang/go" }],
-    ["https://github.com/golang/go/releases/tag/go1.22.0", "github_release", { repo: "golang/go" }],
-    ["github.com/golang/go.git", "github_release", { repo: "golang/go" }],
+    ["https://github.com/golang/go", "github_repo", { repo: "golang/go" }],
+    ["https://github.com/golang/go/releases", "github_repo", { repo: "golang/go" }],
+    ["https://github.com/golang/go/releases/tag/go1.22.0", "github_repo", { repo: "golang/go" }],
+    ["github.com/golang/go.git", "github_repo", { repo: "golang/go" }],
     ["https://github.com/golang/go/pull/123", "github_pr", { repo: "golang/go", number: 123 }],
     [
       "https://www.github.com/golang/go/pull/7/files?w=1#diff",
       "github_pr",
       { repo: "golang/go", number: 7 },
     ],
+    // 008-AC13: an issue URL picks github_issue; a non-numeric or zero number falls back to the repo.
+    ["https://github.com/o/r/issues/12", "github_issue", { repo: "o/r", number: 12 }],
+    [
+      "github.com/cli/cli/issues/9400#issuecomment-1",
+      "github_issue",
+      { repo: "cli/cli", number: 9400 },
+    ],
+    ["https://github.com/o/r/issues", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/issues/0", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/issues/new", "github_repo", { repo: "o/r" }],
     [
       "https://github.com/orgs/acme/packages/container/package/Api",
       "oci_tags",

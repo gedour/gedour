@@ -60,6 +60,7 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
   const to = str(p.to);
   const pr = `PR #${str(p.number)}`;
   const mr = `MR !${str(p.iid)}`;
+  const issue = `Issue #${str(p.number)}`;
   switch (e.type) {
     case "release.published":
       return {
@@ -99,6 +100,42 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       return { badge: "CI", tone: tone(to), text: `${pr} CI ${CI[to] ?? to}`, url };
     case "pr.commented":
       return { badge: "Comment", tone: "change", text: `${pr} commented by ${str(p.author)}`, url };
+    case "issue.opened":
+      return {
+        badge: "New issue",
+        tone: "change",
+        text: `${issue} opened by ${str(p.author)}`,
+        url,
+      };
+    case "issue.state_changed": {
+      const t = transition(from, to);
+      const reason = str(p.state_reason).replaceAll("_", " ");
+      return {
+        badge: "State",
+        // Closed as completed is the happy ending; other reasons keep the closed tone.
+        tone: t === "closed" && p.state_reason === "completed" ? "good" : tone(t),
+        text: `${issue} ${t}${t === "closed" && reason ? ` (${reason})` : ""}`,
+        url,
+      };
+    }
+    case "issue.labels_changed": {
+      const labels = Array.isArray(p.to) ? p.to.map(str) : [];
+      return {
+        badge: "Labels",
+        tone: "change",
+        text: `${issue} labels: ${labels.length ? labels.join(", ") : "none"}`,
+        url,
+      };
+    }
+    case "issue.commented":
+      return {
+        badge: "Comment",
+        tone: "change",
+        text: `${issue} commented by ${str(p.author)}`,
+        url,
+      };
+    case "pr.opened":
+      return { badge: "New PR", tone: "change", text: `${pr} opened by ${str(p.author)}`, url };
     case "mr.approval_changed": {
       const a = (p.to ?? {}) as Approvals;
       const count = plural(a.count ?? 0, "approval");

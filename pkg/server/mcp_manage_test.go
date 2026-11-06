@@ -190,7 +190,7 @@ func TestMCPManageCredentialRefused(t *testing.T) {
 	cred := m.credential(t, alice, "github_token")
 	var w watchJSON
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	withCred := map[string]any{"name": "w", "kind": "github_release", "config": map[string]any{"repo": "a/b"}, "credential_id": cred}
+	withCred := map[string]any{"name": "w", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "credential_id": cred}
 	before := m.count(t, `SELECT count(*) FROM watches`)
 	attached := func() int { return m.count(t, `SELECT count(*) FROM watches WHERE credential_id IS NOT NULL`) }
 
@@ -238,7 +238,7 @@ func TestMCPManageCredentialConfig(t *testing.T) {
 		cfg                   map[string]any
 		moved                 string
 	}{
-		{"api_url", "github_release", "github_token", map[string]any{"repo": "a/b"}, "https://gitlab.com"},
+		{"api_url", "github_repo", "github_token", map[string]any{"repo": "a/b"}, "https://gitlab.com"},
 		{"base_url", "gitlab_release", "gitlab_token", map[string]any{"project": "a/b"}, "https://api.github.com"},
 		{"registry", "oci_tags", "registry_basic", map[string]any{"repository": "a/b"}, "ghcr.io"},
 	} {
@@ -266,6 +266,17 @@ func TestMCPManageCredentialConfig(t *testing.T) {
 				edit["id"] = w.ID
 				if res := m.manage(t, alice, "update_watch", edit); res.IsError {
 					t.Fatalf("%v: %+v", edit, res)
+				}
+			}
+			// 008: a new-items box is a config change too, refused to the owner's key on a credentialed watch.
+			if tt.kind == "github_repo" {
+				boxed := maps.Clone(stored)
+				boxed["new_issues"] = true
+				if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": boxed}); !res.IsError || !strings.Contains(res.text(), "has a credential") {
+					t.Fatalf("box toggle by key: %+v", res)
+				}
+				if got := m.watchConfig(t, w.ID); got["new_issues"] != nil {
+					t.Fatalf("%v", got)
 				}
 			}
 			var got watchJSON
@@ -398,35 +409,35 @@ func TestMCPManageKnownHosts(t *testing.T) {
 		seed(alice, w["kind"].(string), w["config"].(map[string]any))
 	}
 	seed(alice, "oci_tags", map[string]any{"repository": "a/b", "registry": "ghcr.io"})
-	seed(alice, "github_release", map[string]any{"repo": "a/b", "api_url": "https://forge.alice.example"})
-	seed(alice, "github_release", map[string]any{"repo": "a/b", "api_url": "https://ghe.alice.example/api/v3"})
+	seed(alice, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://forge.alice.example"})
+	seed(alice, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://ghe.alice.example/api/v3"})
 	seed(alice, "oci_tags", map[string]any{"repository": "a/b", "registry": "reg.alice.example:5000"})
 	seed(alice, "gitlab_release", map[string]any{"project": "a/b", "base_url": "https://b\u00FCcher.alice.example"})
 	seed(alice, "gitlab_release", map[string]any{"project": "a/b", "base_url": "https://xn--mnchen-3ya.alice.example"})
-	seed(bob, "github_release", map[string]any{"repo": "a/b", "api_url": "https://bob-only.example"})
+	seed(bob, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://bob-only.example"})
 	seed(bob, "oci_tags", map[string]any{"repository": "a/b", "registry": "bob-only.example"})
 	var shared string
 	for _, tt := range []struct {
 		kind string
 		cfg  map[string]any
 	}{
-		{"github_release", map[string]any{"repo": "a/b", "api_url": "https://shared-only.example"}},
+		{"github_repo", map[string]any{"repo": "a/b", "api_url": "https://shared-only.example"}},
 		{"oci_tags", map[string]any{"repository": "a/b", "registry": "shared-only.example"}},
 	} {
 		id := seed(carol, tt.kind, tt.cfg)
-		if tt.kind == "github_release" {
+		if tt.kind == "github_repo" {
 			shared = id
 		}
 		m.mustCall(t, carol, http.MethodPost, "/api/v1/watches/"+id+"/shares", map[string]any{"email": alice.email, "permission": "rw"}, http.StatusCreated, nil)
 	}
-	seed(carol, "github_release", map[string]any{"repo": "a/b", "api_url": "https://carol-only.example"})
+	seed(carol, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://carol-only.example"})
 	for _, f := range []struct {
 		field, kind, def string
 		base             map[string]any
 		changed          map[string]any
 		cases            []hostCase
 	}{
-		{"api_url", "github_release", "api.github.com", map[string]any{"repo": "a/b"}, map[string]any{"repo": "c/d"},
+		{"api_url", "github_repo", "api.github.com", map[string]any{"repo": "a/b"}, map[string]any{"repo": "c/d"},
 			append(slices.Clone(urlHostCases), hostCase{"gitlab default", "https://gitlab.com", reasonKnown}, hostCase{"gitlab default, normalized", "https://GITLAB.com.:443/", reasonKnown})},
 		{"api_url", "github_pr", "api.github.com", map[string]any{"repo": "a/b", "number": 1}, map[string]any{"repo": "c/d", "number": 1},
 			[]hostCase{{"own default", "https://{default}", ""}, {"gitlab default", "https://gitlab.com", reasonKnown}, {"docker.io", "https://docker.io", reasonKnown}, {"ghcr.io", "https://ghcr.io", reasonKnown}}},
@@ -683,7 +694,7 @@ func TestMCPManageAuditCapBudget(t *testing.T) {
 		id, _ := res.data(t).(map[string]any)["id"].(string)
 		return id
 	}
-	w := idOf(m.tool(t, key, "create_watch", newWatch("made", "github_release", map[string]any{"repo": "a/b"}), nil))
+	w := idOf(m.tool(t, key, "create_watch", newWatch("made", "github_repo", map[string]any{"repo": "a/b"}), nil))
 	idOf(m.tool(t, key, "update_watch", map[string]any{"id": w, "paused": true}, nil))
 	r := idOf(m.tool(t, key, "create_rule", map[string]any{"name": "made"}, nil))
 	idOf(m.tool(t, key, "update_rule", map[string]any{"id": r, "enabled": false}, nil))
@@ -697,7 +708,7 @@ func TestMCPManageAuditCapBudget(t *testing.T) {
 	idOf(m.tool(t, key, "update_rule", map[string]any{"id": r, "enabled": true}, nil))
 	rows := m.count(t, `SELECT count(*) FROM audit_log`)
 	for name, args := range map[string]map[string]any{
-		"create_watch": newWatch("over", "github_release", map[string]any{"repo": "a/b"}),
+		"create_watch": newWatch("over", "github_repo", map[string]any{"repo": "a/b"}),
 		"update_watch": {"id": w, "name": "over"},
 		"create_rule":  {"name": "over"},
 		"update_rule":  {"id": r, "name": "over"},
@@ -715,9 +726,9 @@ func TestMCPManageAuditCapBudget(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 
-	m.exec(t, `INSERT INTO watches (owner_id, name, kind, config, schedule) SELECT $1, 'filler ' || g, 'github_release', '{"repo":"a/b","api_url":"https://api.github.com"}', '1h'
+	m.exec(t, `INSERT INTO watches (owner_id, name, kind, config, schedule) SELECT $1, 'filler ' || g, 'github_repo', '{"repo":"a/b","api_url":"https://api.github.com"}', '1h'
 		FROM generate_series(1, 200 - (SELECT count(*)::int FROM watches WHERE owner_id = $1)) g`, alice.id)
-	over := newWatch("201st", "github_release", map[string]any{"repo": "a/b"})
+	over := newWatch("201st", "github_repo", map[string]any{"repo": "a/b"})
 	if res := m.manage(t, alice, "create_watch", over); !res.IsError || !strings.Contains(res.text(), "200 watches") {
 		t.Fatalf("201st: %+v", res)
 	}

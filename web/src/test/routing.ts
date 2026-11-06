@@ -19,7 +19,7 @@ export function event(over: Partial<WatchEvent> = {}): WatchEvent {
   };
 }
 
-export const watchRef = { id: "w1", name: "GitHub CLI releases", kind: "github_release" as const };
+export const watchRef = { id: "w1", name: "GitHub CLI releases", kind: "github_repo" as const };
 
 export function inboxItem(id: number, over: Partial<InboxItem> = {}): InboxItem {
   return {

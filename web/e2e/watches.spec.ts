@@ -10,7 +10,7 @@ async function createWatch(page: Page, name: string) {
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name,
-    kind: "github_release",
+    kind: "github_repo",
     config: { repo: "golang/go", api_url: UPSTREAM },
   });
   expect(res.status()).toBe(201);
@@ -65,8 +65,8 @@ test("alice creates, edits, pauses, resumes and deletes watches of every kind", 
   const t = tag();
   await page.goto("/watches/new");
   await page.getByLabel("Paste a URL").fill("https://github.com/golang/go/releases");
-  await expect(page.getByText("Recognized: GitHub releases")).toBeVisible();
-  await expect(page.getByRole("radio", { name: /GitHub releases/ })).toBeChecked();
+  await expect(page.getByText("Recognized: GitHub repository")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /GitHub repository/ })).toBeChecked();
   await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("golang/go");
   await page.getByLabel("API URL (optional)").fill(UPSTREAM);
   await page.getByLabel("Name").fill(`Go releases ${t}`);

@@ -54,6 +54,9 @@ func TagPages(set string) [][]string {
 	return out
 }
 
+// IssueNumber is the issue of the github_issue fixtures; other numbers get the github_pr comments.
+const IssueNumber = "9400"
+
 // Server serves the current fixture set.
 type Server struct {
 	// RegistryUser and RegistryPass, when set, make the token endpoint require that basic login.
@@ -83,11 +86,21 @@ const maxReceived = 200
 // New returns a server on fixture set "a".
 func New() *Server {
 	s := &Server{set: "a", hits: map[string]int{}, mux: http.NewServeMux()}
-	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_release", ""))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/comments", s.static("github_pr", "review_comments"))
-	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}/comments", s.static("github_pr", "issue_comments"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}", s.static("github_issue", "issue"))
+	issueComments, prComments := s.static("github_issue", "comments"), s.static("github_pr", "issue_comments")
+	// GitHub serves a PR's conversation comments on the issues route too: the number picks the fixture.
+	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}/comments", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("n") == IssueNumber {
+			issueComments(w, r)
+			return
+		}
+		prComments(w, r)
+	})
 	s.mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}/check-runs", s.static("github_pr", "check_runs"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}/status", s.static("github_pr", "status"))
 	s.mux.HandleFunc("GET /api/v4/projects/{p}/releases", s.static("gitlab_release", ""))

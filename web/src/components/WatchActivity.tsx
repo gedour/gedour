@@ -16,6 +16,8 @@ import { formatAbsolute } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import {
   stateLine,
+  type IssueState,
+  issueStateText,
   type MRState,
   type PRState,
   type ReleaseState,
@@ -298,11 +300,13 @@ export function StatePanel({ watch }: { watch: Watch }) {
 
 export function StateView({ kind, state }: { kind: Watch["kind"]; state: unknown }) {
   switch (kind) {
-    case "github_release":
+    case "github_repo":
     case "gitlab_release":
       return <ReleaseTable state={state as ReleaseState} />;
     case "github_pr":
       return <PRSummary state={state as PRState} />;
+    case "github_issue":
+      return <IssueSummary state={state as IssueState} />;
     case "gitlab_mr":
       return <MRSummary state={state as MRState} />;
     case "oci_tags":
@@ -415,6 +419,32 @@ function PRSummary({ state }: { state: PRState }) {
         <span className="flex flex-col gap-1">
           <span className="text-xs text-muted">Head</span>
           <code className="font-mono text-xs">{state.head_sha.slice(0, 12)}</code>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function IssueSummary({ state }: { state: IssueState }) {
+  const labels = state.labels ?? [];
+  return (
+    <div className="flex flex-col gap-4 rounded-lg border border-line p-4">
+      <ChangeHeader title={state.title} url={state.url} prefix={`#${state.number}`} />
+      <div className="flex flex-wrap gap-6">
+        <Pill label="State" value={issueStateText(state)} />
+        <span className="flex flex-col gap-1">
+          <span className="text-xs text-muted">Labels</span>
+          <span className="flex flex-wrap gap-1">
+            {labels.length === 0 ? (
+              <span className="text-sm text-muted">none</span>
+            ) : (
+              labels.map((l) => (
+                <span key={l} className={cn(badge, TONE_CLASS.neutral)}>
+                  {l}
+                </span>
+              ))
+            )}
+          </span>
         </span>
       </div>
     </div>

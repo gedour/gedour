@@ -1,0 +1,73 @@
+{
+  "issue": {
+    "url": "https://api.github.com/repos/cli/cli/issues/9400",
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "html_url": "https://github.com/cli/cli/issues/9400",
+    "id": 3000009400,
+    "node_id": "I_kwDOA9400",
+    "number": 9400,
+    "title": "`gh run watch` exits 0 when the run is cancelled",
+    "user": {
+      "login": "renata-q",
+      "id": 109400,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 900000,
+        "name": "wontfix",
+        "color": "d73a4a",
+        "default": false
+      },
+      {
+        "id": 900001,
+        "name": "bug",
+        "color": "d73a4a",
+        "default": false
+      }
+    ],
+    "state": "closed",
+    "locked": false,
+    "assignees": [],
+    "milestone": null,
+    "comments": 2,
+    "created_at": "2026-10-28T08:00:00Z",
+    "updated_at": "2026-11-02T14:00:00Z",
+    "closed_at": "2026-11-02T14:00:00Z",
+    "author_association": "NONE",
+    "body": "Steps to reproduce: cancel a run while watching it.",
+    "state_reason": "not_planned"
+  },
+  "comments": [
+    {
+      "url": "https://api.github.com/repos/cli/cli/issues/comments/3600001",
+      "html_url": "https://github.com/cli/cli/issues/9400#issuecomment-3600001",
+      "issue_url": "https://api.github.com/repos/cli/cli/issues/9400",
+      "id": 3600001,
+      "user": {
+        "login": "renata-q",
+        "id": 1,
+        "type": "User"
+      },
+      "created_at": "2026-10-28T09:00:00Z",
+      "updated_at": "2026-10-28T09:00:00Z",
+      "author_association": "MEMBER",
+      "body": "Same on 2.62.0, Linux."
+    },
+    {
+      "url": "https://api.github.com/repos/cli/cli/issues/comments/3600002",
+      "html_url": "https://github.com/cli/cli/issues/9400#issuecomment-3600002",
+      "issue_url": "https://api.github.com/repos/cli/cli/issues/9400",
+      "id": 3600002,
+      "user": {
+        "login": "maintainer",
+        "id": 1,
+        "type": "User"
+      },
+      "created_at": "2026-11-02T14:00:00Z",
+      "updated_at": "2026-11-02T14:00:00Z",
+      "author_association": "MEMBER",
+      "body": "> Same on 2.62.0, Linux.\n\nThis is by design: a cancelled run is not a failure. Closing."
+    }
+  ]
+}

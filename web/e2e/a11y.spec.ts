@@ -86,6 +86,13 @@ for (const theme of ["light", "dark"] as const) {
         await page.goto(path);
         await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
         await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
+        // 008-AC15: the default kind's form, its new-items boxes and their hint, is the one checked.
+        if (path === "/watches/new") {
+          await expect(
+            page.getByRole("checkbox", { name: "Report new pull requests" }),
+          ).toBeVisible();
+          await expect(page.getByText(/two requests/)).toBeVisible();
+        }
         found[path] = await violations(page);
       }
       expect(found).toEqual(Object.fromEntries(views.map(([p]) => [p, []])));

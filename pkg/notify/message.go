@@ -99,7 +99,7 @@ func plural(n int, word string) string {
 func summarize(e Event) string {
 	p := e.Payload
 	from, to := str(p["from"]), str(p["to"])
-	pr, mr := "PR #"+str(p["number"]), "MR !"+str(p["iid"])
+	pr, mr, issue := "PR #"+str(p["number"]), "MR !"+str(p["iid"]), "Issue #"+str(p["number"])
 	subject := pr
 	if strings.HasPrefix(e.Type, "mr.") {
 		subject = mr
@@ -131,6 +131,28 @@ func summarize(e Event) string {
 		return pr + " CI " + to
 	case "pr.commented":
 		return pr + " commented by " + str(p["author"])
+	case "issue.opened":
+		return issue + " opened by " + str(p["author"])
+	case "issue.state_changed":
+		t := transition(from, to)
+		if r := str(p["state_reason"]); t == "closed" && r != "" {
+			t += " (" + strings.ReplaceAll(r, "_", " ") + ")"
+		}
+		return issue + " " + t
+	case "issue.labels_changed":
+		l, _ := p["to"].([]any)
+		names := make([]string, 0, len(l))
+		for _, n := range l {
+			names = append(names, str(n))
+		}
+		if len(names) == 0 {
+			return issue + " labels: none"
+		}
+		return issue + " labels: " + strings.Join(names, ", ")
+	case "issue.commented":
+		return issue + " commented by " + str(p["author"])
+	case "pr.opened":
+		return pr + " opened by " + str(p["author"])
 	case "mr.approval_changed":
 		a, _ := p["to"].(map[string]any)
 		n, _ := a["count"].(float64)
@@ -160,7 +182,7 @@ func Format(d Delivery) Message {
 	switch {
 	case d.Event.Type == TestEventType:
 		m.Detail = str(d.Event.Payload["message"])
-	case d.Event.Type == "pr.commented":
+	case d.Event.Type == "pr.commented" || d.Event.Type == "issue.commented":
 		m.Detail = str(d.Event.Payload["excerpt"])
 	case str(d.Event.Payload["title"]) != "":
 		m.Detail = str(d.Event.Payload["title"])

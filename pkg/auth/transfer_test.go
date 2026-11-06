@@ -73,7 +73,7 @@ func (e *env) sealedCredential(t *testing.T, owner, name, plain string) (string,
 
 func (e *env) watchOf(t *testing.T, owner, name string, cred *string) string {
 	t.Helper()
-	return e.id(t, `INSERT INTO watches (owner_id, name, kind, config, credential_id) VALUES ($1, $2, 'github_release', '{}', $3) RETURNING id::text`,
+	return e.id(t, `INSERT INTO watches (owner_id, name, kind, config, credential_id) VALUES ($1, $2, 'github_repo', '{}', $3) RETURNING id::text`,
 		owner, name, cred)
 }
 

@@ -171,6 +171,23 @@ func TestRetargetResetsBaseline(t *testing.T) {
 		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); n != 0 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("retarget kept %d rows, next=%v", n, w.NextRunAt)
 	}
+	// 008: a new-items box keeps the states and the schedule, and drops only the ETags.
+	seed()
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true}}, http.StatusOK, &w)
+	if s, c := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID),
+		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 || time.Until(w.NextRunAt) < 24*time.Hour {
+		t.Fatalf("box checked: states=%d cache=%d next=%v", s, c, w.NextRunAt)
+	}
+	a.exec(t, `INSERT INTO http_cache (watch_id, url, etag) VALUES ($1, 'https://api.github.com/x', '"e"')`, w.ID)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools"}}, http.StatusOK, &w)
+	if s, c := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID),
+		a.countRows(t, `SELECT count(*) FROM http_cache WHERE watch_id = $1`, w.ID); s != 1 || c != 0 {
+		t.Fatalf("box unchecked: states=%d cache=%d", s, c)
+	}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/go", "new_prs": true}}, http.StatusOK, &w)
+	if n := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); n != 0 || time.Until(w.NextRunAt) > time.Minute {
+		t.Fatalf("repo and box changed: states=%d next=%v", n, w.NextRunAt)
+	}
 	seed()
 	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"schedule": "30m"}, http.StatusOK, &w)
 	if n := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); n != 1 || time.Until(w.NextRunAt) > time.Minute {

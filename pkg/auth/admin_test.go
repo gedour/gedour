@@ -96,10 +96,10 @@ func TestAdminListUsers(t *testing.T) {
 	}
 	var shared string
 	if err := e.pool.QueryRow(context.Background(), `INSERT INTO watches (owner_id, name, kind, config, credential_id)
-		VALUES ($1, 'a', 'github_release', '{}', $2) RETURNING id::text`, old, cred).Scan(&shared); err != nil {
+		VALUES ($1, 'a', 'github_repo', '{}', $2) RETURNING id::text`, old, cred).Scan(&shared); err != nil {
 		t.Fatal(err)
 	}
-	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'b', 'github_release', '{}'), ($2, 'c', 'github_release', '{}')`, old, recent)
+	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'b', 'github_repo', '{}'), ($2, 'c', 'github_repo', '{}')`, old, recent)
 	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro'), ($1, $3, 'ro')`, shared, recent, never)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, old)
 	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r1', ''), ($1, 'r2', '')`, old)
@@ -171,7 +171,7 @@ func TestDisableEnable(t *testing.T) {
 		t.Fatalf("bob sign-in: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	_, bob := e.me(t)
-	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'w', 'github_release', '{}')`, bob.ID)
+	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'w', 'github_repo', '{}')`, bob.ID)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, bob.ID)
 	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r', '')`, bob.ID)
 	// A second session of bob's, from another browser.

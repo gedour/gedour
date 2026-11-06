@@ -856,8 +856,9 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2242,8 +2243,9 @@
         "properties": {
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2676,8 +2678,9 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2782,8 +2785,9 @@
           },
           "kind": {
             "enum": [
-              "github_release",
+              "github_repo",
               "github_pr",
+              "github_issue",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -4897,8 +4901,9 @@
             "schema": {
               "description": "Only watches of this kind",
               "enum": [
-                "github_release",
+                "github_repo",
                 "github_pr",
+                "github_issue",
                 "gitlab_release",
                 "gitlab_mr",
                 "oci_tags"

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"reflect"
@@ -18,8 +19,9 @@ import (
 
 // Watch kinds.
 const (
-	KindGitHubRelease = "github_release"
+	KindGitHubRepo    = "github_repo"
 	KindGitHubPR      = "github_pr"
+	KindGitHubIssue   = "github_issue"
 	KindGitLabRelease = "gitlab_release"
 	KindGitLabMR      = "gitlab_mr"
 	KindOCITags       = "oci_tags"
@@ -33,7 +35,7 @@ const (
 )
 
 // Kinds lists the watch kinds in display order.
-var Kinds = []string{KindGitHubRelease, KindGitHubPR, KindGitLabRelease, KindGitLabMR, KindOCITags}
+var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitLabRelease, KindGitLabMR, KindOCITags}
 
 // CredentialKinds lists the credential kinds.
 var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBasic}
@@ -41,7 +43,7 @@ var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBas
 // CredentialKindFor is the only credential kind a watch of this kind accepts.
 func CredentialKindFor(kind string) string {
 	switch kind {
-	case KindGitHubRelease, KindGitHubPR:
+	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue:
 		return CredGitHubToken
 	case KindGitLabRelease, KindGitLabMR:
 		return CredGitLabToken
@@ -57,11 +59,14 @@ const (
 	maxTagRegex      = 256
 )
 
-// GitHubReleaseConfig is the normalized config of a github_release watch.
-type GitHubReleaseConfig struct {
+// GitHubRepoConfig is the normalized config of a github_repo watch.
+type GitHubRepoConfig struct {
 	Repo               string `json:"repo"`
 	IncludePrereleases bool   `json:"include_prereleases"`
 	APIURL             string `json:"api_url"`
+	// omitempty: a config with both boxes off stays as stored before them, so saving it unchanged is no retarget.
+	NewIssues bool `json:"new_issues,omitempty"`
+	NewPRs    bool `json:"new_prs,omitempty"`
 }
 
 // GitHubPRConfig is the normalized config of a github_pr watch.
@@ -70,6 +75,9 @@ type GitHubPRConfig struct {
 	Number int    `json:"number"`
 	APIURL string `json:"api_url"`
 }
+
+// GitHubIssueConfig is the normalized config of a github_issue watch: an alias, so it validates exactly like github_pr's.
+type GitHubIssueConfig = GitHubPRConfig
 
 // GitLabReleaseConfig is the normalized config of a gitlab_release watch.
 type GitLabReleaseConfig struct {
@@ -104,8 +112,9 @@ var (
 
 // defaultHosts need no watch of the owner's for a key to target them, with no path and on their own kind only: docker.io and ghcr.io redirect a chosen path to other hosts, and a GitHub or GitLab kind's path holds a key's repo or project.
 var defaultHosts = map[string][]string{
-	KindGitHubRelease: {"api.github.com"},
+	KindGitHubRepo:    {"api.github.com"},
 	KindGitHubPR:      {"api.github.com"},
+	KindGitHubIssue:   {"api.github.com"},
 	KindGitLabRelease: {"gitlab.com"},
 	KindGitLabMR:      {"gitlab.com"},
 	KindOCITags:       {dockerHub, "ghcr.io"},
@@ -128,6 +137,21 @@ func targetOf(cfg map[string]any) (field, raw string) {
 		}
 	}
 	return "", ""
+}
+
+// boxKeys only add requests to the same target: changing them is no retarget.
+var boxKeys = []string{"new_issues", "new_prs"}
+
+// sameTarget compares two normalized configs, the new-items boxes left out.
+func sameTarget(a, b map[string]any) bool {
+	strip := func(m map[string]any) map[string]any {
+		out := maps.Clone(m)
+		for _, k := range boxKeys {
+			delete(out, k)
+		}
+		return out
+	}
+	return reflect.DeepEqual(strip(a), strip(b))
 }
 
 // comparableTarget is a target's host, non-default port and path.
@@ -185,7 +209,7 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 		return nil, fe.errs
 	}
 	switch c := target.(type) {
-	case *GitHubReleaseConfig:
+	case *GitHubRepoConfig:
 		c.Repo = v.repo(c.Repo, fe)
 		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
 	case *GitHubPRConfig:
@@ -213,10 +237,12 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 
 func newConfig(kind string) any {
 	switch kind {
-	case KindGitHubRelease:
-		return &GitHubReleaseConfig{}
+	case KindGitHubRepo:
+		return &GitHubRepoConfig{}
 	case KindGitHubPR:
 		return &GitHubPRConfig{}
+	case KindGitHubIssue:
+		return &GitHubIssueConfig{}
 	case KindGitLabRelease:
 		return &GitLabReleaseConfig{}
 	case KindGitLabMR:

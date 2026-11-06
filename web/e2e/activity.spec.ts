@@ -22,7 +22,7 @@ test("the worker turns upstream changes into timeline events", async ({ page }) 
   };
   const releases = await create({
     name: `CLI releases ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
   const tags = await create({
@@ -101,7 +101,7 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Routed CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -255,7 +255,7 @@ test("a script channel runs its script on a routed event", async ({ page }) => {
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Scripted CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -342,7 +342,7 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
   const call = await api(page);
   const res = await call("POST", "/api/v1/watches", {
     name: `Talk CLI ${t}`,
-    kind: "github_release",
+    kind: "github_repo",
     schedule: "1h",
     config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
   });
@@ -473,7 +473,7 @@ test("rules on release notes route the right releases", async ({ page }) => {
   const watches = [
     await post("/api/v1/watches", {
       name: `Notes GitHub ${t}`,
-      kind: "github_release",
+      kind: "github_repo",
       schedule: "1h",
       config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
     }),
@@ -571,4 +571,122 @@ test("rules on release notes route the right releases", async ({ page }) => {
   // Alice's inbox is back as it was for a retry or a rerun.
   for (const id of ruleIds) await call("DELETE", `/api/v1/rules/${id}`);
   for (const { id } of watches) await call("DELETE", `/api/v1/watches/${id}`);
+});
+
+// 008-AC5, 008-AC6, 008-AC14: both boxes on, the baseline is quiet; fixture B's new issue and new PR show in the
+// timeline, and a rule on the labels sends the issue, not the PR, to the inbox.
+test("a repository watch reports new issues and PRs", async ({ page }) => {
+  const t = tag();
+  await page.goto("/inbox");
+  await setFixture(page, "a");
+  const call = await api(page);
+  const res = await call("POST", "/api/v1/watches", {
+    name: `Items ${t}`,
+    kind: "github_repo",
+    schedule: "1h",
+    config: {
+      repo: "cli/cli",
+      include_prereleases: true,
+      api_url: UPSTREAM,
+      new_issues: true,
+      new_prs: true,
+    },
+  });
+  expect(res.status()).toBe(201);
+  const { id } = (await res.json()) as { id: string };
+  await expect
+    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+      timeout: 15_000,
+    })
+    .toBe("ok");
+  const rule = await call("POST", "/api/v1/rules", {
+    name: `Bugs ${t}`,
+    watch_id: id,
+    filter: '"bug" in event.payload.labels',
+  });
+  expect(rule.status()).toBe(201);
+  const ruleId = ((await rule.json()) as { id: string }).id;
+
+  await setFixture(page, "b");
+  await page.goto(`/watches/${id}`);
+  await expect(page.getByText("No changes yet")).toBeVisible();
+  await page
+    .getByRole("region", { name: "Status" })
+    .getByRole("button", { name: "Run now" })
+    .click();
+  await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
+    [
+      /PR #9514 opened by dependabot\[bot\]/,
+      /Issue #9513 opened by alice-q/,
+      /v2\.105\.0 published/,
+      /v2\.103\.3 published/,
+      /v2\.104\.0-rc\.1 promoted to release/,
+    ],
+    { timeout: 15_000 },
+  );
+
+  const routed = async () =>
+    (
+      (await (await call("GET", "/api/v1/inbox?state=all&limit=200")).json()).items as {
+        event: { type: string; payload: { number?: number } };
+        watch: { id: string };
+      }[]
+    )
+      .filter((i) => i.watch.id === id)
+      .map((i) => `${i.event.type} ${i.event.payload.number}`);
+  await expect.poll(routed, { timeout: 15_000 }).toEqual(["issue.opened 9513"]);
+  await page.goto("/inbox?state=all");
+  await page.getByRole("button", { name: /Issue #9513 opened by alice-q/ }).click();
+  const panel = page.getByRole("complementary", { name: "Issue #9513 opened by alice-q" });
+  await expect(panel.getByRole("region", { name: "Details" })).toContainText("bug, enhancement");
+
+  await setFixture(page, "a");
+  // Alice's inbox is back as it was for a retry or a rerun.
+  await call("DELETE", `/api/v1/rules/${ruleId}`);
+  await call("DELETE", `/api/v1/watches/${id}`);
+});
+
+// 008-AC13, 008-AC9: a pasted issue URL picks the GitHub issue kind; the baseline is quiet, then fixture B's
+// close (not planned), new label and new comment show in the timeline.
+test("an issue watch reports a close and a comment", async ({ page }) => {
+  const t = tag();
+  await page.goto("/watches/new");
+  await setFixture(page, "a");
+  await page.getByLabel("Paste a URL").fill("https://github.com/cli/cli/issues/9400");
+  await expect(page.getByText("Recognized: GitHub issue")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /GitHub issue/ })).toBeChecked();
+  await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("cli/cli");
+  await expect(page.getByLabel("Issue number")).toHaveValue("9400");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByLabel("Name").fill(`Issue ${t}`);
+  await page.getByRole("button", { name: "Create watch" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: `Issue ${t}` })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/").pop() as string;
+  const call = await api(page);
+  await expect
+    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+      timeout: 15_000,
+    })
+    .toBe("ok");
+
+  await setFixture(page, "b");
+  await page.reload();
+  await expect(page.getByText("No changes yet")).toBeVisible();
+  await page
+    .getByRole("region", { name: "Status" })
+    .getByRole("button", { name: "Run now" })
+    .click();
+  await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
+    [
+      /Issue #9400 commented by maintainer/,
+      /Issue #9400 labels: bug, wontfix/,
+      /Issue #9400 closed \(not planned\)/,
+    ],
+    { timeout: 15_000 },
+  );
+  await page.getByRole("tab", { name: "State" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("closed (not planned)");
+
+  await setFixture(page, "a");
+  await call("DELETE", `/api/v1/watches/${id}`);
 });

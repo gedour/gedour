@@ -60,7 +60,7 @@ func newDevApp(t *testing.T) *devApp {
 	}
 	a := &devApp{pool: pool, sender: testSender()}
 	a.routes = testRoutes(t, pool, a.sender)
-	a.srv = httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool, testWatches(t, pool), a.routes))
+	a.srv = httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool, testWatches(t, pool), a.routes, nil))
 	t.Cleanup(a.srv.Close)
 	jar, _ := cookiejar.New(nil)
 	a.client = &http.Client{Jar: jar}

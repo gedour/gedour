@@ -33,8 +33,8 @@ test("shell renders with navigation and server version", async ({ page }) => {
   expect(res?.headers()["content-security-policy"]).toMatch(/script-src 'self' 'sha256-[^']+'/);
   await expect(page).toHaveURL(/\/inbox$/);
   await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
-  // Alice is admin: the 7 sections plus Administration (006-AC5).
-  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link")).toHaveCount(8);
+  // Alice is admin: the 8 sections plus Administration (006-AC5).
+  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link")).toHaveCount(9);
   await expect(page.getByTestId("app-version")).toHaveText(/^v\d+\.\d+\.\d+.* \([0-9a-f]+\)$/);
 
   // A client route survives a hard reload through the server's SPA fallback.

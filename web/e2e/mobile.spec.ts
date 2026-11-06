@@ -49,6 +49,7 @@ test("main views fit 375 px", async ({ page }) => {
     "/audit",
     "/settings",
     "/settings/credentials",
+    "/keys",
   ]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
@@ -58,6 +59,30 @@ test("main views fit 375 px", async ({ page }) => {
   await page.goto("/auth/signed-out");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+// 007-AC32: the create form and the reveal, with its long lines, fit 375 px.
+test("the API key dialogs fit 375 px", async ({ page }) => {
+  const name = `Phone ${tag()}`;
+  await page.goto("/keys");
+  await page.getByRole("button", { name: "New API key" }).click();
+  const dialog = page.getByRole("dialog", { name: "New API key" });
+  const fits = (el: HTMLElement) => el.scrollWidth <= el.clientWidth;
+  await dialog.getByLabel("Name", { exact: true }).fill(name);
+  expect(await dialog.evaluate(fits)).toBe(true);
+  await dialog.getByRole("button", { name: "Create key" }).click();
+  const reveal = page.getByRole("dialog", { name: `Copy ${name} now` });
+  await expect(reveal.getByTestId("api-key-reveal")).toBeVisible();
+  expect(await reveal.evaluate(fits)).toBe(true);
+  await reveal.getByRole("button", { name: "I have copied it" }).click();
+  await expectNoHorizontalScroll(page);
+  await page
+    .getByRole("row")
+    .filter({ hasText: name })
+    .getByRole("button", { name: "Revoke" })
+    .click();
+  await page.getByRole("dialog").getByRole("button", { name: "Revoke" }).click();
+  await expect(page.getByRole("row").filter({ hasText: name })).toContainText("revoked");
 });
 
 // 004-AC7: the panel at 375 px, with the longest notes and id list a release can carry: one unbreakable word.

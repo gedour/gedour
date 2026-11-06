@@ -299,6 +299,13 @@ for (const view of [
     error: "Credentials could not be loaded.",
   },
   {
+    path: "/keys",
+    api: "/api/v1/api-keys",
+    empty: "No API keys yet",
+    loading: "api-key-skeleton",
+    error: "API keys could not be loaded.",
+  },
+  {
     path: "/audit",
     api: "/api/v1/audit",
     empty: "No activity recorded",

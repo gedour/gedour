@@ -22,6 +22,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/audit"
 	"github.com/gedour/gedour/pkg/auth"
+	"github.com/gedour/gedour/pkg/mcpserver"
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/watch"
 	"github.com/gedour/gedour/pkg/webui"
@@ -54,8 +55,8 @@ type versionOutput struct {
 	Body BuildInfo
 }
 
-// New returns the main handler: /healthz, /auth, the guarded /api surface and the SPA at /, behind security headers.
-func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.Service, pool *pgxpool.Pool, watches *watch.Service, routes *route.Service) http.Handler {
+// New returns the main handler: /healthz, /auth, the guarded /api surface, /mcp and the SPA at /, behind security headers.
+func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.Service, pool *pgxpool.Pool, watches *watch.Service, routes *route.Service, reg prometheus.Registerer) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /healthz", Healthz(log, ping))
 
@@ -86,6 +87,18 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.
 	for _, m := range append(apiMethods, http.MethodOptions) {
 		mux.Handle(m+" /api/", fallback)
 	}
+	// mux is what a tool dispatches on: below Guard, so the table's startup check stands in for its admin check.
+	mcp, err := mcpserver.New(api.OpenAPI(), mux, authn, log, reg, build.Version)
+	if err != nil {
+		panic(err) // A broken tool table is a build defect, like the duplicate operation huma.Register panics on.
+	}
+	// Per method: a method-less "/mcp" would conflict with "GET /".
+	for _, m := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
+		mux.Handle(m+" /mcp", mcp)
+	}
+	// An MCP client's OAuth probe must not read the SPA's HTML as metadata.
+	mux.Handle("GET /.well-known/", http.NotFoundHandler())
+	mux.Handle("GET /mcp/", http.NotFoundHandler())
 	// GET only: other methods on non-API paths get the mux's 405 instead of the SPA.
 	mux.Handle("GET /", webui.Handler(ui))
 	return secureHeaders(contentSecurityPolicy(webui.InlineScriptHashes(ui)), requestID(authn.Guard(mux)))

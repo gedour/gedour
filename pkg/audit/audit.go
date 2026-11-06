@@ -46,6 +46,19 @@ func WithActing(ctx context.Context, admin, target string) context.Context {
 	return context.WithValue(ctx, actingKey{}, acting{admin, target})
 }
 
+type apiKeyKey struct{}
+
+// WithAPIKey tags ctx as a change made with API key id: entries recorded under it name the key.
+func WithAPIKey(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, apiKeyKey{}, id)
+}
+
+// APIKeyID returns the ID set by WithAPIKey, or "": a change made on a session has none.
+func APIKeyID(ctx context.Context) string {
+	id, _ := ctx.Value(apiKeyKey{}).(string)
+	return id
+}
+
 // Record inserts e within tx; a failure must abort the caller's transaction so the mutation rolls back.
 // 001-AC21: same transaction as the mutation, secrets redacted.
 func Record(ctx context.Context, tx pgx.Tx, e Entry) error {
@@ -68,8 +81,12 @@ func Record(ctx context.Context, tx pgx.Tx, e Entry) error {
 	if a, ok := ctx.Value(actingKey{}).(acting); ok {
 		actor, onBehalfOf = &a.admin, &a.target
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, before, after, request_id, on_behalf_of)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, actor, e.Action, e.TargetType, e.TargetID, before, after, e.RequestID, onBehalfOf)
+	var apiKey *string
+	if id := APIKeyID(ctx); id != "" {
+		apiKey = &id
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO audit_log (actor_user_id, action, target_type, target_id, before, after, request_id, on_behalf_of, api_key_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, actor, e.Action, e.TargetType, e.TargetID, before, after, e.RequestID, onBehalfOf, apiKey)
 	if err != nil {
 		return fmt.Errorf("audit insert %s: %w", e.Action, err)
 	}

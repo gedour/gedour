@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -201,6 +202,55 @@ func checkCredential(ctx context.Context, tx pgx.Tx, owner, kind, id string) err
 	return nil
 }
 
+// maxKeyWatches bounds what a key can add to the worker's fetches; REST has no cap.
+const maxKeyWatches = 200
+
+func keyCredentialError() error {
+	return huma.Error403Forbidden("an API key cannot attach or detach a credential: use the UI")
+}
+
+// checkKnownHost keeps a key's config from carrying data to a host its owner never chose: a shared watch's host does not count.
+func checkKnownHost(ctx context.Context, tx pgx.Tx, owner, kind string, cfg map[string]any) error {
+	field, raw := targetOf(cfg)
+	target := comparableTarget(raw)
+	if slices.Contains(defaultHosts[kind], target) {
+		return nil
+	}
+	// A default counts on its own kind only: every default-host watch saves it, so a saved one would undo that in two calls.
+	if isDefaultHost(target) {
+		return unknownTargetError(field, raw)
+	}
+	rows, err := tx.Query(ctx, `SELECT COALESCE(config->>'api_url', config->>'base_url', config->>'registry', '') FROM watches WHERE owner_id = $1`, owner)
+	if err != nil {
+		return err
+	}
+	saved, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(saved, func(s string) bool { return comparableTarget(s) == target }) {
+		return nil
+	}
+	return unknownTargetError(field, raw)
+}
+
+func unknownTargetError(field, raw string) error {
+	return huma.Error403Forbidden("an API key can only target a known host and path: create a watch on it in the UI first",
+		&huma.ErrorDetail{Location: "body.config." + field, Message: "not this kind's default host without a path, nor the host and path of one of your watches", Value: raw})
+}
+
+// underKeyCap refuses a key's create past maxKeyWatches. Soft, without a lock: two concurrent creates may overshoot by one.
+func underKeyCap(ctx context.Context, tx pgx.Tx, owner string) error {
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM watches WHERE owner_id = $1`, owner).Scan(&n); err != nil {
+		return err
+	}
+	if n >= maxKeyWatches {
+		return huma.Error409Conflict(fmt.Sprintf("you own %d watches: an API key cannot create more, delete one or use the UI", n))
+	}
+	return nil
+}
+
 func scheduleError(msg, value string) error {
 	return &huma.ErrorDetail{Location: "body.schedule", Message: msg, Value: value}
 }
@@ -211,6 +261,10 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 		return nil, err
 	}
 	b := in.Body
+	viaKey := audit.APIKeyID(ctx) != ""
+	if viaKey && b.CredentialID != "" {
+		return nil, keyCredentialError()
+	}
 	cfg, errs := s.v.Config(b.Kind, b.Config)
 	if b.Schedule == "" {
 		b.Schedule = DefaultScheduleFor(b.Kind)
@@ -228,6 +282,14 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 	}
 	var w Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if viaKey {
+			if err := underKeyCap(ctx, tx, me); err != nil {
+				return err
+			}
+			if err := checkKnownHost(ctx, tx, me, b.Kind, cfg); err != nil {
+				return err
+			}
+		}
 		var cred *string
 		if b.CredentialID != "" {
 			if err := checkCredential(ctx, tx, me, b.Kind, b.CredentialID); err != nil {
@@ -258,6 +320,10 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		return nil, err
 	}
 	b := in.Body
+	viaKey := audit.APIKeyID(ctx) != ""
+	if viaKey && b.CredentialID != nil {
+		return nil, keyCredentialError()
+	}
 	var after Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		need := levelWrite
@@ -293,11 +359,21 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		if len(errs) > 0 {
 			return huma.Error400BadRequest("invalid watch", errs...)
 		}
+		retargeted := !reflect.DeepEqual(next.Config, before.Config)
 		// The config decides where the owner's credential is sent: a sharee retargeting it could hand the
-		// token to another host or read the owner's private repositories with it.
-		if before.CredentialID != nil && b.Config != nil && levelOf(before.Permission) < levelOwner &&
-			!reflect.DeepEqual(next.Config, before.Config) {
-			return huma.Error403Forbidden("only the owner can change the target of a watch that uses their credential")
+		// token to another host or read the owner's private repositories with it. A hijacked key could too, owner's included.
+		if before.CredentialID != nil && retargeted {
+			if viaKey {
+				return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
+			}
+			if levelOf(before.Permission) < levelOwner {
+				return huma.Error403Forbidden("only the owner can change the target of a watch that uses their credential")
+			}
+		}
+		if viaKey && retargeted {
+			if err := checkKnownHost(ctx, tx, me, before.Kind, next.Config); err != nil {
+				return err
+			}
 		}
 		if b.CredentialID != nil {
 			next.CredentialID = nil
@@ -312,7 +388,6 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 			WHERE id = $1`, in.ID, next.Name, next.Config, next.Schedule, next.Paused, next.CredentialID); err != nil {
 			return err
 		}
-		retargeted := !reflect.DeepEqual(next.Config, before.Config)
 		if retargeted {
 			// A new target starts from a fresh baseline: diffing it against the old one would flood events.
 			if _, err := tx.Exec(ctx, `DELETE FROM watch_states WHERE watch_id = $1`, in.ID); err != nil {
@@ -322,7 +397,8 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 				return err
 			}
 		}
-		if retargeted || next.Schedule != before.Schedule || (before.Paused && !next.Paused) {
+		held := viaKey && rateLimitHeld(before)
+		if !held && (retargeted || next.Schedule != before.Schedule || (before.Paused && !next.Paused)) {
 			if _, err := tx.Exec(ctx, `UPDATE watches SET next_run_at = now() WHERE id = $1`, in.ID); err != nil {
 				return err
 			}
@@ -336,6 +412,11 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		return nil, s.fail("update-watch", err)
 	}
 	return &watchOutput{Body: after}, nil
+}
+
+// rateLimitHeld reports the upstream's rate limit holding w: a person may override it, an unattended client may not.
+func rateLimitHeld(w Watch) bool {
+	return w.LastStatus != nil && *w.LastStatus == "rate_limited" && w.NextRunAt.After(time.Now())
 }
 
 // setPaused is idempotent: a watch already in the asked state is returned unchanged and not audited.

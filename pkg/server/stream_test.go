@@ -42,7 +42,7 @@ func (a *devApp) replica(t *testing.T, heartbeat time.Duration, oidc bool) repli
 	routes.Heartbeat = heartbeat
 	ctx, cancel := context.WithCancel(context.Background())
 	go routes.RunHub(ctx)
-	srv := httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, a.pool, testWatches(t, a.pool), routes))
+	srv := httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, a.pool, testWatches(t, a.pool), routes, nil))
 	t.Cleanup(func() { cancel(); srv.Close() })
 	return replica{srv, cookie}
 }

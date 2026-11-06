@@ -8,3 +8,4 @@
 | [004](004-release-body-cves.md) | Release notes and CVE ids in events | shipped |
 | [005](005-rule-priority.md) | High priority rules | shipped |
 | [006](006-roles-admin.md) | Roles from the identity provider and account administration | shipped |
+| [007](007-mcp-api-keys.md) | MCP server and API keys | shipped |

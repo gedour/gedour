@@ -20,6 +20,8 @@ const entry = (id: number, over: Partial<AuditItem> = {}): AuditItem => ({
   request_id: "req-1",
   on_behalf_of: null,
   on_behalf_of_name: "",
+  api_key_id: null,
+  api_key_name: null,
   ...over,
 });
 
@@ -45,6 +47,39 @@ describe("AuditPage", () => {
     expect(rows[2]).toHaveTextContent("System");
     expect(rows[2]).toHaveTextContent("short");
     expect(within(table).getAllByRole("time")[0]).toHaveAttribute("datetime", first.at);
+  });
+
+  // 007-AC26: an entry made with a key names it; a session's names none.
+  it("shows the key an entry was made with", async () => {
+    mockApi({
+      "/api/v1/audit": {
+        items: [
+          entry(1, { action: "watch.run_requested", api_key_id: "k1", api_key_name: "ci client" }),
+          entry(2, { action: "watch.updated" }),
+        ],
+      },
+    });
+    renderApp("/audit");
+    await screen.findByText(/via key ci client/);
+    const rows = within(screen.getByRole("table")).getAllByRole("row");
+    expect(rows[1]).toHaveTextContent("Alice via key ci client");
+    expect(rows[2]).not.toHaveTextContent("via key");
+  });
+
+  // 007-AC26: once the key is gone its ID is all that is left.
+  it("shows the key's ID once the key is gone", async () => {
+    const gone = "99999999-2222-3333-4444-555555555555";
+    mockApi({
+      "/api/v1/audit": {
+        items: [entry(1, { action: "watch.run_requested", api_key_id: gone, api_key_name: null })],
+      },
+    });
+    renderApp("/audit");
+    await screen.findByText(`via key ${gone}`, { exact: false });
+    await userEvent.click(screen.getByRole("button", { name: /Show details/ }));
+    expect(screen.getByText("API key", { selector: "dt" }).nextElementSibling).toHaveTextContent(
+      gone,
+    );
   });
 
   // 006-AC16: an entry made while acting names the admin, then the user it was made for.

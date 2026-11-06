@@ -36,6 +36,9 @@ export interface AuditItem {
   /** User the actor was acting as (006-AC16). */
   on_behalf_of: string | null;
   on_behalf_of_name: string;
+  /** Key the change was made with (007-AC26); its name is null for others than its owner, and once the key is gone. */
+  api_key_id: string | null;
+  api_key_name: string | null;
 }
 
 export interface AuditPage {
@@ -63,6 +66,11 @@ export type SharePermission = Share["permission"];
 export type Credential = Schemas["Credential"];
 export type CredentialKind = Credential["kind"];
 export type CreateCredentialBody = Schemas["CreateCredentialInputBody"];
+export type ApiKey = Schemas["APIKey"];
+export type ApiKeyCreated = Schemas["APIKeyCreated"];
+export type ApiKeyScope = ApiKey["scope"];
+export type ApiKeyDuration = Schemas["CreateAPIKeyInputBody"]["duration"];
+export type CreateApiKeyBody = Schemas["CreateAPIKeyInputBody"];
 export type AuditActor = Schemas["Actor"];
 export type ProblemDetail = Schemas["ErrorDetail"];
 export type WatchEvent = Schemas["Event"];

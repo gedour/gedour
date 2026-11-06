@@ -52,6 +52,12 @@ func TestConfigValidation(t *testing.T) {
 		{"github http allowlisted", KindGitHubRelease, `{"repo":"a/b","api_url":"http://127.0.0.1:9999"}`,
 			`{"api_url":"http://127.0.0.1:9999","include_prereleases":false,"repo":"a/b"}`, nil},
 		{"github userinfo", KindGitHubRelease, `{"repo":"a/b","api_url":"https://u:p@ghe.example"}`, "", []string{"body.config.api_url"}},
+		{"docker hub default port", KindOCITags, `{"registry":"docker.io:443","repository":"a/b"}`, `{"registry":"docker.io","repository":"a/b","semver_only":false}`, nil},
+		{"docker hub alias default port", KindOCITags, `{"registry":"INDEX.docker.io:443","repository":"a/b"}`, `{"registry":"docker.io","repository":"a/b","semver_only":false}`, nil},
+		{"docker hub other port", KindOCITags, `{"registry":"docker.io:8443","repository":"a/b"}`, `{"registry":"docker.io:8443","repository":"a/b","semver_only":false}`, nil},
+		{"bare port", KindOCITags, `{"registry":":443","repository":"a/b"}`, "", []string{"body.config.registry"}},
+		{"github empty query", KindGitHubRelease, `{"repo":"a/b","api_url":"https://ghe.example/x?"}`, "", []string{"body.config.api_url"}},
+		{"gitlab empty fragment", KindGitLabRelease, `{"project":"a/b","base_url":"https://git.example/x#"}`, "", []string{"body.config.base_url"}},
 		{"github query", KindGitHubRelease, `{"repo":"a/b","api_url":"https://ghe.example/?x=1"}`, "", []string{"body.config.api_url"}},
 		{"github relative url", KindGitHubRelease, `{"repo":"a/b","api_url":"/api"}`, "", []string{"body.config.api_url"}},
 		{"github ftp url", KindGitHubRelease, `{"repo":"a/b","api_url":"ftp://ghe.example"}`, "", []string{"body.config.api_url"}},
@@ -145,6 +151,42 @@ func TestHelpers(t *testing.T) {
 	for p, want := range map[string]level{"owner": levelOwner, "rw": levelWrite, "ro": levelRead, "": levelNone} {
 		if levelOf(p) != want {
 			t.Errorf("levelOf(%q)", p)
+		}
+	}
+}
+
+// 007-AC36: a target reduces to one exact string: host case, a trailing dot, a default port and a trailing slash fold; nothing else does, and non-ASCII never does.
+func TestComparableTarget(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://gitlab.com":            "gitlab.com",
+		"https://GitLab.COM":            "gitlab.com",
+		"HTTPS://gitlab.com":            "gitlab.com",
+		"https://gitlab.com.":           "gitlab.com",
+		"https://gitlab.com:443":        "gitlab.com",
+		"https://gitlab.com.:443/x":     "gitlab.com/x",
+		"http://h.example:80":           "h.example",
+		"http://h.example:443":          "h.example:443",
+		"https://gitlab.com:8443":       "gitlab.com:8443",
+		"https://gitlab.com:80":         "gitlab.com:80",
+		"https://gitlab.com..":          "gitlab.com.",
+		"ghcr.io":                       "ghcr.io",
+		"ghcr.io:443":                   "ghcr.io",
+		"reg.example:5000":              "reg.example:5000",
+		"https://[::1]:8443":            "[::1]:8443",
+		"https://g\u0456tlab.com":       "g\u0456tlab.com", // Cyrillic i
+		"https://g\u0130tlab.com":       "g\u0130tlab.com", // U+0130: strings.ToLower gives gitlab.com
+		"https://doc\u212Aer.io":        "doc\u212Aer.io",  // U+212A: strings.ToLower gives docker.io
+		"https://B\u00fcCHER.example":   "b\u00fccher.example",
+		"https://xn--bcher-kva.example": "xn--bcher-kva.example",
+		"https://gitlab.com/":           "gitlab.com",
+		"https://gitlab.com/DATA":       "gitlab.com/DATA",
+		"https://gitlab.com:443/a/b/":   "gitlab.com/a/b",
+		"https://ghe.example/API/v3":    "ghe.example/API/v3",
+		"https://ghe.example/%61pi":     "ghe.example/%61pi",
+		"https://%zz":                   "",
+	} {
+		if got := comparableTarget(raw); got != want {
+			t.Errorf("%q: %q, want %q", raw, got, want)
 		}
 	}
 }

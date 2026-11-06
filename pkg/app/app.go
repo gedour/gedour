@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 			log.Warn("dev_mode_enabled", zap.String("user", cfg.DevUser))
 		}
 		watches := watch.New(pool, log, box, cfg.AllowHTTPHosts)
-		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool, watches, routes)))
+		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool, watches, routes, reg)))
 		go routes.RunHub(hubCtx)
 	}
 
@@ -195,12 +195,15 @@ func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo)
 }
 
 func newWorker(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, guard *netguard.Guard, build server.BuildInfo, reg prometheus.Registerer) (*worker.Worker, error) {
-	client := guard.Client(netguard.Options{Timeout: 30 * time.Second, MaxRedirects: 5, HTTPHosts: cfg.AllowHTTPHosts,
-		StripOnCrossHost: []string{"Authorization", "Private-Token"}})
-	return worker.New(pool, log, box, client, collect.Collectors(), worker.NewMetrics(reg), worker.Options{
+	return worker.New(pool, log, box, workerClient(cfg, guard), collect.Collectors(), worker.NewMetrics(reg), worker.Options{
 		Poll: cfg.WorkerPoll, Concurrency: cfg.WorkerConcurrency, DrainTimeout: cfg.ShutdownTimeout,
 		UserAgent: "gedour/" + build.Version, HTTPHosts: cfg.AllowHTTPHosts,
 	})
+}
+
+func workerClient(cfg config.Config, guard *netguard.Guard) *http.Client {
+	return guard.Client(netguard.Options{Timeout: 30 * time.Second, MaxRedirects: 5, HTTPHosts: cfg.AllowHTTPHosts,
+		StripOnCrossHost: []string{"Authorization", "Private-Token", "Referer"}})
 }
 
 func newServer(addr string, h http.Handler) *http.Server {

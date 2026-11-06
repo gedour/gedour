@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -101,6 +102,56 @@ var (
 	ociRepoRe = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
 )
 
+// defaultHosts need no watch of the owner's for a key to target them, with no path and on their own kind only: docker.io and ghcr.io redirect a chosen path to other hosts, and a GitHub or GitLab kind's path holds a key's repo or project.
+var defaultHosts = map[string][]string{
+	KindGitHubRelease: {"api.github.com"},
+	KindGitHubPR:      {"api.github.com"},
+	KindGitLabRelease: {"gitlab.com"},
+	KindGitLabMR:      {"gitlab.com"},
+	KindOCITags:       {dockerHub, "ghcr.io"},
+}
+
+func isDefaultHost(target string) bool {
+	for _, hosts := range defaultHosts {
+		if slices.Contains(hosts, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// targetOf returns the field of a normalized config that decides where the worker sends requests, and its value.
+func targetOf(cfg map[string]any) (field, raw string) {
+	for _, f := range []string{"api_url", "base_url", "registry"} {
+		if s, ok := cfg[f].(string); ok {
+			return f, s
+		}
+	}
+	return "", ""
+}
+
+// comparableTarget is a target's host, non-default port and path.
+// Security: only ASCII folds. unicode.ToLower maps U+0130 to i and U+212A to k, and the HTTP client would resolve that homoglyph elsewhere; a non-ASCII host compares as saved, with no IDNA.
+func comparableTarget(raw string) string {
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimSuffix(strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, u.Hostname()), ".")
+	if port := u.Port(); port != "" && (u.Scheme != "https" || port != "443") && (u.Scheme != "http" || port != "80") {
+		host = net.JoinHostPort(host, port)
+	}
+	return host + strings.TrimRight(u.EscapedPath(), "/")
+}
+
 // fieldErrors collects field-level problems located under a base path such as "body.config".
 type fieldErrors struct {
 	base string
@@ -124,19 +175,8 @@ type validator struct {
 // field errors located under "body.config".
 func (v validator) Config(kind string, raw map[string]any) (map[string]any, []error) {
 	fe := &fieldErrors{base: "body.config"}
-	var target any
-	switch kind {
-	case KindGitHubRelease:
-		target = &GitHubReleaseConfig{}
-	case KindGitHubPR:
-		target = &GitHubPRConfig{}
-	case KindGitLabRelease:
-		target = &GitLabReleaseConfig{}
-	case KindGitLabMR:
-		target = &GitLabMRConfig{}
-	case KindOCITags:
-		target = &OCITagsConfig{}
-	default:
+	target := newConfig(kind)
+	if target == nil {
 		fe.base = "body.kind"
 		fe.add("", "unknown kind, want one of "+strings.Join(Kinds, ", "), kind)
 		return nil, fe.errs
@@ -171,6 +211,41 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 	return out, nil
 }
 
+func newConfig(kind string) any {
+	switch kind {
+	case KindGitHubRelease:
+		return &GitHubReleaseConfig{}
+	case KindGitHubPR:
+		return &GitHubPRConfig{}
+	case KindGitLabRelease:
+		return &GitLabReleaseConfig{}
+	case KindGitLabMR:
+		return &GitLabMRConfig{}
+	case KindOCITags:
+		return &OCITagsConfig{}
+	}
+	return nil
+}
+
+func jsonName(f reflect.StructField) string {
+	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+	return name
+}
+
+// ConfigFields lists each kind's config fields, from the structs, for a reader with no schema of config to go on.
+func ConfigFields() string {
+	kinds := make([]string, 0, len(Kinds))
+	for _, kind := range Kinds {
+		t := reflect.TypeOf(newConfig(kind)).Elem()
+		names := make([]string, 0, t.NumField())
+		for i := range t.NumField() {
+			names = append(names, jsonName(t.Field(i)))
+		}
+		kinds = append(kinds, kind+": "+strings.Join(names, ", "))
+	}
+	return strings.Join(kinds, "; ")
+}
+
 var typeNames = map[reflect.Kind]string{reflect.String: "a string", reflect.Bool: "true or false", reflect.Int: "an integer"}
 
 // decodeStrict maps raw onto target, reporting each unknown key and each mistyped field.
@@ -178,8 +253,7 @@ func decodeStrict(raw map[string]any, target any, fe *fieldErrors) bool {
 	known := map[string]bool{}
 	t := reflect.TypeOf(target).Elem()
 	for i := range t.NumField() {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
-		known[name] = true
+		known[jsonName(t.Field(i))] = true
 	}
 	keys := make([]string, 0, len(raw))
 	for k := range raw {
@@ -247,7 +321,8 @@ func (v validator) url(field, raw, fallback string, fe *fieldErrors) string {
 		fe.add(field, "expected an absolute URL, e.g. "+fallback, raw)
 	case u.User != nil:
 		fe.add(field, "must not carry credentials; attach a credential instead", nil)
-	case u.RawQuery != "" || u.Fragment != "":
+	// On the raw string: url.Parse reads an empty query or fragment as none, yet a trailing ? or # cuts the collector's own path.
+	case strings.ContainsAny(raw, "?#"):
 		fe.add(field, "must not have a query or fragment", raw)
 	case u.Scheme == "https":
 	case u.Scheme == "http" && slices.Contains(v.httpHosts, strings.ToLower(u.Hostname())):
@@ -259,8 +334,12 @@ func (v validator) url(field, raw, fallback string, fe *fieldErrors) string {
 
 func ociTags(c *OCITagsConfig, fe *fieldErrors) {
 	c.Registry = strings.ToLower(strings.TrimSpace(c.Registry))
-	switch c.Registry {
-	case "", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
+	// With :443 left on, registryBase reaches the web host docker.io, not registry-1.docker.io.
+	switch strings.TrimSuffix(c.Registry, ":443") {
+	case dockerHub, "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com":
+		c.Registry = dockerHub
+	}
+	if c.Registry == "" {
 		c.Registry = dockerHub
 	}
 	if !registryRe.MatchString(c.Registry) {

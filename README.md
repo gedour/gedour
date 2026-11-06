@@ -45,7 +45,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 |---|---|---|
 | `GEDOUR_DATABASE_URL` | (required) | PostgreSQL URL, e.g. `postgres://user:pass@host:5432/gedour` |
 | `GEDOUR_ROLE` / `--role` | `all` | `web`, `worker` or `all` |
-| `GEDOUR_HTTP_ADDR` | `:8080` | UI, `/api`, `/healthz` |
+| `GEDOUR_HTTP_ADDR` | `:8080` | UI, `/api`, `/mcp`, `/healthz` |
 | `GEDOUR_METRICS_ADDR` | `:9090` | `/metrics`, `/healthz`, `/livez` |
 | `GEDOUR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `GEDOUR_LOG_FORMAT` | `auto` | `auto` (console on a TTY, else JSON), `console`, `json` |
@@ -57,9 +57,10 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 | `GEDOUR_OIDC_REQUIRED_ROLE` | | Role needed to sign in; empty lets any authenticated user in |
 | `GEDOUR_OIDC_ADMIN_ROLE` | | Role that makes an admin, and also grants sign-in; empty means no admin |
 | `GEDOUR_PUBLIC_URL` | (required with OIDC) | Comma-separated browser-facing base URLs, one per host (e.g. `https://gedour.example.com,https://gedour.internal.example.com`). A request uses the entry whose `host:port` matches its `Host` header, else the first; the redirect URI is `<url>/auth/callback` |
-| `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
+| `GEDOUR_DEV_USER` | | Dev single-user mode: every `/api` and `/auth` request runs as this user, and `/mcp` still takes a key. All three answer only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
+| `GEDOUR_API_KEY_SIGNIN_MAX_AGE` | `720h` | An API key goes dormant when its owner has not signed in for this long; a sign-in wakes it. Keep it above `GEDOUR_SESSION_TTL`, or a user with a live session sees a dormant key with no sign-in to do. No effect in dev mode, but must still be a positive duration |
 | `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
 | `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`), a webhook, a Nextcloud Talk URL or a script fetch may reach over plain http; others need https |
 | `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry or a Nextcloud on a private network; also opens webhook targets |
@@ -100,7 +101,10 @@ a failed dev sign-in answers a plain 500.
   another type or non-string items count as no role.
 - With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
   gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
+- Check the role name before enabling `GEDOUR_OIDC_REQUIRED_ROLE`: a sign-in refused for a wrong name revokes that user's API keys for good.
 - Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
+  A sign-in refused for a missing role also ends the account's sessions and revokes its active API keys (the
+  audit entry holds `deleted_session_count` and `revoked_api_key_count`, when above 0), even if the browser drops the callback.
   Sessions opened before the upgrade that added roles are not admin until their next sign-in.
 - `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.
 
@@ -127,12 +131,14 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   navigation: every account with its last sign-in (never-signed-in first, then oldest), status (active,
   disabled, purged) and what it owns (watches, shared ones apart, channels, rules, scripts, credentials).
 - Disable (not your own account): every session of the account ends at once (its next call gets 401),
+  its API keys are revoked for good (enabling does not bring them back),
   its sign-in is refused with "No access to gedour" (`user.login_denied`, reason `disabled`), its rules
   route nothing and it gets no inbox items. Deliveries already queued for its channels end unsent
   ("not sent: the channel's owner is disabled"). Its data stays; watches it shares keep collecting for the
   users they are shared with.
 - Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
-- Both are audited (`user.disable`, `user.enable`) with the status before and after.
+- Both are audited (`user.disable`, `user.enable`) with the status before and after; a disable also holds
+  `revoked_api_key_count` when it revoked any.
 - Transfer (an account's watch count opens its watches): the watch goes to another active account. Its
   credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
   the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
@@ -141,7 +147,7 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   (a share or a transfer back restores routing).
   Audited as `watch.transfer` (owners, credential; never the secret).
 - Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
-  scripts, credentials, shares and inbox, and blanks its email and name. Other users lose the watches it
+  scripts, credentials, API keys, shares and inbox, and blanks its email and name. Other users lose the watches it
   shared with them and their rules on those watches; the confirmation lists both. The account row stays
   as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
   append-only and untouched: entries written before the purge (such as the account's creation) keep
@@ -160,13 +166,118 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
 - Purging an account sends every admin session acting as it back to its admin (`acting_sessions` in the
   preview and the audit).
 
+## API keys
+
+The API keys page creates a key for a program acting as you: a name, a scope and a duration. The key starts
+with `gdr_` and shows once, with a copy button. gedour stores only its SHA-256. At most 10 keys can be active;
+keys dead for over 30 days go away at the next creation. A session acting as a user cannot create one.
+
+- **Duration**: 7, 30, 90 (default) or 365 days, or no end date. To rotate, create a new key, then revoke the old one.
+- **Dormancy**: a key, even one with no end date, stops working once you have not signed in for
+  `GEDOUR_API_KEY_SIGNIN_MAX_AGE` (30 days by default). The next sign-in wakes it. The page shows each key's
+  effective end, the earlier of its expiry and that limit. Dev mode has no such limit.
+- **Revocation**: revoking is final. Disabling your account or a sign-in refused for a missing role revokes every
+  active key too; purging an account deletes them.
+
+| Scope | Reaches | Does not reach |
+|---|---|---|
+| `read` (default) | Your inbox with release notes, owned and shared watches with their config, their owner's name and ID and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
+| `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
+| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete, shares |
+
+A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, route events to your existing
+channels, and put a watch name of its choosing, and text and links from a repository it controls, in their
+messages: give it only to clients that confirm writes with a person. It opens no new destination, with one limit: a
+known host that forwards a request's path on a redirect, or names a token host in a registry challenge, carries the
+key's `repo`, `project` or `repository` to wherever that host says, with no credential. Keys never open the REST API, which stays session-only.
+
+Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
+expiry, never the key or its hash.
+
+## MCP
+
+`/mcp` is an [MCP](https://modelcontextprotocol.io) server over Streamable HTTP, stateless and JSON only, for
+protocol versions up to `2026-07-28`. A client authenticates with an API key on every request. Serve it over
+HTTPS: the key is a bearer credential.
+
+```sh
+claude mcp add --transport http gedour https://gedour.example.com/mcp --header "Authorization: Bearer <key>"
+```
+
+Or in `.mcp.json`, with the key in an environment variable:
+
+```json
+{
+  "mcpServers": {
+    "gedour": {
+      "type": "http",
+      "url": "https://gedour.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${GEDOUR_API_KEY}" }
+    }
+  }
+}
+```
+
+| Tool | Returns | Limit |
+|---|---|---|
+| `count_inbox` | Unread inbox items | |
+| `list_inbox` | Inbox items with their event; a body over 8 KiB is cut and says so | default 20, max 50 |
+| `list_watches` | Owned and shared watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
+| `get_watch` | One watch | |
+| `list_watch_events` | A watch's events | max 50 |
+| `list_watch_states` | A watch's observed states | max 50 |
+| `list_rules` | Routing rules, with filters | |
+| `get_rule` | One rule | |
+| `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
+| `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
+| `archive_inbox`, `unarchive_inbox` | Archive items or take them back: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
+| `run_watch` | Schedules a run of a watch the owner can write and does not wait; refused on a paused watch, a read-only share, or while the upstream's rate limit holds the watch | `write` key; shared budget |
+| `get_filter_reference` | What a rule's filter may use, and its limits | `manage` key |
+| `list_channels` | Your channels: ID, name and type, nothing else | `manage` key |
+| `create_watch` | Creates a watch without a credential | `manage` key; shared budget; refused past 200 owned watches |
+| `update_watch` | Changes a watch's name, config, schedule or paused state | `manage` key; shared budget |
+| `create_rule`, `update_rule` | Create or change a routing rule, with the same checks as the UI | `manage` key; shared budget; at most 100 rules |
+
+A key sees what its owner sees through the REST API. A `read` key reaches the first nine rows and gets `-32602` on the
+others. A `write` key also changes inbox state and schedules watch runs, nothing else. A `manage` key reaches every row.
+Only `create_watch` and `update_watch` take a free-form object, `config`. No tool takes a credential, and no input names a URL or a host
+outside that `config`. The shared budget is a burst of 6, then one every 10 s, per key and replica, across `run_watch` and the four edits.
+
+A `manage` key has three refusals, because a config decides where gedour sends requests and with which token:
+
+- **No credential**: `create_watch` and `update_watch` refuse `credential_id`, even one you hold, and cannot detach one. A private repository starts in the UI.
+- **No retarget of a watch with a credential**: its config cannot change through a key, yours included, or an injected prompt could send your token to another host. Name, schedule and paused still work.
+- **Known hosts only**: `api_url`, `base_url` and `registry` must name, with no path, the kind's default (GitHub kinds `api.github.com`, GitLab kinds `gitlab.com`, `oci_tags` `docker.io` or `ghcr.io`), or the host and path of a watch you own, not one shared with you. A default on another kind is refused, even if a watch of yours saved it. A new host or path starts in the UI, so a URL cannot carry data to an attacker's server, nor through a known host's redirect. Targets compare exactly, after folding ASCII host case, a trailing dot, a default port and a trailing `/`. `?` and `#` are refused for everyone. A non-ASCII host compares as it was saved: its punycode form is another host, and a homoglyph of a known host is refused.
+
+While the upstream's rate limit holds a watch, a key's `update_watch` leaves its next run where it is: a new schedule, an unpause or a new config take effect, the run waits. A session's edit still runs it at once.
+
+A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization`, `Private-Token` and `Referer` when leaving the original host. A registry's token challenge names its token host the same way, with no credential on a key's watch.
+
+`run_watch` writes `watch.run_requested`, and the manage edits their usual `watch.*` and `rule.*` rows, in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
+or once the key is gone. Inbox marks are not audited, as on REST; the log lines cover them.
+
+- **Untrusted output**: release notes, titles and errors come from third parties. Every successful result is one text block: any notice about the key, a warning, then the data
+  fenced with a nonce. The data drops C0 and C1 controls but tab, LF and CR, format characters (Unicode Cf: bidi,
+  zero-width, tags) and U+2028, U+2029. Other invisible characters, such as variation selectors, stay. No fence stops a model that decides
+  to obey: review what your client does with the tools it holds.
+- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. On top, the shared budget above answers `isError`. A body over 1 MiB gets 413, a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
+- **Methods**: at every protocol version `tools/list`, `tools/call` and `notifications/cancelled`; from `2026-07-28` `server/discover`; below it (a request with no version header counts) `initialize` and `ping`.
+  `notifications/initialized` and `notifications/roots/list_changed` pass at every version, with no effect from `2026-07-28`. Any other method gets `-32601`, at 404 from `2026-07-28` and at 200 below it. An unserved notification gets a plain 404.
+- **Refusals**: a missing or invalid key gets 401, an `Origin` outside `GEDOUR_PUBLIC_URL` 403; in dev mode, only
+  loopback `Host` and `Origin` pass. A dormant key still lists tools, and each call answers with the URL to sign in at.
+  In a key's last 7 days, each successful result starts with a notice saying when it stops. OAuth is not offered:
+  `/.well-known/` and `/mcp/` answer 404.
+- **Observability**: one `mcp_request` log line per request that reaches the SDK, written before it does (key ID, user ID, request ID, and the
+  JSON-RPC method when the body has a served one), and one `mcp_tool_call` line per call (key ID, user ID, tool, outcome, duration, request ID, the one an internal error quotes);
+  neither holds the key or the arguments. A refused method logs `mcp_method_refused`, without the method. In JSON format, the logger samples at 100 lines per second per message, then one in 100, but never `mcp_request`, `mcp_tool_call`, `mcp_handler_panic`, `mcp_dispatch_failed` or `mcp_dispatch_unexpected_status`. Metrics: `gedour_mcp_tool_calls_total{tool,outcome}` and `gedour_mcp_auth_failures_total`.
+
 ## Collection
 
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
   `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
-  the watch reads `running: true`, and the request is kept for when the run ends.
+  the watch reads `running: true`, and the request is kept for when the run ends, unless that run ends on the upstream's rate limit, which sets the next run; a changed target still runs at once.
 - Default schedule: `1h` for GitHub watches (unauthenticated GitHub allows 60 requests an hour per
   address), `15m` for the others; any schedule can be set explicitly.
 - Next run: interval schedules ±10 % jitter, cron schedules at their next activation (UTC). Errors back
@@ -183,7 +294,7 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
-  redirects included; a redirect to another host drops `Authorization` and `PRIVATE-TOKEN`. Environment
+  redirects included; a redirect to another host drops `Authorization`, `PRIVATE-TOKEN` and `Referer`. Environment
   proxies are ignored. `GEDOUR_ALLOW_PRIVATE_NETS` opens chosen ranges.
 - Metrics: `gedour_collector_runs_total{kind,status}`, `gedour_collector_run_duration_seconds{kind}`,
   `gedour_events_total{kind,type}`, `gedour_watches_due`.
@@ -447,7 +558,7 @@ from another namespace, or a webhook, Nextcloud Talk server, script fetch or wat
 `make k8s-smoke` builds the image, creates a kind cluster (`gedour-smoke`), deploys `deploy/k8s/test` (the
 base plus a throwaway PostgreSQL, the fake upstream, dev mode and the network policy; test only), and
 checks: gedour waits for PostgreSQL, started only afterwards, then 2 web and 2 worker pods are ready
-without restarts, `/healthz` and `/livez` answer through both Services, a script dry run
+without restarts, `/healthz` and `/livez` answer through both Services, `/mcp` with an API key (401 without, tools listed with), a script dry run
 and a script over its memory cap (killed, pod alive), a watch run and script deliveries on the workers.
 Then it brings up `compose.yaml` under a fresh project and checks the dev-mode UI, `/api/v1/me` and
 `/metrics`. Cluster, compose project and the images the smoke built are removed at the end. Needs kind
@@ -460,6 +571,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
 - `GET /livez` (metrics port only): 200 while the process serves, whatever PostgreSQL does.
+- `POST /mcp`: MCP server, API key only (see [MCP](#mcp)); `GET` and `DELETE` answer 405.
 - `GET /api/openapi.json`: OpenAPI document.
 - `GET /api/v1/version`: build information.
 - `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow. On failure both answer 303 to
@@ -488,6 +600,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
   it), `PUT /api/v1/credentials/{id}/secret`. Secrets are write-only; responses carry `last4` (empty for
   secrets under 16 characters). Credentials are private to their owner.
+
+- `/api/v1/api-keys` (`GET`, `POST {name, scope, duration}`, 409 at 10 active keys or while acting as a user),
+  `DELETE /api/v1/api-keys/{id}` (204, again on a revoked key; 404 for another user's). Only the `POST` answer holds the key.
 
 - `/api/v1/channels` (`GET`, `POST`), `/api/v1/channels/{id}` (`GET`, `PATCH`, `DELETE`, 409 while a rule
   uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.

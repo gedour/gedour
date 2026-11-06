@@ -1,6 +1,171 @@
 {
   "components": {
     "schemas": {
+      "APIKey": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_until": {
+            "description": "The earlier of expires_at and the owner's last sign-in plus the max age; null only in dev mode without an end date",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "Null when created without an end date",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The first 8 random characters, after gdr_",
+            "type": "string"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "enum": [
+              "read",
+              "write",
+              "manage"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "dormant",
+              "expired",
+              "revoked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "scope",
+          "prefix",
+          "created_at",
+          "expires_at",
+          "last_used_at",
+          "revoked_at",
+          "effective_until",
+          "status"
+        ],
+        "type": "object"
+      },
+      "APIKeyCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "effective_until": {
+            "description": "The earlier of expires_at and the owner's last sign-in plus the max age; null only in dev mode without an end date",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "description": "Null when created without an end date",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "key": {
+            "description": "Shown once, never returned again",
+            "type": "string"
+          },
+          "last_used_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "description": "The first 8 random characters, after gdr_",
+            "type": "string"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "enum": [
+              "read",
+              "write",
+              "manage"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "dormant",
+              "expired",
+              "revoked"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "name",
+          "scope",
+          "prefix",
+          "created_at",
+          "expires_at",
+          "last_used_at",
+          "revoked_at",
+          "effective_until",
+          "status"
+        ],
+        "type": "object"
+      },
       "Actor": {
         "additionalProperties": false,
         "properties": {
@@ -255,10 +420,7 @@
             },
             "maxItems": 500,
             "minItems": 1,
-            "type": [
-              "array",
-              "null"
-            ]
+            "type": "array"
           }
         },
         "required": [
@@ -508,6 +670,40 @@
         },
         "required": [
           "unread"
+        ],
+        "type": "object"
+      },
+      "CreateAPIKeyInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "duration": {
+            "default": "90",
+            "description": "Days until the key expires, or never",
+            "enum": [
+              "7",
+              "30",
+              "90",
+              "365",
+              "never"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "1 to 64 characters after trimming",
+            "type": "string"
+          },
+          "scope": {
+            "default": "read",
+            "enum": [
+              "read",
+              "write",
+              "manage"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -1205,6 +1401,20 @@
           "after": {
             "description": "State after the change, secrets redacted; null on delete"
           },
+          "api_key_id": {
+            "description": "API key the change was made with; null otherwise",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "api_key_name": {
+            "description": "That key's name, for its owner only: null otherwise, and once the key is gone",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "at": {
             "format": "date-time",
             "type": "string"
@@ -1244,6 +1454,8 @@
           "actor_name",
           "on_behalf_of",
           "on_behalf_of_name",
+          "api_key_id",
+          "api_key_name",
           "action",
           "target_type",
           "target_id",
@@ -1324,6 +1536,25 @@
           "max_string",
           "max_body",
           "max_items"
+        ],
+        "type": "object"
+      },
+      "ListAPIKeysOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/APIKey"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -1719,6 +1950,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "api_key_count": {
+            "format": "int64",
+            "type": "integer"
+          },
           "channels": {
             "format": "int64",
             "type": "integer"
@@ -1768,7 +2003,8 @@
           "shares_received",
           "inbox_items",
           "sessions",
-          "acting_sessions"
+          "acting_sessions",
+          "api_key_count"
         ],
         "type": "object"
       },
@@ -2901,6 +3137,118 @@
         "summary": "Give a watch, and its credential, to another active account (admin only)",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/api-keys": {
+      "get": {
+        "operationId": "list-api-keys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAPIKeysOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's API keys; a key is never returned",
+        "tags": [
+          "api-keys"
+        ]
+      },
+      "post": {
+        "operationId": "create-api-key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAPIKeyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyCreated"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create an API key, returned this once; refused while acting as a user",
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "operationId": "revoke-api-key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Revoke one of the caller's API keys",
+        "tags": [
+          "api-keys"
         ]
       }
     },

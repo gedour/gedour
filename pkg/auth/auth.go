@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,9 @@ type Service struct {
 
 	publicURLs []publicURL // the first one serves requests on an unlisted host
 
+	// keySigninMaxAge is how long a sign-in carries the user's API keys; nil in dev mode, which has no sign-in to renew.
+	keySigninMaxAge *time.Duration
+
 	rolesClaim   string
 	requiredRole string
 	adminRole    string
@@ -129,13 +133,14 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 			return nil, err
 		}
 		s.issuer = cfg.OIDCIssuer
+		s.keySigninMaxAge = &cfg.APIKeySigninMaxAge
 		s.stateKey = key
 		for _, raw := range cfg.PublicURLs() {
 			u, err := url.Parse(raw)
 			if err != nil || u.Host == "" {
 				return nil, fmt.Errorf("GEDOUR_PUBLIC_URL %q: must be an absolute URL", raw)
 			}
-			s.publicURLs = append(s.publicURLs, publicURL{host: u.Host, base: strings.TrimRight(raw, "/")})
+			s.publicURLs = append(s.publicURLs, publicURL{host: u.Host, base: strings.TrimRight(raw, "/"), origin: u.Scheme + "://" + u.Host})
 		}
 		if len(s.publicURLs) == 0 {
 			return nil, errors.New("GEDOUR_PUBLIC_URL is required with OIDC")
@@ -150,7 +155,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 	return s, nil
 }
 
-type publicURL struct{ host, base string }
+type publicURL struct{ host, base, origin string }
 
 // publicURL picks the configured base URL whose host:port is r.Host, else the first one.
 // Security: r.Host only selects among configured URLs, never builds one (host-header injection).
@@ -161,6 +166,23 @@ func (s *Service) publicURL(r *http.Request) string {
 		}
 	}
 	return s.publicURLs[0].base
+}
+
+// PublicBase is the instance's URL for r, for text a caller reads. Dev mode has no configured URL, and Guard only lets a loopback Host through.
+func (s *Service) PublicBase(r *http.Request) string {
+	if s.DevMode() {
+		return "http://" + r.Host
+	}
+	return s.publicURL(r)
+}
+
+// OriginAllowed reports whether a present Origin header names this instance: a GEDOUR_PUBLIC_URL entry, or loopback in dev mode.
+func (s *Service) OriginAllowed(origin string) bool {
+	if s.DevMode() {
+		u, err := url.Parse(origin)
+		return err == nil && (u.Scheme == "http" || u.Scheme == "https") && loopbackHost(u.Host)
+	}
+	return slices.ContainsFunc(s.publicURLs, func(p publicURL) bool { return strings.EqualFold(p.origin, origin) })
 }
 
 func (s *Service) sessionCookieName() string {
@@ -225,7 +247,7 @@ func (s *Service) Guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Dev mode trusts whoever asks, so only a loopback Host may ask: a rebound DNS name pointing at
 		// 127.0.0.1 would otherwise let any web page drive the API in the developer's browser.
-		if s.DevMode() && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/")) && !loopbackHost(r.Host) {
+		if s.DevMode() && (strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || r.URL.Path == "/mcp") && !loopbackHost(r.Host) {
 			writeProblem(w, http.StatusForbidden, "dev mode only answers on localhost")
 			return
 		}
@@ -323,4 +345,5 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux) {
 		return out, nil
 	})
 	s.registerAdmin(api)
+	s.registerAPIKeys(api)
 }

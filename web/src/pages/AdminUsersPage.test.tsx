@@ -458,6 +458,7 @@ describe("AdminUsersPage", () => {
       other_users_rules: 0,
       scripts: 0,
       credential_count: 0,
+      api_key_count: 0,
       shares_received: 0,
       inbox_items: 0,
       sessions: 0,
@@ -514,6 +515,7 @@ describe("AdminUsersPage", () => {
           other_users_rules: 1,
           scripts: 0,
           credential_count: 1,
+          api_key_count: 0,
           shares_received: 1,
           inbox_items: 4,
           sessions: 0,
@@ -532,7 +534,7 @@ describe("AdminUsersPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Purge Dee" }));
     const d = dialog("Purge Dee?");
     expect(await within(d).findByTestId("purge-counts")).toHaveTextContent(
-      "1 watch, 2 channels, 1 rule, 0 scripts, 1 credential, 1 share received, 4 inbox items.",
+      "1 watch, 2 channels, 1 rule, 0 scripts, 1 credential, 0 API keys, 1 share received, 4 inbox items.",
     );
     expect(d).toHaveTextContent("Other users lose these:");
     expect(
@@ -559,6 +561,7 @@ describe("AdminUsersPage", () => {
         other_users_rules: 0,
         scripts: 1,
         credential_count: 0,
+        api_key_count: 0,
         shares_received: 0,
         inbox_items: 0,
         sessions: 0,
@@ -606,6 +609,7 @@ describe("AdminUsersPage", () => {
           other_users_rules: 0,
           scripts: 0,
           credential_count: 0,
+          api_key_count: 0,
           shares_received: 0,
           inbox_items: 0,
           sessions: 0,
@@ -677,6 +681,7 @@ describe("AdminUsersPage", () => {
           other_users_rules: 0,
           scripts: 0,
           credential_count: 0,
+          api_key_count: 0,
           shares_received: 0,
           inbox_items: 0,
           sessions: 0,

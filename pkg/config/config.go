@@ -50,6 +50,8 @@ type Config struct {
 	// OIDCRequiredRole, when set, is needed to sign in; OIDCAdminRole, when set, makes an admin and also grants sign-in.
 	OIDCRequiredRole string
 	OIDCAdminRole    string
+	// APIKeySigninMaxAge is how long after the owner's last sign-in an API key keeps working.
+	APIKeySigninMaxAge time.Duration
 
 	// EncryptionKey is base64 of the 32-byte AES key sealing credential secrets.
 	EncryptionKey string
@@ -105,6 +107,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	keyAge, err := getDuration("GEDOUR_API_KEY_SIGNIN_MAX_AGE", "720h")
+	if err != nil {
+		return Config{}, err
+	}
 	poll, err := getDuration("GEDOUR_WORKER_POLL", "2s")
 	if err != nil {
 		return Config{}, err
@@ -132,6 +138,7 @@ func Load() (Config, error) {
 		OIDCRolesClaim:     strings.TrimSpace(getEnv("GEDOUR_OIDC_ROLES_CLAIM", "roles")),
 		OIDCRequiredRole:   strings.TrimSpace(os.Getenv("GEDOUR_OIDC_REQUIRED_ROLE")),
 		OIDCAdminRole:      strings.TrimSpace(os.Getenv("GEDOUR_OIDC_ADMIN_ROLE")),
+		APIKeySigninMaxAge: keyAge,
 		EncryptionKey:      os.Getenv("GEDOUR_ENCRYPTION_KEY"),
 		AllowHTTPHosts:     splitList(os.Getenv("GEDOUR_ALLOW_HTTP_HOSTS")),
 		AllowPrivateNets:   splitList(os.Getenv("GEDOUR_ALLOW_PRIVATE_NETS")),
@@ -232,6 +239,9 @@ func (c Config) validateAuth() []error {
 	}
 	if c.SessionTTL <= 0 || c.SessionIdleTimeout <= 0 {
 		errs = append(errs, errors.New("GEDOUR_SESSION_TTL and GEDOUR_SESSION_IDLE_TIMEOUT must be positive"))
+	}
+	if c.APIKeySigninMaxAge <= 0 {
+		errs = append(errs, errors.New("GEDOUR_API_KEY_SIGNIN_MAX_AGE must be positive"))
 	}
 	return errs
 }

@@ -52,7 +52,7 @@
   needs `make openapi`: `TestOpenAPIDrift` (Go) and `pnpm check:api` (web) fail on a stale file. Huma ignores
   embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
-  Other GET paths fall back to `index.html`.
+  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/` and `/.well-known/`.
 - `/metrics` and `/livez` (liveness, ignores PG) live only on the metrics listener; `/healthz` is on both.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite
@@ -81,13 +81,25 @@
 - `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.
 - Mutations run in `db.InTx` and call `audit.Record` with the same tx (001-AC21). Huma validation errors are 400.
 - `db.InTx` retries a deadlock (40P01) once: its closure may run twice, so it resets what it captures and leaves for after commit the side effects that must happen only once. Any test with `testpg.NewDB` fails on a retry it did not allow (`testpg.AllowDeadlockRetries`).
-- Row locks (`FOR UPDATE`/`NO KEY UPDATE`/`SHARE`) go users, rules, watches, credentials, by id; sessions come after users
+- Row locks (`FOR UPDATE`/`NO KEY UPDATE`/`SHARE`) go users, rules, watches, credentials, by id; sessions and API keys come after users
   (act-as start takes its target `FOR SHARE` first); addShare takes its target user `FOR SHARE` before the watch. Purges serialize on an advisory lock taken first. Users are never locked `FOR UPDATE`: disable and purge
   take `NO KEY UPDATE` (sign-in, caps, transfer, shares and act-as start still wait on them), so FK KEY SHARE on users (audit
   actor and on_behalf_of, sessions, shares, router) never waits on them and may come anywhere. Events: router
   (event, then KEY SHARE on rule/channel/user) and deletes only; events are deleted explicitly before their watch (no reliance on cascade order), and pre-delete rule locks are `NO KEY UPDATE`.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
+
+## MCP
+
+- A tool is one row of `rows` in `pkg/mcpserver/tools.go`: name, operation ID, scope, description, limit caps, output shaper. Its data
+  path is the REST handler, dispatched in process on the mux below `Guard`: no second code path, so a tool's checks live in the handler.
+- `inputSchema` comes from `api.OpenAPI()`. `mcpserver.New` fails (`server.New` panics) on a row naming an unknown operation or a path
+  under `auth.AdminPrefix`, as the sub-request skips `Guard`'s admin check.
+- Tests sending several calls per key mind the burst of 20 (`keyBurst`).
+- SDK code runs on its own goroutines (`jsonrpc2.handleAsync`, `readIncoming`), out of `net/http`'s recover. `wrap` guards what is below it; a panic ahead of it or behind it ends the process. Keep `servedMethods` narrow, and a new shape the source says could panic goes in `TestMCPOddRequestsSurvive`.
+- A write tool's audit row gets `api_key_id` from `dispatch` (`audit.WithAPIKey`). Budget-spending rows set `limited`. `audit.APIKeyID` says a request came with a key, for checks only a key must pass.
+- A row's `hidden` inputs leave its schema, and a handler refuses them too: `createWatch` and `updateWatch` hold the key's credential, retarget, known-host, cap and rate-limit-hold checks. Compare a target, host and path, with `comparableTarget`, never with `strings.ToLower` or a suffix: U+0130 and U+212A fold to ASCII.
+- An authenticated `/mcp` line that must never drop goes in `unsampled` (`cmd/gedour/main.go`); anything reachable without a key stays sampled.
 
 ## Kubernetes
 

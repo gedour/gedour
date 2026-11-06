@@ -58,6 +58,8 @@ type userIDPath struct {
 type userState struct {
 	Status     string     `json:"status"`
 	DisabledAt *time.Time `json:"disabled_at"`
+	// Not "revoked_api_keys": the audit redacts every name ending in key or keys.
+	RevokedKeys int64 `json:"revoked_api_key_count,omitempty"`
 }
 
 const statusSQL = `CASE WHEN u.purged_at IS NOT NULL THEN 'purged' WHEN u.disabled_at IS NOT NULL THEN 'disabled' ELSE 'active' END`
@@ -103,7 +105,7 @@ func (s *Service) apiFail(op string, err error) error {
 	if errors.As(err, &se) {
 		return se
 	}
-	s.log.Error("admin_api_failed", zap.String("operation", op), zap.Error(err))
+	s.log.Error("auth_api_failed", zap.String("operation", op), zap.Error(err))
 	return huma.Error500InternalServerError("internal error")
 }
 
@@ -172,6 +174,9 @@ func (s *Service) setDisabled(ctx context.Context, id string, disable bool) erro
 			after.Status = statusDisabled
 			if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, uid); err != nil {
 				return fmt.Errorf("revoke sessions: %w", err)
+			}
+			if after.RevokedKeys, err = revokeActiveKeys(ctx, tx, uid); err != nil {
+				return err
 			}
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: sess.ID, Action: action, TargetType: "user", TargetID: uid,

@@ -159,6 +159,36 @@ test("set a rule's priority and filter the inbox, by keyboard only", async ({ pa
   await expect(rows).toHaveCount(3);
 });
 
+// 007-AC32: create, reveal and revoke an API key with the keyboard alone, focus always visible.
+test("create and revoke an API key by keyboard only", async ({ page }) => {
+  const name = `Kbd key ${tag()}`;
+  await page.goto("/keys");
+  await expect(page.getByRole("heading", { level: 1, name: "API keys" })).toBeVisible();
+  await tabTo(page, page.getByRole("button", { name: "New API key" }));
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "New API key" });
+  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
+  await page.keyboard.type(name);
+  await tabTo(page, dialog.getByRole("radio", { name: "Read" }));
+  await page.keyboard.press("ArrowDown");
+  await expect(dialog.getByRole("radio", { name: "Write" })).toBeChecked();
+  await tabTo(page, dialog.getByRole("button", { name: "Create key" }));
+  await page.keyboard.press("Enter");
+  const reveal = page.getByRole("dialog", { name: `Copy ${name} now` });
+  await tabTo(page, reveal.getByRole("button", { name: "I have copied it" }));
+  await page.keyboard.press("Enter");
+  await expect(reveal).toBeHidden();
+  const row = page.getByRole("row").filter({ hasText: name });
+  await tabTo(page, row.getByRole("button", { name: "Revoke" }));
+  await page.keyboard.press("Enter");
+  const confirm = page.getByRole("dialog", { name: `Revoke ${name}?` });
+  await tabTo(page, confirm.getByRole("button", { name: "Revoke" }));
+  await page.keyboard.press("Enter");
+  await expect(row).toContainText("revoked");
+  // The row's Revoke button is gone: focus lands somewhere a keyboard user can go on from.
+  await expect(page.getByRole("button", { name: "New API key" })).toBeFocused();
+});
+
 // 003-AC5: the Talk form's type radio and Silent switch work from the keyboard.
 test("the Silent switch by keyboard", async ({ page }) => {
   await page.goto("/channels");

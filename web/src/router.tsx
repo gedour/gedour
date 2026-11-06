@@ -5,6 +5,7 @@ import { AuthGate } from "@/components/AuthGate";
 import { RouteError } from "@/components/RouteError";
 import { NAV, type NavItem } from "@/nav";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
+import { ApiKeysPage } from "@/pages/ApiKeysPage";
 import { AuditPage } from "@/pages/AuditPage";
 import { ChannelsPage } from "@/pages/ChannelsPage";
 import { CredentialsPage } from "@/pages/CredentialsPage";
@@ -28,6 +29,7 @@ const PAGES: Record<string, (item: NavItem) => ReactNode> = {
   "/scripts": (item) => <ScriptsPage item={item} />,
   "/audit": (item) => <AuditPage item={item} />,
   "/watches": (item) => <WatchesPage item={item} />,
+  "/keys": (item) => <ApiKeysPage item={item} />,
   "/settings": (item) => <SettingsPage item={item} />,
   "/admin/users": (item) => <AdminUsersPage item={item} />,
 };

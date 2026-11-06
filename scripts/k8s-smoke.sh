@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 001-AC28: deploys deploy/k8s (through the test overlay deploy/k8s/test) on a throwaway kind cluster with
 # PostgreSQL started only once gedour waits for it, then checks 2 web + 2 worker pods ready without a restart,
-# /healthz through the Services, a sandboxed script dry run on web, and a watch run plus a script delivery on
-# a worker. Then `docker compose up` on a clean project serves the dev UI.
+# /healthz through the Services, /mcp with an API key, a sandboxed script dry run on web, and a watch run plus a
+# script delivery on a worker. Then `docker compose up` on a clean project serves the dev UI.
 # Needs the image from `make docker-build` (gedour:local). Every cluster, container and image it creates is
 # removed.
 set -euo pipefail
@@ -26,6 +26,8 @@ readonly COMPOSE_HTTP_PORT="${COMPOSE_SMOKE_PORT:-18482}"
 readonly COMPOSE_METRICS_PORT="${COMPOSE_SMOKE_METRICS_PORT:-18483}"
 readonly COMPOSE_DB_PORT="${COMPOSE_SMOKE_DB_PORT:-55434}"
 readonly OUT="${K8S_SMOKE_PODS_OUT:-}"
+readonly MCP_VERSION="2026-07-28"
+readonly MCP_BODY='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"'"${MCP_VERSION}"'","io.modelcontextprotocol/clientInfo":{"name":"smoke","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}}'
 
 tmpdir="$(mktemp -d)"
 forwards=()
@@ -195,6 +197,24 @@ wait_for() {
   done
   return 1
 }
+
+echo "== /mcp with an API key, behind the deployed manifests"
+key="$(api POST /api/v1/api-keys '{"name":"smoke","scope":"read"}' | jq -r .key)" || fail "could not create an API key"
+[[ -n "${key}" && "${key}" != "null" ]] || fail "no key from POST /api/v1/api-keys"
+# mcp_post [CURL_ARG...]: prints the body, then the status code on the last line.
+mcp_post() {
+  curl -sS --max-time 30 -w '\n%{http_code}' -X POST -H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" \
+    -H "MCP-Protocol-Version: ${MCP_VERSION}" -H "Mcp-Method: tools/list" "$@" --data "${MCP_BODY}" "${BASE}/mcp"
+}
+unauth="$(mcp_post)" || fail "POST /mcp failed"
+[[ "${unauth##*$'\n'}" == "401" ]] || fail "/mcp without a key did not answer 401: ${unauth}"
+mcp="$(mcp_post -H "Authorization: Bearer ${key}")" || fail "POST /mcp failed"
+body="${mcp%$'\n'*}"
+code="${mcp##*$'\n'}"
+[[ "${code}" == "200" ]] || fail "/mcp with a key did not answer 200: ${mcp}"
+listed="$(jq '.result.tools | length' <<<"${body}")" || fail "/mcp answered no JSON: ${mcp}"
+[[ "${listed}" -gt 0 ]] || fail "/mcp listed no tool: ${mcp}"
+echo "tools listed: ${listed}"
 
 echo "== script dry run on web (sandbox child under the pod's securityContext)"
 dry="$(api POST /api/v1/scripts/dry-run \

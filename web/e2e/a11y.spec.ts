@@ -79,6 +79,7 @@ for (const theme of ["light", "dark"] as const) {
         ["/audit", "Audit"],
         ["/settings", "Settings"],
         ["/settings/credentials", "Credentials"],
+        ["/keys", "API keys"],
       ];
       const found: Record<string, string[]> = {};
       for (const [path, heading] of views) {
@@ -123,6 +124,31 @@ for (const theme of ["light", "dark"] as const) {
         await expect.poll(() => switchContrast(silent)).toBeGreaterThanOrEqual(3);
         await silent.click();
       }
+
+      // 007-AC32: the create form with the manage warning, the reveal and the revoke confirmation.
+      const name = `a11y ${theme} ${Date.now().toString(36)}`;
+      await page.goto("/keys");
+      await page.getByRole("button", { name: "New API key" }).click();
+      const create = page.getByRole("dialog", { name: "New API key" });
+      await create.getByLabel("Name", { exact: true }).fill(name);
+      await create.getByRole("radio", { name: "Manage" }).check();
+      await expect(create.getByText("silence alerts")).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await create.getByRole("button", { name: "Create key" }).click();
+      await expect(page.getByTestId("api-key-reveal")).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.getByRole("button", { name: "I have copied it" }).click();
+      await page
+        .getByRole("row")
+        .filter({ hasText: name })
+        .getByRole("button", { name: "Revoke" })
+        .click();
+      const revoke = page.getByRole("dialog", { name: `Revoke ${name}?` });
+      await expect(revoke).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await revoke.getByRole("button", { name: "Revoke" }).click();
+      await expect(page.getByRole("row").filter({ hasText: name })).toContainText("revoked");
+      expect(await violations(page)).toEqual([]);
     });
 
     // 005-AC7: the badge in the panel, the form's control on a high rule.

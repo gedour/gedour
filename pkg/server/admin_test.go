@@ -45,7 +45,7 @@ func TestAdminOperationsNeedAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(New(zap.NewNop(), build, pingOK, fstest.MapFS{"index.html": {Data: []byte("SPA")}}, authn, pool,
-		testWatches(t, pool), testRoutes(t, pool, testSender())))
+		testWatches(t, pool), testRoutes(t, pool, testSender()), nil))
 	t.Cleanup(srv.Close)
 	session := func(sub string, admin bool) string {
 		var id string

@@ -22,6 +22,8 @@ type Item struct {
 	ActorName      string          `json:"actor_name" doc:"Actor's display name, or email when it has none"`
 	OnBehalfOf     *string         `json:"on_behalf_of" doc:"User the actor was acting as; null otherwise"`
 	OnBehalfOfName string          `json:"on_behalf_of_name" doc:"That user's display name, or email; empty when on_behalf_of is null"`
+	APIKeyID       *string         `json:"api_key_id" doc:"API key the change was made with; null otherwise"`
+	APIKeyName     *string         `json:"api_key_name" doc:"That key's name, for its owner only: null otherwise, and once the key is gone"`
 	Action         string          `json:"action"`
 	TargetType     string          `json:"target_type"`
 	TargetID       string          `json:"target_id"`
@@ -137,8 +139,9 @@ func List(ctx context.Context, pool *pgxpool.Pool, q Query) ([]Item, string, err
 	}
 	rows, err := pool.Query(ctx, `SELECT a.id, a.at, a.actor_user_id::text, COALESCE(NULLIF(u.display_name, ''), u.email, ''),
 			a.action, a.target_type, a.target_id, a.before, a.after, a.request_id,
-			a.on_behalf_of::text, COALESCE(NULLIF(b.display_name, ''), b.email, '')
+			a.on_behalf_of::text, COALESCE(NULLIF(b.display_name, ''), b.email, ''), a.api_key_id::text, k.name
 		FROM audit_log a LEFT JOIN users u ON u.id = a.actor_user_id LEFT JOIN users b ON b.id = a.on_behalf_of
+			LEFT JOIN api_keys k ON k.id = a.api_key_id AND k.user_id = @viewer
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY a.at DESC, a.id DESC LIMIT @limit`, args)
 	if err != nil {
@@ -147,7 +150,7 @@ func List(ctx context.Context, pool *pgxpool.Pool, q Query) ([]Item, string, err
 	items, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Item, error) {
 		var it Item
 		err := r.Scan(&it.ID, &it.At, &it.ActorUserID, &it.ActorName, &it.Action, &it.TargetType, &it.TargetID,
-			&it.Before, &it.After, &it.RequestID, &it.OnBehalfOf, &it.OnBehalfOfName)
+			&it.Before, &it.After, &it.RequestID, &it.OnBehalfOf, &it.OnBehalfOfName, &it.APIKeyID, &it.APIKeyName)
 		return it, err
 	})
 	if err != nil {

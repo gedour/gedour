@@ -24,7 +24,16 @@ describe("AppShell", () => {
       within(nav)
         .getAllByRole("link")
         .map((l) => l.textContent),
-    ).toEqual(["Inbox", "Watches", "Channels", "Rules", "Scripts", "Audit", "Settings"]);
+    ).toEqual([
+      "Inbox",
+      "Watches",
+      "Channels",
+      "Rules",
+      "Scripts",
+      "Audit",
+      "API keys",
+      "Settings",
+    ]);
     expect(await screen.findByText("Nothing to read yet")).toBeInTheDocument();
   });
 

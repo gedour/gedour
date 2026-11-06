@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -42,9 +43,40 @@ func newLogger(levelName, format string) (*zap.Logger, error) {
 		cfg = zap.NewProductionConfig()
 	}
 	cfg.Level = zap.NewAtomicLevelAt(level)
+	var opts []zap.Option
+	if s := cfg.Sampling; s != nil {
+		cfg.Sampling = nil
+		opts = append(opts, zap.WrapCore(func(c zapcore.Core) zapcore.Core { return sampledExcept(c, s) }))
+	}
 	cfg.EncoderConfig.TimeKey = "timestamp"
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	return cfg.Build()
+	return cfg.Build(opts...)
+}
+
+// unsampled lines need a valid key, and crash attribution and one mcp_tool_call per call need every one. What anyone can trigger stays capped.
+var unsampled = map[string]bool{
+	"mcp_request": true, "mcp_tool_call": true, "mcp_handler_panic": true, "mcp_dispatch_failed": true, "mcp_dispatch_unexpected_status": true,
+}
+
+// exemptCore samples every entry but those in unsampled.
+type exemptCore struct {
+	zapcore.Core
+	sampled zapcore.Core
+}
+
+func sampledExcept(core zapcore.Core, s *zap.SamplingConfig) zapcore.Core {
+	return exemptCore{Core: core, sampled: zapcore.NewSamplerWithOptions(core, time.Second, s.Initial, s.Thereafter)}
+}
+
+func (c exemptCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if unsampled[e.Message] {
+		return c.Core.Check(e, ce)
+	}
+	return c.sampled.Check(e, ce)
+}
+
+func (c exemptCore) With(fields []zapcore.Field) zapcore.Core {
+	return exemptCore{Core: c.Core.With(fields), sampled: c.sampled.With(fields)}
 }
 
 func main() {

@@ -50,6 +50,7 @@ func cfgFor(t *testing.T, role, dbURL string) config.Config {
 		DevUser:            "dev@local",
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Hour,
+		APIKeySigninMaxAge: time.Hour,
 		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		WorkerPoll:         50 * time.Millisecond,
 		WorkerConcurrency:  2,

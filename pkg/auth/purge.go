@@ -27,6 +27,8 @@ type PurgeCounts struct {
 	InboxItems     int `json:"inbox_items"`
 	Sessions       int `json:"sessions"`
 	ActingSessions int `json:"acting_sessions" doc:"Admin sessions acting as the account, sent back to their admin's own data"`
+	// Not "api_keys": the audit redacts every name ending in key or keys.
+	APIKeys int `json:"api_key_count"`
 }
 
 // SharedWatch is an owned watch other users lose with the purge.
@@ -81,6 +83,7 @@ const purgePreviewSQL = `SELECT
 		(SELECT count(*) FROM inbox_items WHERE user_id = u.id),
 		(SELECT count(*) FROM sessions WHERE user_id = u.id),
 		(SELECT count(*) FROM sessions WHERE acting_as = u.id),
+		(SELECT count(*) FROM api_keys WHERE user_id = u.id),
 		(SELECT coalesce(json_agg(json_build_object('id', s.id, 'name', s.name, 'shared_with', s.users) ORDER BY lower(s.name), s.id), '[]')
 			FROM (SELECT w.id, w.name, array_agg(` + userLabelSQL + ` ORDER BY lower(` + userLabelSQL + `)) AS users
 				FROM watches w JOIN watch_shares ws ON ws.watch_id = w.id JOIN users o ON o.id = ws.user_id
@@ -99,7 +102,7 @@ func (s *Service) purgePreview(ctx context.Context, in *userIDPath) (*purgePrevi
 	b := &out.Body
 	c := &b.Counts
 	err := s.pool.QueryRow(ctx, purgePreviewSQL, in.ID).Scan(&c.Watches, &c.Channels, &c.Rules, &c.OtherUsersRules, &c.Scripts,
-		&c.Credentials, &c.SharesReceived, &c.InboxItems, &c.Sessions, &c.ActingSessions, &b.SharedWatches, &b.OtherRules)
+		&c.Credentials, &c.SharesReceived, &c.InboxItems, &c.Sessions, &c.ActingSessions, &c.APIKeys, &b.SharedWatches, &b.OtherRules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, huma.Error404NotFound("no such account")
 	}
@@ -133,6 +136,7 @@ var purgeSteps = []struct {
 	// The row stays, so ON DELETE SET NULL never fires: other admins' sessions acting as it end here.
 	{`WITH d AS (UPDATE sessions SET acting_as = NULL WHERE acting_as = $1 RETURNING 1) SELECT count(*) FROM d`,
 		func(c *PurgeCounts) *int { return &c.ActingSessions }},
+	{`WITH d AS (DELETE FROM api_keys WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.APIKeys }},
 	// Not left to the watches' cascade: its trigger order may delete rules first and wait on a router holding an event.
 	{`WITH d AS (DELETE FROM events WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) RETURNING 1) SELECT count(*) FROM d`, nil},
 	// Cascades to other users' rules on them, shares, states, cache.

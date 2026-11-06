@@ -282,6 +282,9 @@ function AuditRow({
           {item.on_behalf_of && (
             <span className="text-muted"> for {item.on_behalf_of_name || "a purged account"}</span>
           )}
+          {item.api_key_id && (
+            <span className="text-muted"> via key {item.api_key_name ?? item.api_key_id}</span>
+          )}
         </td>
         <td className="px-4 py-3">
           <span
@@ -359,6 +362,12 @@ function AuditDetails({ item, absolute }: { item: AuditItem; absolute: string })
           <div className="flex gap-1.5">
             <dt>Request</dt>
             <dd className="font-mono text-ink">{item.request_id}</dd>
+          </div>
+        )}
+        {item.api_key_id && (
+          <div className="flex gap-1.5">
+            <dt>API key</dt>
+            <dd className="font-mono text-ink">{item.api_key_id}</dd>
           </div>
         )}
       </dl>

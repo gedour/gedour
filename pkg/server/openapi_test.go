@@ -34,11 +34,16 @@ const (
 
 func testWatches(t *testing.T, pool *pgxpool.Pool) *watch.Service {
 	t.Helper()
+	return testWatchesLog(t, pool, zaptest.NewLogger(t))
+}
+
+func testWatchesLog(t *testing.T, pool *pgxpool.Pool, log *zap.Logger) *watch.Service {
+	t.Helper()
 	box, err := secret.New(testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return watch.New(pool, zaptest.NewLogger(t), box, []string{"127.0.0.1"})
+	return watch.New(pool, log, box, []string{"127.0.0.1"})
 }
 
 // testSender reaches httptest servers (127.0.0.1) only; tests point TelegramURL and Mailer at their stubs.
@@ -49,6 +54,11 @@ func testSender() *notify.Sender {
 }
 
 func testRoutes(t *testing.T, pool *pgxpool.Pool, sender *notify.Sender) *route.Service {
+	t.Helper()
+	return testRoutesLog(t, pool, sender, zaptest.NewLogger(t))
+}
+
+func testRoutesLog(t *testing.T, pool *pgxpool.Pool, sender *notify.Sender, log *zap.Logger) *route.Service {
 	t.Helper()
 	box, err := secret.New(testKey)
 	if err != nil {
@@ -61,7 +71,7 @@ func testRoutes(t *testing.T, pool *pgxpool.Pool, sender *notify.Sender) *route.
 	}
 	runner := script.NewRunner(script.Options{Exe: exe, Args: []string{script.Subcommand}, Client: sender.Client, Guard: g,
 		HTTPHosts: []string{"127.0.0.1"}, UserAgent: "gedour/test"})
-	return route.New(pool, zaptest.NewLogger(t), box, sender, runner, g, []string{"127.0.0.1"}, route.NewMetrics(prometheus.NewRegistry()))
+	return route.New(pool, log, box, sender, runner, g, []string{"127.0.0.1"}, route.NewMetrics(prometheus.NewRegistry()))
 }
 
 // renderOpenAPI is the document the handlers serve, pretty printed, with a fixed version so the
@@ -73,7 +83,7 @@ func renderOpenAPI(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(zap.NewNop(), BuildInfo{Version: "v0.0.0"}, pingOK, fstest.MapFS{}, authn, nil, testWatches(t, nil), testRoutes(t, nil, testSender()))
+	h := New(zap.NewNop(), BuildInfo{Version: "v0.0.0"}, pingOK, fstest.MapFS{}, authn, nil, testWatches(t, nil), testRoutes(t, nil, testSender()), nil)
 	rec := get(t, h, "/api/openapi.json")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("openapi: %d", rec.Code)

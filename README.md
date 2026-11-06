@@ -60,6 +60,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 | `GEDOUR_DEV_USER` | | Dev single-user mode: every request runs as this user. Answers `/api` and `/auth` only on a loopback Host (`localhost`, `127.0.0.1`, `::1`), others get 403. Never in production |
 | `GEDOUR_SESSION_TTL` | `168h` | Absolute session lifetime |
 | `GEDOUR_SESSION_IDLE_TIMEOUT` | `24h` | Session ends after this long without a request |
+| `GEDOUR_API_KEY_SIGNIN_MAX_AGE` | `720h` | An API key goes dormant when its owner has not signed in for this long; a sign-in wakes it. Keep it above `GEDOUR_SESSION_TTL`, or a user with a live session sees a dormant key with no sign-in to do. No effect in dev mode, but must still be a positive duration |
 | `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
 | `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`), a webhook, a Nextcloud Talk URL or a script fetch may reach over plain http; others need https |
 | `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry or a Nextcloud on a private network; also opens webhook targets |
@@ -101,6 +102,8 @@ a failed dev sign-in answers a plain 500.
 - With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
   gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
 - Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
+  A sign-in refused for a missing role also ends the account's sessions and revokes its active API keys (the
+  audit entry holds `deleted_session_count` and `revoked_api_key_count`, when above 0), even if the browser drops the callback.
   Sessions opened before the upgrade that added roles are not admin until their next sign-in.
 - `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.
 
@@ -127,12 +130,14 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   navigation: every account with its last sign-in (never-signed-in first, then oldest), status (active,
   disabled, purged) and what it owns (watches, shared ones apart, channels, rules, scripts, credentials).
 - Disable (not your own account): every session of the account ends at once (its next call gets 401),
+  its API keys are revoked for good (enabling does not bring them back),
   its sign-in is refused with "No access to gedour" (`user.login_denied`, reason `disabled`), its rules
   route nothing and it gets no inbox items. Deliveries already queued for its channels end unsent
   ("not sent: the channel's owner is disabled"). Its data stays; watches it shares keep collecting for the
   users they are shared with.
 - Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
-- Both are audited (`user.disable`, `user.enable`) with the status before and after.
+- Both are audited (`user.disable`, `user.enable`) with the status before and after; a disable also holds
+  `revoked_api_key_count` when it revoked any.
 - Transfer (an account's watch count opens its watches): the watch goes to another active account. Its
   credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
   the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
@@ -141,7 +146,7 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   (a share or a transfer back restores routing).
   Audited as `watch.transfer` (owners, credential; never the secret).
 - Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
-  scripts, credentials, shares and inbox, and blanks its email and name. Other users lose the watches it
+  scripts, credentials, API keys, shares and inbox, and blanks its email and name. Other users lose the watches it
   shared with them and their rules on those watches; the confirmation lists both. The account row stays
   as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
   append-only and untouched: entries written before the purge (such as the account's creation) keep
@@ -159,6 +164,31 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   (`session.act_as_start`, `session.act_as_stop`); you see them in yours.
 - Purging an account sends every admin session acting as it back to its admin (`acting_sessions` in the
   preview and the audit).
+
+## API keys
+
+The API keys page creates a key for a program acting as you: a name, a scope and a duration. The key starts
+with `gdr_` and shows once, with a copy button. gedour stores only its SHA-256. At most 10 keys can be active;
+keys dead for over 30 days go away at the next creation. A session acting as a user cannot create one.
+
+- **Duration**: 7, 30, 90 (default) or 365 days, or no end date. To rotate, create a new key, then revoke the old one.
+- **Dormancy**: a key, even one with no end date, stops working once you have not signed in for
+  `GEDOUR_API_KEY_SIGNIN_MAX_AGE` (30 days by default). The next sign-in wakes it. The page shows each key's
+  effective end, the earlier of its expiry and that limit. Dev mode has no such limit.
+- **Revocation**: revoking is final. Disabling your account or a sign-in refused for a missing role revokes every
+  active key too; purging an account deletes them.
+
+| Scope | Reaches | Does not reach |
+|---|---|---|
+| `read` (default) | Your inbox with release notes, owned and shared watches with their config, rules with filters, deliveries without logs | Credentials, channel targets, scripts, audit, other users, admin, other keys |
+| `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
+| `manage` | Also channel names, creating and editing rules and watches | Credentials, channel targets, delete, shares |
+
+A `manage` key can silence alerts by disabling a rule or pausing a watch: give it only to clients that confirm
+writes with a person. Keys never open the REST API, which stays session-only.
+
+Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
+expiry, never the key or its hash.
 
 ## Collection
 
@@ -488,6 +518,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
   it), `PUT /api/v1/credentials/{id}/secret`. Secrets are write-only; responses carry `last4` (empty for
   secrets under 16 characters). Credentials are private to their owner.
+
+- `/api/v1/api-keys` (`GET`, `POST {name, scope, duration}`, 409 at 10 active keys or while acting as a user),
+  `DELETE /api/v1/api-keys/{id}` (204, again on a revoked key; 404 for another user's). Only the `POST` answer holds the key.
 
 - `/api/v1/channels` (`GET`, `POST`), `/api/v1/channels/{id}` (`GET`, `PATCH`, `DELETE`, 409 while a rule
   uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.

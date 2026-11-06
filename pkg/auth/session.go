@@ -220,16 +220,39 @@ const (
 	deniedDisabled    = "disabled"
 )
 
-// auditDenied records a refused sign-in, without creating or touching the user row.
+// auditDenied records a refused sign-in, without creating or changing the user row. A missing role also revokes the
+// user's API keys and deletes their sessions (007-AC12): a key never signs in to find out, and a live session could mint a new one.
 func (s *Service) auditDenied(ctx context.Context, sub, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		query := `SELECT id::text FROM users WHERE oidc_sub = $1`
+		if reason == deniedMissingRole {
+			// Waits for a key creation in flight, whose key the revocation below must see.
+			query += ` FOR NO KEY UPDATE`
+		}
 		var id string
-		err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE oidc_sub = $1`, sub).Scan(&id)
+		err := tx.QueryRow(ctx, query, sub).Scan(&id)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("look up denied user: %w", err)
 		}
+		after := map[string]any{"reason": reason}
+		if reason == deniedMissingRole && id != "" {
+			n, err := revokeActiveKeys(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				after["revoked_api_key_count"] = n
+			}
+			tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id)
+			if err != nil {
+				return fmt.Errorf("delete sessions: %w", err)
+			}
+			if n := tag.RowsAffected(); n > 0 {
+				after["deleted_session_count"] = n
+			}
+		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: id, Action: "user.login_denied", TargetType: "user",
-			TargetID: cmp.Or(id, sub), After: map[string]string{"reason": reason}})
+			TargetID: cmp.Or(id, sub), After: after})
 	})
 }
 

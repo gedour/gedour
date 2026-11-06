@@ -1,6 +1,7 @@
 import {
   FileCode2,
   Inbox,
+  KeyRound,
   ScrollText,
   Send,
   Settings,
@@ -66,6 +67,13 @@ export const NAV: NavItem[] = [
     emptyTitle: "No activity recorded",
     emptyBody:
       "Every change to watches, channels, rules and scripts is listed here with who made it.",
+  },
+  {
+    path: "/keys",
+    label: "API keys",
+    icon: KeyRound,
+    emptyTitle: "No API keys yet",
+    emptyBody: "An API key lets a program read your gedour data as you. Each one is shown once.",
   },
   {
     path: "/settings",

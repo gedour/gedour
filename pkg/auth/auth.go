@@ -90,6 +90,9 @@ type Service struct {
 
 	publicURLs []publicURL // the first one serves requests on an unlisted host
 
+	// keySigninMaxAge is how long a sign-in carries the user's API keys; nil in dev mode, which has no sign-in to renew.
+	keySigninMaxAge *time.Duration
+
 	rolesClaim   string
 	requiredRole string
 	adminRole    string
@@ -129,6 +132,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger) (*Service, erro
 			return nil, err
 		}
 		s.issuer = cfg.OIDCIssuer
+		s.keySigninMaxAge = &cfg.APIKeySigninMaxAge
 		s.stateKey = key
 		for _, raw := range cfg.PublicURLs() {
 			u, err := url.Parse(raw)
@@ -323,4 +327,5 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux) {
 		return out, nil
 	})
 	s.registerAdmin(api)
+	s.registerAPIKeys(api)
 }

@@ -90,8 +90,9 @@ func TestLoginDeniedKnownUser(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM users WHERE id = $1 AND email = 'alice@example.test' AND last_login_at::text = $2`, m.ID, before); n != 1 {
 		t.Fatal("denied login changed the user row")
 	}
-	if n := e.count(t, `SELECT count(*) FROM sessions`); n != 1 {
-		t.Fatalf("denied login must open no session, got %d", n)
+	// 007-AC12: the refusal opens no session and ends the one it had.
+	if n := e.count(t, `SELECT count(*) FROM sessions`); n != 0 {
+		t.Fatalf("denied login left %d sessions", n)
 	}
 	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login_denied' AND actor_user_id::text = $1 AND target_id = $1`, m.ID); n != 1 {
 		t.Fatalf("login_denied audit rows: %d", n)

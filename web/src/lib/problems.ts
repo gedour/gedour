@@ -2,10 +2,11 @@ import { ApiError } from "@/api/client";
 
 /**
  * Field errors of a 4xx problem keyed by form field: "body.config.repo" → "repo", "body.name" → "name".
- * Problems without a body location land under "" (shown at the top of the form).
+ * Problems without a body location, and failures with no field to blame (a network drop, a bare 500), land
+ * under "" (shown at the top of the form).
  */
 export function fieldErrors(err: unknown): Record<string, string> {
-  if (!(err instanceof ApiError)) return {};
+  if (!(err instanceof ApiError)) return { "": problemText(err) };
   const out: Record<string, string> = {};
   for (const e of err.errors) {
     const loc = e.location ?? "";
@@ -18,7 +19,7 @@ export function fieldErrors(err: unknown): Record<string, string> {
       ? msg.replace(/^expected required property \w+ to be present$/, "required")
       : msg;
   }
-  if (Object.keys(out).length === 0 && err.detail) out[""] = err.detail;
+  if (Object.keys(out).length === 0) out[""] = problemText(err);
   return out;
 }
 

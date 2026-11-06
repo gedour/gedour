@@ -517,6 +517,7 @@ function PurgeDialog({ user, onClose }: { user: AdminUser | null; onClose: () =>
                 plural(c.rules, "rule"),
                 plural(c.scripts, "script"),
                 plural(c.credential_count, "credential"),
+                plural(c.api_key_count, "API key"),
                 plural(c.shares_received, "share") + " received",
                 plural(c.inbox_items, "inbox item"),
               ].join(", ")}

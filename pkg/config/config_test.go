@@ -19,6 +19,7 @@ func valid() Config {
 		DevUser:            "dev@local",
 		SessionTTL:         time.Hour,
 		SessionIdleTimeout: time.Minute,
+		APIKeySigninMaxAge: time.Hour,
 		EncryptionKey:      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 		WorkerPoll:         2 * time.Second,
 		WorkerConcurrency:  8,
@@ -125,6 +126,8 @@ func TestValidateAuth(t *testing.T) {
 		{"dotted roles claim", func(c *Config) { withOIDC(c); c.OIDCRolesClaim = "realm_access.roles" }, ""},
 		{"zero ttl", func(c *Config) { c.SessionTTL = 0 }, "GEDOUR_SESSION_TTL"},
 		{"zero idle", func(c *Config) { c.SessionIdleTimeout = 0 }, "GEDOUR_SESSION_IDLE_TIMEOUT"},
+		{"zero key sign-in age", func(c *Config) { c.APIKeySigninMaxAge = 0 }, "GEDOUR_API_KEY_SIGNIN_MAX_AGE"},
+		{"negative key sign-in age", func(c *Config) { c.APIKeySigninMaxAge = -time.Hour }, "GEDOUR_API_KEY_SIGNIN_MAX_AGE"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -229,6 +232,9 @@ func TestLoad(t *testing.T) {
 	if c.SessionTTL != 168*time.Hour || c.SessionIdleTimeout != 24*time.Hour {
 		t.Fatalf("session defaults: %v %v", c.SessionTTL, c.SessionIdleTimeout)
 	}
+	if c.APIKeySigninMaxAge != 720*time.Hour {
+		t.Fatalf("key sign-in age default: %v", c.APIKeySigninMaxAge)
+	}
 	if c.OIDCRolesClaim != "roles" || c.OIDCRequiredRole != "" || c.OIDCAdminRole != "" {
 		t.Fatalf("role defaults: %+v", c)
 	}
@@ -240,6 +246,7 @@ func TestLoad(t *testing.T) {
 	t.Setenv("GEDOUR_DEV_USER", "d")
 	t.Setenv("GEDOUR_SESSION_TTL", "2h")
 	t.Setenv("GEDOUR_SESSION_IDLE_TIMEOUT", "30m")
+	t.Setenv("GEDOUR_API_KEY_SIGNIN_MAX_AGE", "48h")
 	t.Setenv("GEDOUR_OIDC_ROLES_CLAIM", " realm_access.roles ")
 	t.Setenv("GEDOUR_OIDC_REQUIRED_ROLE", "\tgedour-user ")
 	t.Setenv("GEDOUR_OIDC_ADMIN_ROLE", " gedour-admin\n")
@@ -269,7 +276,7 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("encryption env not read: %q %q", c.EncryptionKey, c.AllowHTTPHosts)
 	}
 	if c.OIDCIssuer != "https://i" || c.OIDCClientID != "id" || c.OIDCClientSecret != "sec" || c.PublicURL != "https://p" ||
-		c.DevUser != "d" || c.SessionTTL != 2*time.Hour || c.SessionIdleTimeout != 30*time.Minute {
+		c.DevUser != "d" || c.SessionTTL != 2*time.Hour || c.SessionIdleTimeout != 30*time.Minute || c.APIKeySigninMaxAge != 48*time.Hour {
 		t.Fatalf("auth env not read: %+v", c)
 	}
 	if c.OIDCRolesClaim != "realm_access.roles" || c.OIDCRequiredRole != "gedour-user" || c.OIDCAdminRole != "gedour-admin" {
@@ -282,7 +289,7 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	for _, key := range []string{"GEDOUR_SHUTDOWN_TIMEOUT", "GEDOUR_SESSION_TTL", "GEDOUR_SESSION_IDLE_TIMEOUT", "GEDOUR_WORKER_POLL", "GEDOUR_WORKER_CONCURRENCY"} {
+	for _, key := range []string{"GEDOUR_SHUTDOWN_TIMEOUT", "GEDOUR_SESSION_TTL", "GEDOUR_SESSION_IDLE_TIMEOUT", "GEDOUR_API_KEY_SIGNIN_MAX_AGE", "GEDOUR_WORKER_POLL", "GEDOUR_WORKER_CONCURRENCY"} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, "soon")
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {

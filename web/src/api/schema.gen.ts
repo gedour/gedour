@@ -157,6 +157,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/api-keys": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's API keys; a key is never returned */
+    get: operations["list-api-keys"];
+    put?: never;
+    /** Create an API key, returned this once; refused while acting as a user */
+    post: operations["create-api-key"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/api-keys/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revoke one of the caller's API keys */
+    delete: operations["revoke-api-key"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/audit": {
     parameters: {
       query?: never;
@@ -806,6 +841,62 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    APIKey: {
+      /** Format: date-time */
+      created_at: string;
+      /**
+       * Format: date-time
+       * @description The earlier of expires_at and the owner's last sign-in plus the max age; null only in dev mode without an end date
+       */
+      effective_until: string | null;
+      /**
+       * Format: date-time
+       * @description Null when created without an end date
+       */
+      expires_at: string | null;
+      /** Format: uuid */
+      id: string;
+      /** Format: date-time */
+      last_used_at: string | null;
+      name: string;
+      /** @description The first 8 random characters, after gdr_ */
+      prefix: string;
+      /** Format: date-time */
+      revoked_at: string | null;
+      /** @enum {string} */
+      scope: "read" | "write" | "manage";
+      /** @enum {string} */
+      status: "active" | "dormant" | "expired" | "revoked";
+    };
+    APIKeyCreated: {
+      /** Format: date-time */
+      created_at: string;
+      /**
+       * Format: date-time
+       * @description The earlier of expires_at and the owner's last sign-in plus the max age; null only in dev mode without an end date
+       */
+      effective_until: string | null;
+      /**
+       * Format: date-time
+       * @description Null when created without an end date
+       */
+      expires_at: string | null;
+      /** Format: uuid */
+      id: string;
+      /** @description Shown once, never returned again */
+      key: string;
+      /** Format: date-time */
+      last_used_at: string | null;
+      name: string;
+      /** @description The first 8 random characters, after gdr_ */
+      prefix: string;
+      /** Format: date-time */
+      revoked_at: string | null;
+      /** @enum {string} */
+      scope: "read" | "write" | "manage";
+      /** @enum {string} */
+      status: "active" | "dormant" | "expired" | "revoked";
+    };
     Actor: {
       /** Format: uuid */
       id: string;
@@ -999,6 +1090,21 @@ export interface components {
        * @description Unread items not archived
        */
       unread: number;
+    };
+    CreateAPIKeyInputBody: {
+      /**
+       * @description Days until the key expires, or never
+       * @default 90
+       * @enum {string}
+       */
+      duration: "7" | "30" | "90" | "365" | "never";
+      /** @description 1 to 64 characters after trimming */
+      name: string;
+      /**
+       * @default read
+       * @enum {string}
+       */
+      scope: "read" | "write" | "manage";
     };
     CreateChannelInputBody: {
       config: {
@@ -1332,6 +1438,10 @@ export interface components {
        */
       predicate_depth: number;
     };
+    ListAPIKeysOutputBody: {
+      /** @description Newest first */
+      items: components["schemas"]["APIKey"][] | null;
+    };
     ListChannelsOutputBody: {
       /** @description Sorted by name */
       items: components["schemas"]["Channel"][] | null;
@@ -1433,6 +1543,8 @@ export interface components {
        * @description Admin sessions acting as the account, sent back to their admin's own data
        */
       acting_sessions: number;
+      /** Format: int64 */
+      api_key_count: number;
       /** Format: int64 */
       channels: number;
       /** Format: int64 */
@@ -1982,6 +2094,98 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["TransferResult"];
         };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-api-keys": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListAPIKeysOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "create-api-key": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateAPIKeyInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          "Cache-Control"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["APIKeyCreated"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "revoke-api-key": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Error */
       default: {

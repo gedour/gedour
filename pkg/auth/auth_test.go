@@ -61,7 +61,7 @@ func setup(t *testing.T, dev bool, opts ...func(*config.Config)) *env {
 	var h http.Handler
 	e.app = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	t.Cleanup(e.app.Close)
-	cfg := config.Config{SessionTTL: 7 * 24 * time.Hour, SessionIdleTimeout: 24 * time.Hour}
+	cfg := config.Config{SessionTTL: 7 * 24 * time.Hour, SessionIdleTimeout: 24 * time.Hour, APIKeySigninMaxAge: 720 * time.Hour}
 	if dev {
 		cfg.DevUser = "dev@local"
 	} else {

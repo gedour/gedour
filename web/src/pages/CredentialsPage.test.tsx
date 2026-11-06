@@ -136,6 +136,24 @@ describe("CredentialsPage", () => {
     );
   });
 
+  // A failure with no field to blame (network drop, bare 500) must not leave the form silent.
+  it.each([
+    ["a network drop", () => Promise.reject(new TypeError("Failed to fetch")), "Failed to fetch"],
+    ["a bare 500", () => new Response("", { status: 500 }), /500/],
+  ])("says so on %s", async (_, answer, message) => {
+    mockApi({
+      "/api/v1/credentials": (__: URL, init?: RequestInit) =>
+        init?.method === "POST" ? answer() : Response.json({ items: [] }),
+    });
+    renderApp("/settings/credentials");
+    await userEvent.click(await screen.findByRole("button", { name: "Add credential" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText("Name"), "x");
+    await userEvent.type(within(dialog).getByLabelText("Token"), SECRET);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save credential" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(message);
+  });
+
   it("rotates a secret", async () => {
     const fn = mockApi({
       "/api/v1/credentials": { items: [credential()] },

@@ -1,9 +1,12 @@
 import type {
   AdminUser,
   AdminWatch,
+  ApiKey,
+  ApiKeyCreated,
   AuditActor,
   Channel,
   ChannelType,
+  CreateApiKeyBody,
   CreateChannelBody,
   CreatedChannel,
   CreateRuleBody,
@@ -267,6 +270,14 @@ export const updateShare = (watchId: string, userId: string, permission: SharePe
   });
 export const deleteShare = (watchId: string, userId: string) =>
   sendJSON<undefined>("DELETE", `${watchPath(watchId)}/shares/${encodeURIComponent(userId)}`);
+
+export async function listApiKeys(): Promise<ApiKey[]> {
+  return (await getJSON<{ items: ApiKey[] }>("/api/v1/api-keys")).items;
+}
+export const createApiKey = (body: CreateApiKeyBody) =>
+  sendJSON<ApiKeyCreated>("POST", "/api/v1/api-keys", body);
+export const revokeApiKey = (id: string) =>
+  sendJSON<undefined>("DELETE", `/api/v1/api-keys/${encodeURIComponent(id)}`);
 
 const credentialPath = (id: string) => `/api/v1/credentials/${encodeURIComponent(id)}`;
 

@@ -202,29 +202,6 @@
         ],
         "type": "object"
       },
-      "AddShareInputBody": {
-        "additionalProperties": false,
-        "properties": {
-          "email": {
-            "description": "Exact email of a user who has signed in at least once",
-            "maxLength": 320,
-            "minLength": 3,
-            "type": "string"
-          },
-          "permission": {
-            "enum": [
-              "ro",
-              "rw"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "permission"
-        ],
-        "type": "object"
-      },
       "Admin": {
         "additionalProperties": false,
         "properties": {
@@ -321,11 +298,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "shared_watches": {
-            "description": "Owned watches shared with at least one other user, included in watches",
-            "format": "int64",
-            "type": "integer"
-          },
           "watches": {
             "format": "int64",
             "type": "integer"
@@ -333,7 +305,6 @@
         },
         "required": [
           "watches",
-          "shared_watches",
           "channels",
           "rules",
           "scripts",
@@ -360,19 +331,13 @@
           },
           "name": {
             "type": "string"
-          },
-          "shares": {
-            "description": "Users the watch is shared with",
-            "format": "int64",
-            "type": "integer"
           }
         },
         "required": [
           "id",
           "name",
           "kind",
-          "credential_name",
-          "shares"
+          "credential_name"
         ],
         "type": "object"
       },
@@ -813,7 +778,7 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "A watch the caller can read; empty for all of them",
+            "description": "One of the caller's watches; empty for all of them",
             "type": "string"
           }
         },
@@ -1157,7 +1122,7 @@
         "additionalProperties": false,
         "properties": {
           "event_id": {
-            "description": "An event the caller can read; or give sample",
+            "description": "An event of one of the caller's watches; or give sample",
             "format": "int64",
             "minimum": 1,
             "type": "integer"
@@ -1172,7 +1137,7 @@
         "additionalProperties": false,
         "properties": {
           "event_id": {
-            "description": "An event the caller can read; or give sample",
+            "description": "An event of one of the caller's watches; or give sample",
             "format": "int64",
             "minimum": 1,
             "type": "integer"
@@ -1726,25 +1691,6 @@
         ],
         "type": "object"
       },
-      "ListSharesOutputBody": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "description": "Sorted by email",
-            "items": {
-              "$ref": "#/components/schemas/Share"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "type": "object"
-      },
       "ListStatesOutputBody": {
         "additionalProperties": false,
         "properties": {
@@ -1891,7 +1837,7 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Scope like a rule's; empty for every readable watch",
+            "description": "Scope like a rule's; empty for all the caller's watches",
             "type": "string"
           }
         },
@@ -1984,11 +1930,6 @@
             "format": "int64",
             "type": "integer"
           },
-          "shares_received": {
-            "description": "Watches of other users shared with the account",
-            "format": "int64",
-            "type": "integer"
-          },
           "watches": {
             "format": "int64",
             "type": "integer"
@@ -2001,7 +1942,6 @@
           "other_users_rules",
           "scripts",
           "credential_count",
-          "shares_received",
           "inbox_items",
           "sessions",
           "acting_sessions",
@@ -2024,21 +1964,10 @@
               "array",
               "null"
             ]
-          },
-          "shared_watches": {
-            "description": "Sorted by name",
-            "items": {
-              "$ref": "#/components/schemas/SharedWatch"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
           }
         },
         "required": [
           "counts",
-          "shared_watches",
           "other_rules"
         ],
         "type": "object"
@@ -2152,7 +2081,7 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Null: every watch the owner can read, owned or shared",
+            "description": "Null: every watch of the owner",
             "format": "uuid",
             "type": [
               "string",
@@ -2160,7 +2089,7 @@
             ]
           },
           "watch_name": {
-            "description": "Null with a watch_id: the owner can no longer read that watch",
+            "description": "Null with a watch_id: the owner no longer owns that watch",
             "type": [
               "string",
               "null"
@@ -2202,7 +2131,7 @@
         "additionalProperties": false,
         "properties": {
           "scheduled": {
-            "description": "Watches made due now: owned or shared read-write, paused ones left out",
+            "description": "Watches made due now: the caller's, paused ones left out",
             "format": "int64",
             "type": "integer"
           }
@@ -2369,68 +2298,6 @@
         ],
         "type": "object"
       },
-      "Share": {
-        "additionalProperties": false,
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
-          "permission": {
-            "enum": [
-              "ro",
-              "rw"
-            ],
-            "type": "string"
-          },
-          "user_id": {
-            "format": "uuid",
-            "type": "string"
-          }
-        },
-        "required": [
-          "user_id",
-          "email",
-          "display_name",
-          "permission",
-          "created_at"
-        ],
-        "type": "object"
-      },
-      "SharedWatch": {
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "shared_with": {
-            "description": "Names (or emails) of the users it is shared with",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "shared_with"
-        ],
-        "type": "object"
-      },
       "StateSnapshot": {
         "additionalProperties": false,
         "properties": {
@@ -2512,10 +2379,6 @@
               "null"
             ]
           },
-          "dropped_share": {
-            "description": "The new owner's share on the watch was removed",
-            "type": "boolean"
-          },
           "owner_id": {
             "format": "uuid",
             "type": "string"
@@ -2525,8 +2388,7 @@
           "owner_id",
           "credential_id",
           "credential_moved",
-          "credential_name",
-          "dropped_share"
+          "credential_name"
         ],
         "type": "object"
       },
@@ -2585,7 +2447,7 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Empty string: all readable watches",
+            "description": "Empty string: all the caller's watches",
             "type": "string"
           }
         },
@@ -2606,22 +2468,6 @@
         },
         "type": "object"
       },
-      "UpdateShareInputBody": {
-        "additionalProperties": false,
-        "properties": {
-          "permission": {
-            "enum": [
-              "ro",
-              "rw"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "permission"
-        ],
-        "type": "object"
-      },
       "UpdateWatchInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -2631,7 +2477,7 @@
             "type": "object"
           },
           "credential_id": {
-            "description": "Owner only; empty string detaches",
+            "description": "Empty string detaches",
             "type": "string"
           },
           "name": {
@@ -2722,24 +2568,8 @@
             "format": "date-time",
             "type": "string"
           },
-          "owner_id": {
-            "format": "uuid",
-            "type": "string"
-          },
-          "owner_name": {
-            "type": "string"
-          },
           "paused": {
             "type": "boolean"
-          },
-          "permission": {
-            "description": "The caller's access to this watch",
-            "enum": [
-              "owner",
-              "rw",
-              "ro"
-            ],
-            "type": "string"
           },
           "running": {
             "description": "A worker holds the watch right now",
@@ -2762,9 +2592,6 @@
           "credential_id",
           "schedule",
           "paused",
-          "owner_id",
-          "owner_name",
-          "permission",
           "created_at",
           "updated_at",
           "next_run_at",
@@ -3044,7 +2871,7 @@
             "description": "Error"
           }
         },
-        "summary": "What purging an account deletes, other users' shared watches and rules included (admin only)",
+        "summary": "What purging an account deletes, other users' rules on its watches included (admin only)",
         "tags": [
           "admin"
         ]
@@ -4923,22 +4750,6 @@
             }
           },
           {
-            "description": "Owned by the caller, shared with them, or both",
-            "explode": false,
-            "in": "query",
-            "name": "shared",
-            "schema": {
-              "default": "all",
-              "description": "Owned by the caller, shared with them, or both",
-              "enum": [
-                "mine",
-                "with_me",
-                "all"
-              ],
-              "type": "string"
-            }
-          },
-          {
             "explode": false,
             "in": "query",
             "name": "limit",
@@ -4973,7 +4784,7 @@
             "description": "Error"
           }
         },
-        "summary": "Watches the caller owns or that are shared with them",
+        "summary": "Watches the caller owns",
         "tags": [
           "watches"
         ]
@@ -5078,7 +4889,7 @@
             "description": "Error"
           }
         },
-        "summary": "Delete a watch (owner only)",
+        "summary": "Delete a watch",
         "tags": [
           "watches"
         ]
@@ -5361,201 +5172,6 @@
         "summary": "Schedule a run now",
         "tags": [
           "watches"
-        ]
-      }
-    },
-    "/api/v1/watches/{id}/shares": {
-      "get": {
-        "operationId": "list-watch-shares",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListSharesOutputBody"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Users a watch is shared with; a sharee sees only their own share",
-        "tags": [
-          "shares"
-        ]
-      },
-      "post": {
-        "operationId": "add-watch-share",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddShareInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Share"
-                }
-              }
-            },
-            "description": "Created"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Share a watch with a user, by exact email (owner only)",
-        "tags": [
-          "shares"
-        ]
-      }
-    },
-    "/api/v1/watches/{id}/shares/{user_id}": {
-      "delete": {
-        "operationId": "delete-watch-share",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "No Content"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Stop sharing a watch with a user (owner only)",
-        "tags": [
-          "shares"
-        ]
-      },
-      "put": {
-        "operationId": "update-watch-share",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateShareInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Share"
-                }
-              }
-            },
-            "description": "OK"
-          },
-          "default": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorModel"
-                }
-              }
-            },
-            "description": "Error"
-          }
-        },
-        "summary": "Change a share's permission (owner only)",
-        "tags": [
-          "shares"
         ]
       }
     },

@@ -22,7 +22,7 @@ describe("fieldErrors", () => {
   });
 
   it("falls back to the detail, then the message, so no failure stays silent", () => {
-    expect(fieldErrors(new ApiError(409, "x", "already shared"))).toEqual({ "": "already shared" });
+    expect(fieldErrors(new ApiError(409, "x", "already exists"))).toEqual({ "": "already exists" });
     expect(fieldErrors(new ApiError(500, "x"))).toEqual({ "": "x" });
     expect(fieldErrors(new Error("boom"))).toEqual({ "": "boom" });
   });

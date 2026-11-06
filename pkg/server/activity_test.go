@@ -44,18 +44,16 @@ func (a *devApp) countRows(t *testing.T, sql string, args ...any) int {
 	return n
 }
 
-// Events, states and run-now follow the watch's access rules (001-AC5): read for the lists, write to run.
+// Events, states and run-now follow the watch's access rule (001-AC5): its owner only.
 func TestWatchActivity(t *testing.T) {
 	a := newDevApp(t)
-	alice, bob, carol, dave := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "carol"), a.signIn(t, "dave")
+	alice, carol := a.signIn(t, "alice"), a.signIn(t, "carol")
 	var w activityWatch
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	if w.LastStatus != nil || w.LastRunAt != nil || w.NextRunAt.IsZero() {
 		t.Fatalf("a new watch is pending its first run: %+v", w)
 	}
 	base := "/api/v1/watches/" + w.ID
-	a.mustCall(t, alice, http.MethodPost, base+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
-	a.mustCall(t, alice, http.MethodPost, base+"/shares", map[string]any{"email": dave.email, "permission": "rw"}, http.StatusCreated, nil)
 
 	a.exec(t, `INSERT INTO watch_states (watch_id, state, state_hash) VALUES ($1, '{"releases":[]}', 'h1'), ($1, '{"releases":[{"tag":"v1"}]}', 'h2')`, w.ID)
 	for i, tag := range []string{"v1", "v2", "v3"} {
@@ -64,13 +62,13 @@ func TestWatchActivity(t *testing.T) {
 	}
 	a.exec(t, `UPDATE watches SET last_run_at = now(), last_status = 'error', last_error = 'HTTP 502', consecutive_failures = 2 WHERE id = $1`, w.ID)
 
-	a.mustCall(t, bob, http.MethodGet, base, nil, http.StatusOK, &w)
+	a.mustCall(t, alice, http.MethodGet, base, nil, http.StatusOK, &w)
 	if *w.LastStatus != "error" || *w.LastError != "HTTP 502" || w.ConsecutiveFailures != 2 || w.LastRunAt == nil {
 		t.Fatalf("status fields: %+v", w)
 	}
 
 	var page eventsPage
-	a.mustCall(t, bob, http.MethodGet, base+"/events?limit=2", nil, http.StatusOK, &page)
+	a.mustCall(t, alice, http.MethodGet, base+"/events?limit=2", nil, http.StatusOK, &page)
 	if len(page.Items) != 2 || page.Items[0].Payload["tag"] != "v3" || page.Items[1].Payload["tag"] != "v2" || page.NextCursor == "" ||
 		page.Items[0].OccurredAt == nil {
 		t.Fatalf("page 1: %+v", page)
@@ -91,7 +89,7 @@ func TestWatchActivity(t *testing.T) {
 			State json.RawMessage `json:"state"`
 		} `json:"items"`
 	}
-	a.mustCall(t, bob, http.MethodGet, base+"/states?limit=5", nil, http.StatusOK, &states)
+	a.mustCall(t, alice, http.MethodGet, base+"/states?limit=5", nil, http.StatusOK, &states)
 	if len(states.Items) != 2 || string(states.Items[0].State) != `{"releases":[{"tag":"v1"}]}` {
 		t.Fatalf("states: %+v", states)
 	}
@@ -100,14 +98,13 @@ func TestWatchActivity(t *testing.T) {
 		a.mustCall(t, carol, http.MethodGet, base+path, nil, http.StatusNotFound, nil)
 	}
 
-	// Run now: rw and owner, audited; ro gets 403, a stranger 404, a paused watch 409.
+	// Run now: the owner, audited; a stranger gets 404, a paused watch 409.
 	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
-	a.mustCall(t, dave, http.MethodPost, base+"/run", nil, http.StatusAccepted, &w)
+	a.mustCall(t, alice, http.MethodPost, base+"/run", nil, http.StatusAccepted, &w)
 	if time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("run now left next_run_at at %v", w.NextRunAt)
 	}
 	a.mustCall(t, alice, http.MethodPost, base+"/run", nil, http.StatusAccepted, nil)
-	a.mustCall(t, bob, http.MethodPost, base+"/run", nil, http.StatusForbidden, nil)
 	a.mustCall(t, carol, http.MethodPost, base+"/run", nil, http.StatusNotFound, nil)
 	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE target_id = $1 AND action = 'watch.run_requested'`, w.ID); n != 2 {
 		t.Fatalf("run audit rows %d", n)
@@ -117,7 +114,7 @@ func TestWatchActivity(t *testing.T) {
 
 	// Resuming runs at once.
 	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
-	a.mustCall(t, dave, http.MethodPost, base+"/resume", nil, http.StatusOK, &w)
+	a.mustCall(t, alice, http.MethodPost, base+"/resume", nil, http.StatusOK, &w)
 	if time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("resume left next_run_at at %v", w.NextRunAt)
 	}
@@ -138,12 +135,12 @@ func TestWatchActivity(t *testing.T) {
 		t.Fatal("idle watch reported running")
 	}
 	a.exec(t, `UPDATE watches SET claim_token = gen_random_uuid(), leased_until = now() + interval '5 minutes' WHERE id = $1`, w.ID)
-	a.mustCall(t, bob, http.MethodGet, base, nil, http.StatusOK, &w)
+	a.mustCall(t, alice, http.MethodGet, base, nil, http.StatusOK, &w)
 	if !w.Running {
 		t.Fatal("leased watch not reported running")
 	}
 	a.exec(t, `UPDATE watches SET leased_until = now() - interval '1 second' WHERE id = $1`, w.ID)
-	a.mustCall(t, bob, http.MethodGet, base, nil, http.StatusOK, &w)
+	a.mustCall(t, alice, http.MethodGet, base, nil, http.StatusOK, &w)
 	if w.Running {
 		t.Fatal("expired lease reported running")
 	}
@@ -213,16 +210,15 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	}
 }
 
-// Run all: every watch the caller owns or shares read-write, paused ones left out, one audit row each.
+// Run all: every watch the caller owns, paused ones left out, one audit row each.
 func TestRunAllWatches(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob, dave := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "dave")
-	var w1, w2, w3 activityWatch
+	var w1, w2, w3, w4 activityWatch
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w1)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &w2)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[2], http.StatusCreated, &w3)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w1.ID+"/shares", map[string]any{"email": dave.email, "permission": "rw"}, http.StatusCreated, nil)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w2.ID+"/shares", map[string]any{"email": dave.email, "permission": "ro"}, http.StatusCreated, nil)
+	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches", sampleWatches[3], http.StatusCreated, &w4)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w3.ID+"/pause", nil, http.StatusOK, nil)
 	later := func() { a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days'`) }
 	due := func() int {
@@ -234,8 +230,8 @@ func TestRunAllWatches(t *testing.T) {
 
 	later()
 	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches/run", nil, http.StatusAccepted, &got)
-	if got.Scheduled != 1 || due() != 1 || a.countRows(t, `SELECT count(*) FROM watches WHERE id = $1 AND next_run_at < now() + interval '1 minute'`, w1.ID) != 1 {
-		t.Fatalf("rw sharee: scheduled %d, due %d", got.Scheduled, due())
+	if got.Scheduled != 1 || due() != 1 || a.countRows(t, `SELECT count(*) FROM watches WHERE id = $1 AND next_run_at < now() + interval '1 minute'`, w4.ID) != 1 {
+		t.Fatalf("dave: scheduled %d, due %d", got.Scheduled, due())
 	}
 	later()
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches/run", nil, http.StatusAccepted, &got)

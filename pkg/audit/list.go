@@ -42,17 +42,12 @@ type Query struct {
 	Limit      int
 }
 
-// visible is the one visibility rule (001-AC22): entries the viewer made or someone made acting as them (006-AC16), or on a watch they can read
-// now, or on a credential, channel, rule or delivery (via its channel) they own. Share entries (target "<watch>:<user>") go to the watch owner, and
-// to a sharee only for their own current share. Losing access to a watch hides its history.
+// visible is the one visibility rule (001-AC22): entries the viewer made or someone made acting as them (006-AC16), or on a watch,
+// credential, channel, rule or delivery (via its channel) they own now. watch_share entries (target "<watch>:<user>", history from
+// before 009) go to the watch owner (009-AC2). Losing a watch hides its history.
 const visible = `(a.actor_user_id = @viewer OR a.on_behalf_of = @viewer
-	OR (a.target_type = 'watch' AND a.target_id IN (
-		SELECT id::text FROM watches WHERE owner_id = @viewer
-		UNION ALL SELECT watch_id::text FROM watch_shares WHERE user_id = @viewer))
-	OR (a.target_type = 'watch_share' AND (
-		split_part(a.target_id, ':', 1) IN (SELECT id::text FROM watches WHERE owner_id = @viewer)
-		OR EXISTS (SELECT 1 FROM watch_shares s WHERE s.user_id = @viewer
-			AND a.target_id = s.watch_id::text || ':' || s.user_id::text)))
+	OR (a.target_type = 'watch' AND a.target_id IN (SELECT id::text FROM watches WHERE owner_id = @viewer))
+	OR (a.target_type = 'watch_share' AND split_part(a.target_id, ':', 1) IN (SELECT id::text FROM watches WHERE owner_id = @viewer))
 	OR (a.target_type = 'credential' AND a.target_id IN (SELECT id::text FROM credentials WHERE owner_id = @viewer))
 	OR (a.target_type = 'channel' AND a.target_id IN (SELECT id::text FROM channels WHERE owner_id = @viewer))
 	OR (a.target_type = 'rule' AND a.target_id IN (SELECT id::text FROM rules WHERE owner_id = @viewer))

@@ -64,7 +64,7 @@ type bulkOutput struct {
 	}
 }
 
-// Inbox items show only while their watch is readable: a revoked share hides what it brought.
+// Inbox items show only while the user owns their watch: a transfer hides what it brought.
 var unreadCount = `SELECT count(*) FROM inbox_items i JOIN events e ON e.id = i.event_id JOIN watches w ON w.id = e.watch_id
 	WHERE i.user_id = $1 AND i.read_at IS NULL AND i.archived_at IS NULL AND ` + watch.ReadableSQL("w", "$1::uuid")
 

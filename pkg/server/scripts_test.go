@@ -153,7 +153,7 @@ func TestScripts(t *testing.T) {
 	}
 }
 
-// 001-AC18: a dry run runs in the sandbox on a sample or a readable event, shows logs, result and the
+// 001-AC18: a dry run runs in the sandbox on a sample or an event of the caller's watches, shows logs, result and the
 // recorded fetches, and sends nothing: the receiver sees no request. Dry runs are rate limited and
 // leave no audit row.
 func TestScriptDryRun(t *testing.T) {
@@ -177,7 +177,7 @@ func TestScriptDryRun(t *testing.T) {
 		t.Fatalf("a dry run reached the receiver %d times", hits.Load())
 	}
 
-	// A saved script, on a real event the caller can read; someone else's event is refused.
+	// A saved script, on a real event of the caller's watch; someone else's event is refused.
 	var s scriptJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/scripts", map[string]any{"name": "Hook", "source": src}, http.StatusCreated, &s)
 	var wid string
@@ -194,7 +194,7 @@ func TestScriptDryRun(t *testing.T) {
 	}
 	p := a.problemOf(t, bob, http.MethodPost, "/api/v1/scripts/dry-run", map[string]any{"source": src, "event_id": eid}, http.StatusBadRequest)
 	if !slices.Contains(p.locations(), "body.event_id") {
-		t.Fatalf("unreadable event: %+v", p)
+		t.Fatalf("another user's event: %+v", p)
 	}
 	p = a.problemOf(t, bob, http.MethodPost, "/api/v1/scripts/dry-run", map[string]any{"source": "function main( {", "sample": map[string]any{"type": "x"}}, http.StatusBadRequest)
 	if !slices.Contains(p.locations(), "body.source") {

@@ -238,14 +238,6 @@ function UserRow({
   // The admin's own row has no Disable: the API refuses it too.
   const action =
     u.status === "disabled" ? "Enable" : u.status === "active" && !self ? "Disable" : "";
-  const watches = (
-    <>
-      {c.watches}
-      {c.shared_watches > 0 && (
-        <span className="text-xs text-muted"> ({c.shared_watches} shared)</span>
-      )}
-    </>
-  );
   return (
     <Fragment>
       <tr className="border-b border-line last:border-0">
@@ -285,10 +277,10 @@ function UserRow({
               onClick={() => setOpen(!open)}
               className="rounded underline decoration-line underline-offset-4 hover:decoration-ink"
             >
-              {watches}
+              {c.watches}
             </button>
           ) : (
-            watches
+            c.watches
           )}
         </td>
         {[c.channels, c.rules, c.scripts, c.credentials].map((n, i) => (
@@ -366,11 +358,7 @@ function UserWatches({
         <li key={w.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           <span className="font-medium">{w.name}</span>
           <span className="text-xs text-muted">
-            {[
-              w.kind,
-              w.credential_name && `credential ${w.credential_name}`,
-              w.shares > 0 && `shared with ${plural(w.shares, "user")}`,
-            ]
+            {[w.kind, w.credential_name && `credential ${w.credential_name}`]
               .filter(Boolean)
               .join(" · ")}
           </span>
@@ -428,8 +416,7 @@ function ConfirmDialog({ user, onClose }: { user: AdminUser | null; onClose: () 
       {disable ? (
         <p className="text-sm text-muted">
           Signs the account out everywhere and refuses its sign-in. Its rules route nothing and
-          queued deliveries are not sent. Its data stays, and watches it shares keep collecting for
-          the others.
+          queued deliveries are not sent. Its data stays.
         </p>
       ) : (
         <p className="text-sm text-muted">
@@ -493,7 +480,6 @@ function PurgeDialog({ user, onClose }: { user: AdminUser | null; onClose: () =>
   });
   const p = preview.data;
   const c = p?.counts;
-  const shared = p?.shared_watches ?? [];
   const others = p?.other_rules ?? [];
   return (
     <Dialog open={user !== null} title={`Purge ${name}?`} onClose={close}>
@@ -518,20 +504,14 @@ function PurgeDialog({ user, onClose }: { user: AdminUser | null; onClose: () =>
                 plural(c.scripts, "script"),
                 plural(c.credential_count, "credential"),
                 plural(c.api_key_count, "API key"),
-                plural(c.shares_received, "share") + " received",
                 plural(c.inbox_items, "inbox item"),
               ].join(", ")}
               .
             </p>
-            {(shared.length > 0 || others.length > 0) && (
+            {others.length > 0 && (
               <div className="flex flex-col gap-2 text-sm">
                 <p className="font-medium">Other users lose these:</p>
-                <ul aria-label="Shared watches deleted" className="list-disc pl-5">
-                  {shared.map((w) => (
-                    <li key={w.id}>
-                      Watch {w.name}, shared with {(w.shared_with as string[]).join(", ")}
-                    </li>
-                  ))}
+                <ul aria-label="Rules of other users deleted" className="list-disc pl-5">
                   {others.map((r) => (
                     <li key={r.id}>
                       Rule {r.name} of {r.owner}
@@ -626,16 +606,11 @@ function TransferDialog({
           ))}
         </select>
       </div>
-      {w && target && (
-        <ul className="list-disc pl-5 text-sm text-muted">
-          {w.credential_name && (
-            <li>
-              Its credential {w.credential_name} moves with it, unless another watch of{" "}
-              {accountName(target.owner)} uses it.
-            </li>
-          )}
-          <li>A share the new owner held on it is dropped; other users keep theirs.</li>
-        </ul>
+      {w?.credential_name && target && (
+        <p className="text-sm text-muted">
+          Its credential {w.credential_name} moves with it, unless another watch of{" "}
+          {accountName(target.owner)} uses it.
+        </p>
       )}
       {error && (
         <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">

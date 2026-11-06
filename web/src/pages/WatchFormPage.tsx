@@ -56,13 +56,6 @@ export function WatchFormPage() {
       </Page>
     );
   }
-  if (query.data.permission === "ro") {
-    return (
-      <Page title="Edit watch" back={`/watches/${id}`}>
-        <p className="text-muted">This watch is shared with you read-only.</p>
-      </Page>
-    );
-  }
   return <WatchForm initial={query.data} />;
 }
 
@@ -95,9 +88,6 @@ const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surfa
 
 export function WatchForm({ initial }: { initial?: Watch }) {
   const editing = Boolean(initial);
-  const owner = !initial || initial.permission === "owner";
-  // The server refuses a sharee's retarget of a watch carrying the owner's credential.
-  const configLocked = !owner && Boolean(initial?.credential_id);
   const [kind, setKind] = useState<WatchKind>(initial?.kind ?? "github_repo");
   const [values, setValues] = useState<FormValues>(initial ? fromConfig(initial.config) : {});
   const [name, setName] = useState(initial?.name ?? "");
@@ -116,7 +106,6 @@ export function WatchForm({ initial }: { initial?: Watch }) {
   const credentials = useQuery({
     queryKey: ["credentials", credentialKind],
     queryFn: () => listCredentials(credentialKind),
-    enabled: owner,
   });
 
   const changeKind = (k: WatchKind) => {
@@ -145,9 +134,9 @@ export function WatchForm({ initial }: { initial?: Watch }) {
       if (initial) {
         return updateWatch(initial.id, {
           name,
-          ...(configLocked ? {} : { config }),
+          config,
           schedule,
-          ...(owner ? { credential_id: credentialId } : {}),
+          credential_id: credentialId,
         });
       }
       return createWatch({
@@ -184,7 +173,7 @@ export function WatchForm({ initial }: { initial?: Watch }) {
     "name",
     "schedule",
     "kind",
-    ...(owner ? ["credential_id"] : []),
+    "credential_id",
     ...FIELDS[kind].filter((f) => f.type !== "checkbox").map((f) => f.key),
   ];
   const topErrors = unplaced(errors, shown);
@@ -302,13 +291,6 @@ export function WatchForm({ initial }: { initial?: Watch }) {
               />
             )}
           </Field>
-          {configLocked && (
-            <p id="config-locked" className="rounded-lg bg-beacon-soft px-3 py-2 text-sm">
-              The config is read-only: this watch uses a credential of{" "}
-              {initial?.owner_name || "its owner"}, so only they can change it. Name and schedule
-              stay editable.
-            </p>
-          )}
           {FIELDS[kind].map((f, i, all) => {
             // Boxes sharing a hint show it once, under the last of them, and all point to it.
             const last = all.findLastIndex((g) => g.hint === f.hint);
@@ -318,7 +300,6 @@ export function WatchForm({ initial }: { initial?: Watch }) {
                 <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
-                    disabled={configLocked}
                     checked={values[f.key] === true}
                     onChange={(e) => setValue(f.key, e.target.checked)}
                     aria-describedby={describedBy}
@@ -344,8 +325,6 @@ export function WatchForm({ initial }: { initial?: Watch }) {
                     {...p}
                     type={f.type === "number" ? "number" : "text"}
                     min={f.type === "number" ? 1 : undefined}
-                    readOnly={configLocked}
-                    aria-describedby={configLocked ? "config-locked" : p["aria-describedby"]}
                     spellCheck={false}
                     value={typeof values[f.key] === "string" ? (values[f.key] as string) : ""}
                     placeholder={f.placeholder}
@@ -395,46 +374,44 @@ export function WatchForm({ initial }: { initial?: Watch }) {
               </div>
             )}
           </Field>
-          {owner && (
-            <Field
-              label="Credential (optional)"
-              error={errors.credential_id}
-              hint={
-                <>
-                  {credentialId && (
-                    <span className="block font-medium text-ink">
-                      {credentialKind === "registry_basic" ? "Login" : "Token"} is sent to{" "}
-                      <span className="font-mono">{credentialHost(kind, values)}</span>
-                    </span>
-                  )}
-                  Public targets need none.{" "}
-                  <Link
-                    to="/settings/credentials"
-                    className="font-medium text-ink underline underline-offset-2"
-                  >
-                    Add a credential
-                  </Link>
-                </>
-              }
-            >
-              {(p) => (
-                <select
-                  {...p}
-                  value={credentialId}
-                  onChange={(e) => setCredentialId(e.target.value)}
-                  className={cn(inputClass, "sm:max-w-80")}
+          <Field
+            label="Credential (optional)"
+            error={errors.credential_id}
+            hint={
+              <>
+                {credentialId && (
+                  <span className="block font-medium text-ink">
+                    {credentialKind === "registry_basic" ? "Login" : "Token"} is sent to{" "}
+                    <span className="font-mono">{credentialHost(kind, values)}</span>
+                  </span>
+                )}
+                Public targets need none.{" "}
+                <Link
+                  to="/settings/credentials"
+                  className="font-medium text-ink underline underline-offset-2"
                 >
-                  <option value="">None</option>
-                  {credentials.data?.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                      {c.last4 ? ` (••••${c.last4})` : ""}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </Field>
-          )}
+                  Add a credential
+                </Link>
+              </>
+            }
+          >
+            {(p) => (
+              <select
+                {...p}
+                value={credentialId}
+                onChange={(e) => setCredentialId(e.target.value)}
+                className={cn(inputClass, "sm:max-w-80")}
+              >
+                <option value="">None</option>
+                {credentials.data?.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.last4 ? ` (••••${c.last4})` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
         </section>
 
         <div className="flex flex-wrap gap-2">

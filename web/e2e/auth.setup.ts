@@ -11,7 +11,7 @@ test("sign in as alice", async ({ page }) => {
   await page.context().storageState({ path: AUTH_FILE });
 });
 
-// Bob signs in too: sharing needs a second account that exists before alice shares with it.
+// Bob signs in too: the seed, a11y, keyboard and API key specs run as him, and he must not reach alice's watches.
 test("sign in as bob", async ({ page }) => {
   await page.goto("/inbox");
   await signInFromGate(page, BOB);

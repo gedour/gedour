@@ -1,37 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, KeyRound, Pencil, Trash2, UserPlus } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { ArrowLeft, KeyRound, Pencil, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
-import {
-  addShare,
-  ApiError,
-  deleteShare,
-  deleteWatch,
-  getWatch,
-  listCredentials,
-  listShares,
-  setWatchPaused,
-  updateShare,
-} from "@/api/client";
+import { ApiError, deleteWatch, getWatch, listCredentials, setWatchPaused } from "@/api/client";
 import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
-import { Field, inputClass } from "@/components/ui/field";
 import { ActivityTabs, StatusCard } from "@/components/WatchActivity";
-import { DeleteWatchWarning, KindIcon, PausedBadge, SharedBadge } from "@/components/WatchBits";
+import { DeleteWatchWarning, KindIcon, PausedBadge } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
-import { fieldErrors, problemText } from "@/lib/problems";
-import {
-  describeSchedule,
-  FIELDS,
-  kindInfo,
-  PERMISSION_LABEL,
-  targetSummary,
-} from "@/lib/watchKinds";
+import { problemText } from "@/lib/problems";
+import { describeSchedule, FIELDS, kindInfo, targetSummary } from "@/lib/watchKinds";
 import { cn } from "@/lib/utils";
 import { NotFound } from "@/pages/NotFound";
-import type { SharePermission, Watch } from "@/types/api";
+import type { Watch } from "@/types/api";
 
 const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 sm:p-6";
 
@@ -39,7 +22,7 @@ export function WatchDetailPage() {
   const { id = "" } = useParams();
   const query = useQuery({ queryKey: ["watch", id], queryFn: () => getWatch(id) });
   if (query.isError && query.error instanceof ApiError && query.error.status === 404) {
-    // Not shared and not found read the same, so the existence of others' watches never leaks.
+    // Another user's watch and a missing one read the same, so others' watches never leak.
     return <NotFound />;
   }
   return (
@@ -71,8 +54,6 @@ export function WatchDetailPage() {
 }
 
 function WatchDetail({ watch }: { watch: Watch }) {
-  const canWrite = watch.permission !== "ro";
-  const owner = watch.permission === "owner";
   const client = useQueryClient();
   const toast = useToast();
   const pause = useMutation({
@@ -99,42 +80,39 @@ function WatchDetail({ watch }: { watch: Watch }) {
             <span aria-hidden>·</span>
             <span className="font-mono">{targetSummary(watch)}</span>
             {watch.paused && <PausedBadge />}
-            <SharedBadge watch={watch} />
           </p>
         </div>
-        {canWrite && (
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 text-sm">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={watch.paused}
-                aria-label="Paused"
-                disabled={pause.isPending}
-                onClick={() => pause.mutate(!watch.paused)}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 text-sm">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={watch.paused}
+              aria-label="Paused"
+              disabled={pause.isPending}
+              onClick={() => pause.mutate(!watch.paused)}
+              className={cn(
+                "relative h-6 w-11 rounded-full border border-line transition-colors disabled:opacity-60",
+                watch.paused ? "bg-beacon" : "bg-muted",
+              )}
+            >
+              <span
+                aria-hidden
                 className={cn(
-                  "relative h-6 w-11 rounded-full border border-line transition-colors disabled:opacity-60",
-                  watch.paused ? "bg-beacon" : "bg-muted",
+                  "absolute top-0.5 left-0.5 size-4.5 rounded-full bg-surface shadow transition-transform motion-reduce:transition-none",
+                  watch.paused && "translate-x-5",
                 )}
-              >
-                <span
-                  aria-hidden
-                  className={cn(
-                    "absolute top-0.5 left-0.5 size-4.5 rounded-full bg-surface shadow transition-transform motion-reduce:transition-none",
-                    watch.paused && "translate-x-5",
-                  )}
-                />
-              </button>
-              <span aria-hidden>Paused</span>
-            </div>
-            <Button variant="outline" asChild>
-              <Link to={`/watches/${watch.id}/edit`}>
-                <Pencil aria-hidden />
-                Edit
-              </Link>
-            </Button>
+              />
+            </button>
+            <span aria-hidden>Paused</span>
           </div>
-        )}
+          <Button variant="outline" asChild>
+            <Link to={`/watches/${watch.id}/edit`}>
+              <Pencil aria-hidden />
+              Edit
+            </Link>
+          </Button>
+        </div>
       </header>
 
       <StatusCard watch={watch} />
@@ -171,22 +149,18 @@ function WatchDetail({ watch }: { watch: Watch }) {
         </dl>
       </section>
 
-      <SharingPanel watch={watch} />
-      {owner && <DangerZone watch={watch} />}
+      <DangerZone watch={watch} />
     </>
   );
 }
 
 function CredentialName({ watch }: { watch: Watch }) {
-  const owner = watch.permission === "owner";
   const credentials = useQuery({
     queryKey: ["credentials", kindInfo(watch.kind).credential],
     queryFn: () => listCredentials(kindInfo(watch.kind).credential),
-    enabled: owner && Boolean(watch.credential_id),
+    enabled: Boolean(watch.credential_id),
   });
   if (!watch.credential_id) return <span className="text-muted">None</span>;
-  // Credentials stay private to their owner: a sharee only learns that one is attached.
-  if (!owner) return <span className="text-muted">Attached by the owner</span>;
   const c = credentials.data?.find((x) => x.id === watch.credential_id);
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -194,146 +168,6 @@ function CredentialName({ watch }: { watch: Watch }) {
       {c ? c.name : "…"}
       {c?.last4 && <span className="font-mono text-muted">••••{c.last4}</span>}
     </span>
-  );
-}
-
-function SharingPanel({ watch }: { watch: Watch }) {
-  const owner = watch.permission === "owner";
-  const client = useQueryClient();
-  const toast = useToast();
-  const [email, setEmail] = useState("");
-  const [permission, setPermission] = useState<SharePermission>("ro");
-  const [error, setError] = useState("");
-  const shares = useQuery({ queryKey: ["shares", watch.id], queryFn: () => listShares(watch.id) });
-  const refresh = () => void client.invalidateQueries({ queryKey: ["shares", watch.id] });
-  const add = useMutation({
-    mutationFn: () => addShare(watch.id, email.trim(), permission),
-    onSuccess: (s) => {
-      setEmail("");
-      refresh();
-      toast(`Shared with ${s.display_name || s.email}`);
-    },
-    onError: (err) => setError(fieldErrors(err).email ?? problemText(err)),
-  });
-  const change = useMutation({
-    mutationFn: (v: { userId: string; permission: SharePermission }) =>
-      updateShare(watch.id, v.userId, v.permission),
-    onSuccess: refresh,
-    onError: (err) => toast(`Could not change the share: ${problemText(err)}`, "error"),
-  });
-  const remove = useMutation({
-    mutationFn: (userId: string) => deleteShare(watch.id, userId),
-    onSuccess: refresh,
-    onError: (err) => toast(`Could not remove the share: ${problemText(err)}`, "error"),
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    setError("");
-    add.mutate();
-  };
-
-  return (
-    <section className={sectionClass} aria-labelledby="sharing-title">
-      <div className="flex flex-col gap-1">
-        <h2 id="sharing-title" className="font-display text-lg font-semibold">
-          Sharing
-        </h2>
-        <p className="text-sm text-muted">
-          {owner
-            ? "Read-only users see the watch; read-write users can also edit, pause and resume it."
-            : `${watch.owner_name || "The owner"} shared this watch with you, ${PERMISSION_LABEL[watch.permission]}.`}
-        </p>
-      </div>
-      {owner && (
-        <form onSubmit={submit} className="flex flex-wrap items-start gap-2" aria-label="Share">
-          <Field label="Email" error={error} className="min-w-56 flex-1">
-            {(p) => (
-              <input
-                {...p}
-                type="email"
-                autoComplete="off"
-                value={email}
-                placeholder="someone@example.com"
-                onChange={(e) => setEmail(e.target.value)}
-                className={inputClass}
-              />
-            )}
-          </Field>
-          <Field label="Access">
-            {(p) => (
-              <select
-                {...p}
-                value={permission}
-                onChange={(e) => setPermission(e.target.value as SharePermission)}
-                className={cn(inputClass, "w-auto pr-8")}
-              >
-                <option value="ro">Read-only</option>
-                <option value="rw">Read-write</option>
-              </select>
-            )}
-          </Field>
-          <Button
-            type="submit"
-            variant="primary"
-            className="mt-7"
-            disabled={add.isPending || !email.trim()}
-          >
-            <UserPlus aria-hidden />
-            Share
-          </Button>
-        </form>
-      )}
-      {shares.isError ? (
-        <ErrorState
-          title="Shares could not be loaded."
-          error={shares.error}
-          onRetry={() => void shares.refetch()}
-        />
-      ) : shares.isPending ? (
-        <span aria-hidden className="h-10 animate-pulse rounded-lg bg-line/60" />
-      ) : shares.data.length === 0 ? (
-        <p className="text-sm text-muted">Not shared with anyone.</p>
-      ) : (
-        <ul aria-label="Shared with" className="divide-y divide-line rounded-lg border border-line">
-          {shares.data.map((s) => (
-            <li key={s.user_id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-sm font-medium">{s.display_name || s.email}</span>
-                <span className="truncate text-xs text-muted">{s.email}</span>
-              </span>
-              {owner ? (
-                <>
-                  <select
-                    aria-label={`Access of ${s.email}`}
-                    value={s.permission}
-                    onChange={(e) =>
-                      change.mutate({
-                        userId: s.user_id,
-                        permission: e.target.value as SharePermission,
-                      })
-                    }
-                    className={cn(inputClass, "h-8 w-auto pr-8 text-xs")}
-                  >
-                    <option value="ro">Read-only</option>
-                    <option value="rw">Read-write</option>
-                  </select>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Remove ${s.email}`}
-                    onClick={() => remove.mutate(s.user_id)}
-                  >
-                    Remove
-                  </Button>
-                </>
-              ) : (
-                <span className="text-xs text-muted">{PERMISSION_LABEL[s.permission]}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }
 

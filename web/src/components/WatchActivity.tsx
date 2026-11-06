@@ -33,7 +33,6 @@ const badge =
 const RUN_WAIT_MS = 90_000;
 
 export function StatusCard({ watch }: { watch: Watch }) {
-  const canWrite = watch.permission !== "ro";
   const client = useQueryClient();
   const toast = useToast();
   // last_run_at when "Run now" was accepted; that run is done once it moves.
@@ -75,17 +74,15 @@ export function StatusCard({ watch }: { watch: Watch }) {
         <h2 id="status-title" className="font-display text-lg font-semibold">
           Status
         </h2>
-        {canWrite && (
-          <Button
-            variant="outline"
-            disabled={busy || watch.paused}
-            title={watch.paused ? "Resume the watch to run it" : undefined}
-            onClick={() => run.mutate()}
-          >
-            <Play aria-hidden className={cn(busy && "animate-pulse")} />
-            {run.isPending ? "Scheduling…" : running ? "Running…" : "Run now"}
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          disabled={busy || watch.paused}
+          title={watch.paused ? "Resume the watch to run it" : undefined}
+          onClick={() => run.mutate()}
+        >
+          <Play aria-hidden className={cn(busy && "animate-pulse")} />
+          {run.isPending ? "Scheduling…" : running ? "Running…" : "Run now"}
+        </Button>
       </div>
       <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-[max-content_1fr]">
         <dt className="text-muted">Status</dt>

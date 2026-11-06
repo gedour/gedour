@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,6 +60,32 @@ func (e *env) adminUsers(t *testing.T, token string) []AdminUser {
 	return out.Items
 }
 
+// noShareKeys fails on any JSON key of raw, at any depth, that names a share.
+func noShareKeys(t *testing.T, raw []byte) {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, c := range x {
+				if strings.Contains(strings.ToLower(k), "share") {
+					t.Errorf("key %q in %s", k, raw)
+				}
+				walk(c)
+			}
+		case []any:
+			for _, c := range x {
+				walk(c)
+			}
+		}
+	}
+	walk(v)
+}
+
 func (e *env) exec(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	if _, err := e.pool.Exec(context.Background(), sql, args...); err != nil {
@@ -66,8 +93,8 @@ func (e *env) exec(t *testing.T, sql string, args ...any) {
 	}
 }
 
-// 006-AC6: every account, never signed in first then oldest sign-in, with its status and counts; a shared
-// watch counts in watches and in shared_watches.
+// 006-AC6: every account, never signed in first then oldest sign-in, with its status and counts.
+// 009-AC9: no count names a share.
 func TestAdminListUsers(t *testing.T) {
 	e := setup(t, false)
 	_, token, _ := e.signedIn(t, "admin", true)
@@ -94,13 +121,8 @@ func TestAdminListUsers(t *testing.T) {
 		VALUES (gen_random_uuid(), $1, 'c', 'github_token', '\x00', '\x00', 1) RETURNING id::text`, old).Scan(&cred); err != nil {
 		t.Fatal(err)
 	}
-	var shared string
-	if err := e.pool.QueryRow(context.Background(), `INSERT INTO watches (owner_id, name, kind, config, credential_id)
-		VALUES ($1, 'a', 'github_repo', '{}', $2) RETURNING id::text`, old, cred).Scan(&shared); err != nil {
-		t.Fatal(err)
-	}
+	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config, credential_id) VALUES ($1, 'a', 'github_repo', '{}', $2)`, old, cred)
 	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'b', 'github_repo', '{}'), ($2, 'c', 'github_repo', '{}')`, old, recent)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro'), ($1, $3, 'ro')`, shared, recent, never)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, old)
 	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r1', ''), ($1, 'r2', '')`, old)
 	e.exec(t, `INSERT INTO scripts (owner_id, name, source) VALUES ($1, 's', '')`, old)
@@ -126,12 +148,14 @@ func TestAdminListUsers(t *testing.T) {
 	if byID[never].LastLoginAt != nil || byID[old].LastLoginAt == nil || byID[disabled].DisabledAt == nil || byID[old].DisabledAt != nil {
 		t.Errorf("timestamps: never %v, old %v, disabled %v", byID[never].LastLoginAt, byID[old].LastLoginAt, byID[disabled].DisabledAt)
 	}
-	if c := byID[old].Counts; c != (AdminUserCounts{Watches: 2, SharedWatches: 1, Channels: 1, Rules: 2, Scripts: 1, Credentials: 1}) {
+	if c := byID[old].Counts; c != (AdminUserCounts{Watches: 2, Channels: 1, Rules: 2, Scripts: 1, Credentials: 1}) {
 		t.Errorf("old counts %+v", c)
 	}
 	if c := byID[recent].Counts; c != (AdminUserCounts{Watches: 1}) {
-		t.Errorf("recent counts %+v (a share received is not an owned watch)", c)
+		t.Errorf("recent counts %+v", c)
 	}
+	_, raw := e.send(t, http.MethodGet, "/api/v1/admin/users", token, "", nil)
+	noShareKeys(t, raw)
 	if byID[never2].DisplayName != "NEVER2" || byID[never2].CreatedAt.IsZero() {
 		t.Errorf("never2: %+v", byID[never2])
 	}

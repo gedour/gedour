@@ -24,7 +24,6 @@ type AdminWatch struct {
 	Name           string  `json:"name"`
 	Kind           string  `json:"kind"`
 	CredentialName *string `json:"credential_name" nullable:"true" doc:"Null when the watch uses no credential"`
-	Shares         int     `json:"shares" doc:"Users the watch is shared with"`
 }
 
 type listUserWatchesOutput struct {
@@ -52,7 +51,6 @@ type TransferResult struct {
 	CredentialID    *string `json:"credential_id" nullable:"true"`
 	CredentialMoved bool    `json:"credential_moved"`
 	CredentialName  *string `json:"credential_name" nullable:"true" doc:"Its name at the new owner, suffixed on a clash"`
-	DroppedShare    bool    `json:"dropped_share" doc:"The new owner's share on the watch was removed"`
 }
 
 type transferOutput struct {
@@ -90,8 +88,7 @@ func adminActor(ctx context.Context) (string, error) {
 
 func (s *Service) listUserWatches(ctx context.Context, in *userIDPath) (*listUserWatchesOutput, error) {
 	out := &listUserWatchesOutput{}
-	err := s.pool.QueryRow(ctx, `SELECT coalesce((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'kind', w.kind, 'credential_name', c.name,
-			'shares', (SELECT count(*) FROM watch_shares ws WHERE ws.watch_id = w.id)) ORDER BY lower(w.name), w.id)
+	err := s.pool.QueryRow(ctx, `SELECT coalesce((SELECT json_agg(json_build_object('id', w.id, 'name', w.name, 'kind', w.kind, 'credential_name', c.name) ORDER BY lower(w.name), w.id)
 		FROM watches w LEFT JOIN credentials c ON c.id = w.credential_id WHERE w.owner_id = u.id), '[]')
 		FROM users u WHERE u.id = $1`, in.ID).Scan(&out.Body.Items)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -104,8 +101,8 @@ func (s *Service) listUserWatches(ctx context.Context, in *userIDPath) (*listUse
 }
 
 // transferWatch moves a watch to another account in one tx (006-AC10, 006-AC11, 006-AC18); locks follow the
-// order in AGENTS.md. The old owner's rules on it stay and route nothing while it cannot read the watch
-// (a share or a transfer back restores routing).
+// order in AGENTS.md. The old owner's rules on it stay and route nothing while it does not own the watch
+// (a transfer back restores routing).
 func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transferOutput, error) {
 	// Canonical whatever spelling format:"uuid" let through: lockTransferUsers matches ids read back as text.
 	id, err := uuid.Parse(in.Body.ToUserID)
@@ -150,11 +147,6 @@ func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transf
 			}
 			res.CredentialMoved = true
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM watch_shares WHERE watch_id = $1 AND user_id = $2`, in.ID, to)
-		if err != nil {
-			return fmt.Errorf("drop share: %w", err)
-		}
-		res.DroppedShare = tag.RowsAffected() > 0
 		if _, err := tx.Exec(ctx, `UPDATE watches SET owner_id = $2, updated_at = now() WHERE id = $1`, in.ID, to); err != nil {
 			return fmt.Errorf("update watch: %w", err)
 		}

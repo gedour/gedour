@@ -20,20 +20,16 @@ func (e *env) setInactive(t *testing.T, user, col string) {
 // inactiveCols are the two states that stop an owner's routing and deliveries.
 var inactiveCols = []string{"disabled_at", "purged_at"}
 
-// 006-AC8: a disabled (or purged) owner's rules make no delivery and no inbox item, while the watch it shares still
-// routes to the other user's rule. 006-AC9: re-enabled, its rules route again; skipped events stay skipped.
+// 006-AC8: a disabled (or purged) owner's rules make no delivery and no inbox item. 006-AC9: re-enabled, its rules
+// route again; skipped events stay skipped.
 func TestRoutingSkipsDisabledOwner(t *testing.T) {
 	for _, col := range inactiveCols {
 		t.Run(col, func(t *testing.T) {
 			e := newEnv(t)
-			alice, bob := e.user(t, "alice"), e.user(t, "bob")
+			alice := e.user(t, "alice")
 			w := e.watch(t, alice)
-			if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob); err != nil {
-				t.Fatal(err)
-			}
-			aliceHook, bobHook := e.webhook(t, alice, "https://hooks.example/a"), e.webhook(t, bob, "https://hooks.example/b")
+			aliceHook := e.webhook(t, alice, "https://hooks.example/a")
 			e.rule(t, alice, &w, "", aliceHook)
-			e.rule(t, bob, nil, "", bobHook)
 
 			e.setInactive(t, alice, col)
 			skipped := e.event(t, w, "release.published", "v1")
@@ -41,10 +37,6 @@ func TestRoutingSkipsDisabledOwner(t *testing.T) {
 			if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1`, alice) +
 				e.count(t, `SELECT count(*) FROM deliveries WHERE channel_id = $1`, aliceHook); n != 0 {
 				t.Fatalf("disabled owner got %d inbox items and deliveries", n)
-			}
-			if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, bob, skipped) +
-				e.count(t, `SELECT count(*) FROM deliveries WHERE channel_id = $1 AND event_id = $2`, bobHook, skipped); n != 2 {
-				t.Fatalf("sharee: %d inbox items and deliveries, want 2", n)
 			}
 
 			e.setInactive(t, alice, "")

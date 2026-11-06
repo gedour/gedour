@@ -24,12 +24,11 @@ const (
 
 // AdminUserCounts is what an account owns.
 type AdminUserCounts struct {
-	Watches       int `json:"watches"`
-	SharedWatches int `json:"shared_watches" doc:"Owned watches shared with at least one other user, included in watches"`
-	Channels      int `json:"channels"`
-	Rules         int `json:"rules"`
-	Scripts       int `json:"scripts"`
-	Credentials   int `json:"credentials"`
+	Watches     int `json:"watches"`
+	Channels    int `json:"channels"`
+	Rules       int `json:"rules"`
+	Scripts     int `json:"scripts"`
+	Credentials int `json:"credentials"`
 }
 
 // AdminUser is one account in the admin list.
@@ -67,7 +66,6 @@ const statusSQL = `CASE WHEN u.purged_at IS NOT NULL THEN 'purged' WHEN u.disabl
 // 006-AC6: never signed in first, then oldest sign-in; counts in the same query.
 const adminUsersSQL = `SELECT u.id::text, u.email, u.display_name, u.created_at, u.last_login_at, ` + statusSQL + `, u.disabled_at,
 		(SELECT count(*) FROM watches w WHERE w.owner_id = u.id),
-		(SELECT count(*) FROM watches w WHERE w.owner_id = u.id AND EXISTS (SELECT 1 FROM watch_shares ws WHERE ws.watch_id = w.id)),
 		(SELECT count(*) FROM channels c WHERE c.owner_id = u.id),
 		(SELECT count(*) FROM rules r WHERE r.owner_id = u.id),
 		(SELECT count(*) FROM scripts sc WHERE sc.owner_id = u.id),
@@ -118,7 +116,7 @@ func (s *Service) listUsers(ctx context.Context, _ *struct{}) (*listUsersOutput,
 		var u AdminUser
 		c := &u.Counts
 		err := r.Scan(&u.ID, &u.Email, &u.DisplayName, &u.CreatedAt, &u.LastLoginAt, &u.Status, &u.DisabledAt,
-			&c.Watches, &c.SharedWatches, &c.Channels, &c.Rules, &c.Scripts, &c.Credentials)
+			&c.Watches, &c.Channels, &c.Rules, &c.Scripts, &c.Credentials)
 		return u, err
 	})
 	if err != nil {

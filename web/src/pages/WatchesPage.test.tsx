@@ -68,8 +68,6 @@ describe("WatchesPage", () => {
             kind: "oci_tags",
             config: { registry: "docker.io", repository: "library/postgres" },
             paused: true,
-            permission: "ro",
-            owner_name: "Bob",
           }),
         ],
       },
@@ -82,8 +80,8 @@ describe("WatchesPage", () => {
     expect(rows[0]).toHaveAttribute("href", "/watches/w1");
     expect(rows[1]).toHaveTextContent("postgres tags");
     expect(rows[1]).toHaveTextContent("Paused");
-    expect(rows[1]).toHaveTextContent("Shared by Bob (ro)");
-    expect(rows[0]).not.toHaveTextContent("Shared by");
+    // 009-AC10: no "Shared by" badge.
+    expect(list).not.toHaveTextContent("Shared by");
   });
 
   // 001-AC24: loading, empty and error states are distinct.
@@ -116,7 +114,7 @@ describe("WatchesPage", () => {
     expect(await screen.findByText("Go releases")).toBeInTheDocument();
   });
 
-  it("sends search, kind and ownership filters, and clears them", async () => {
+  it("sends search and kind filters, and clears them", async () => {
     const fn = mockApi({
       "/api/v1/watches": (url: URL) =>
         Response.json({ items: url.searchParams.size > 1 ? [] : [watch()] }),
@@ -125,14 +123,13 @@ describe("WatchesPage", () => {
     await screen.findByText("Go releases");
     await userEvent.type(screen.getByLabelText("Search"), "go");
     await userEvent.selectOptions(screen.getByLabelText("Kind"), "github_pr");
-    const mine = screen.getByRole("button", { name: "Shared with me" });
-    await userEvent.click(mine);
-    expect(mine).toHaveAttribute("aria-pressed", "true");
+    // 009-AC10: no ownership filter.
+    expect(screen.queryByRole("group", { name: "Ownership" })).not.toBeInTheDocument();
     await waitFor(() => {
       const q = lastCall(fn, "/api/v1/watches")?.url.searchParams;
       expect(q?.get("q")).toBe("go");
       expect(q?.get("kind")).toBe("github_pr");
-      expect(q?.get("shared")).toBe("with_me");
+      expect(q?.has("shared")).toBe(false);
     });
     expect(await screen.findByText("No watches match these filters")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
@@ -179,11 +176,11 @@ describe("WatchesPage", () => {
     expect(document.querySelector("mark")).toBeNull();
   });
 
-  it("deletes the selected owned watches after confirmation", async () => {
+  it("deletes the selected watches after confirmation", async () => {
     let items = [
       watch({ id: "a", name: "A" }),
       watch({ id: "b", name: "B" }),
-      watch({ id: "c", name: "C", permission: "rw", owner_name: "Bob" }),
+      watch({ id: "c", name: "C" }),
     ];
     const del = (id: string) => () => {
       items = items.filter((w) => w.id !== id);
@@ -195,21 +192,22 @@ describe("WatchesPage", () => {
       "/api/v1/watches/b": del("b"),
     });
     renderApp("/watches");
-    expect(await screen.findByRole("button", { name: "Select: C" })).toBeDisabled();
+    // 009-AC10: every tile is selectable.
+    expect(await screen.findByRole("button", { name: "Select: C" })).toBeEnabled();
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Select: B" }));
     let bar = screen.getByRole("toolbar", { name: "Bulk actions" });
     expect(bar).toHaveTextContent("1 selected");
-    await userEvent.click(within(bar).getByRole("button", { name: "Select all 2" }));
+    await userEvent.click(within(bar).getByRole("button", { name: "Select all 3" }));
     expect(screen.getByRole("button", { name: "Select: A" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(screen.getByRole("button", { name: "Select: C" })).toHaveAttribute(
       "aria-pressed",
-      "false",
+      "true",
     );
-    expect(bar).toHaveTextContent("2 selected");
+    expect(bar).toHaveTextContent("3 selected");
     expect(within(bar).getByRole("button", { name: "Select none" })).toBeInTheDocument();
     await userEvent.click(within(bar).getByRole("button", { name: "Clear" }));
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
@@ -229,18 +227,20 @@ describe("WatchesPage", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Deleted 2 watches");
     expect(lastCall(fn, "/api/v1/watches/b", "DELETE")).toBeDefined();
     await waitFor(() => expect(screen.queryByText("A")).not.toBeInTheDocument());
+    expect(screen.getByText("C")).toBeInTheDocument();
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
   });
 
-  it("names everything the delete removes, for every user", async () => {
+  it("names everything the delete removes", async () => {
     mockApi({ "/api/v1/watches": { items: [watch()] } });
     renderApp("/watches");
     await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 watch?" });
-    expect(dialog).toHaveTextContent(/its shares, its events and every rule on it/);
-    expect(dialog).toHaveTextContent(/rules of users it is shared with/);
-    expect(dialog).toHaveTextContent(/Every user's inbox items and deliveries/);
+    expect(dialog).toHaveTextContent(/its events and every rule on it/);
+    expect(dialog).toHaveTextContent(/Every inbox item and delivery for those events/);
+    // 009-AC10: the delete dialog names no share.
+    expect(dialog).not.toHaveTextContent(/shar/i);
   });
 
   it("holds the dialog open while the delete runs", async () => {

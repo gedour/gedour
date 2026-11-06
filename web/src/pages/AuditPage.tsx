@@ -56,8 +56,8 @@ export function AuditPage({ item }: { item: NavItem }) {
       <div className="flex flex-col gap-2">
         <h1 className="font-display text-3xl font-semibold tracking-tight">{item.label}</h1>
         <p className="max-w-prose text-muted">
-          Every change you made, and every change on watches you can see, newest first. Secrets are
-          never shown.
+          Every change you made, and every change on what you own, newest first. Secrets are never
+          shown.
         </p>
       </div>
 

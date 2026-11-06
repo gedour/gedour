@@ -75,8 +75,6 @@ export function kindInfo(kind: WatchKind): KindInfo {
   return KINDS.find((k) => k.kind === kind) ?? (KINDS[0] as KindInfo);
 }
 
-export const PERMISSION_LABEL = { ro: "read-only", rw: "read-write", owner: "owner" } as const;
-
 export const CREDENTIAL_KINDS: { kind: CredentialKind; label: string }[] = [
   { kind: "github_token", label: "GitHub token" },
   { kind: "gitlab_token", label: "GitLab token" },

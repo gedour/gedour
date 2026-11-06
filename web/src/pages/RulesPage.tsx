@@ -105,7 +105,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
         {rule.priority === "high" && <PriorityBadge />}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
           <span>
-            {rule.watch_id ? (rule.watch_name ?? "A watch you can no longer read") : "All watches"}
+            {rule.watch_id ? (rule.watch_name ?? "A watch you no longer own") : "All watches"}
           </span>
           <span aria-hidden>·</span>
           <code className="max-w-md truncate rounded bg-bg px-1.5 py-px font-mono text-ink">

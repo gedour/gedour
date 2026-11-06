@@ -67,7 +67,7 @@ func TestRoutingPriority(t *testing.T) {
 	}
 }
 
-// 005-AC4: on one event, each user's own rules decide their own item, whichever user's rule runs first.
+// 005-AC4: two users watching the same target each get the priority of their own rules, whichever rule runs first.
 func TestRoutingPriorityPerUser(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
@@ -83,20 +83,17 @@ func TestRoutingPriorityPerUser(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newEnv(t)
 			alice, bob := e.user(t, "alice"), e.user(t, "bob")
-			w := e.watch(t, alice)
-			if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob); err != nil {
-				t.Fatal(err)
-			}
+			wa, wb := e.watch(t, alice), e.watch(t, bob)
 			if tt.first {
-				e.ruleAt(t, alice, &w, "", tt.alice)
-				e.ruleAt(t, bob, &w, "", tt.bob)
+				e.ruleAt(t, alice, &wa, "", tt.alice)
+				e.ruleAt(t, bob, &wb, "", tt.bob)
 			} else {
-				e.ruleAt(t, bob, &w, "", tt.bob)
-				e.ruleAt(t, alice, &w, "", tt.alice)
+				e.ruleAt(t, bob, &wb, "", tt.bob)
+				e.ruleAt(t, alice, &wa, "", tt.alice)
 			}
-			ev := e.event(t, w, "release.published", "v1")
+			ea, eb := e.event(t, wa, "release.published", "v1"), e.event(t, wb, "release.published", "v1")
 			routeAll(t, e.router())
-			if a, b := e.itemPriority(t, alice, ev), e.itemPriority(t, bob, ev); a != tt.alice || b != tt.bob {
+			if a, b := e.itemPriority(t, alice, ea), e.itemPriority(t, bob, eb); a != tt.alice || b != tt.bob {
 				t.Fatalf("alice %q, bob %q; want %q, %q", a, b, tt.alice, tt.bob)
 			}
 		})

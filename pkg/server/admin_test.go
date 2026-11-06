@@ -160,12 +160,11 @@ func TestTransferKeepsCollecting(t *testing.T) {
 	body := newWatch("Private", "github_repo", map[string]any{"repo": "alice/private"})
 	body["credential_id"] = c.ID
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", body, http.StatusCreated, &w)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
 
 	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w.ID+"/transfer", map[string]any{"to_user_id": bob.id}, http.StatusOK, nil)
 	var got watchJSON
 	a.mustCall(t, bob, http.MethodGet, "/api/v1/watches/"+w.ID, nil, http.StatusOK, &got)
-	if got.Permission != "owner" || got.CredentialID == nil || *got.CredentialID != c.ID {
+	if got.CredentialID == nil || *got.CredentialID != c.ID {
 		t.Fatalf("bob's view: %+v", got)
 	}
 	a.mustCall(t, bob, http.MethodGet, "/api/v1/credentials/"+c.ID, nil, http.StatusOK, nil)
@@ -198,38 +197,6 @@ func TestTransferKeepsCollecting(t *testing.T) {
 	}
 	if s, n := col.last(); n == 0 || s != plain {
 		t.Fatalf("collector got %d runs, last secret %q", n, s)
-	}
-}
-
-// A share added while a purge of the target holds its row waits for the purge, then finds no account:
-// 404 and no share row on the purged account.
-func TestShareWaitsForPurge(t *testing.T) {
-	a := newDevApp(t)
-	alice, dave := a.signIn(t, "alice"), a.signIn(t, "dave")
-	var w watchJSON
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	ctx := context.Background()
-	purge, err := a.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = purge.Rollback(ctx) }()
-	if _, err := purge.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, dave.id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := purge.Exec(ctx, `UPDATE users SET email = '', display_name = '', disabled_at = now(), purged_at = now() WHERE id = $1`, dave.id); err != nil {
-		t.Fatal(err)
-	}
-	shared := a.callAsync(alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": dave.email, "permission": "ro"})
-	a.waitLockWaiters(t, 1)
-	if err := purge.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if code := <-shared; code != http.StatusNotFound {
-		t.Fatalf("share: %d, want 404", code)
-	}
-	if n := a.countRows(t, `SELECT count(*) FROM watch_shares WHERE user_id = $1`, dave.id); n != 0 {
-		t.Fatal("a share landed on the purged account")
 	}
 }
 
@@ -346,18 +313,21 @@ func TestWatchDeleteRacingRouter(t *testing.T) {
 	}
 }
 
-// What the delete dialogs promise: everything hanging off the watch goes, other users' rows included.
-func TestWatchDeleteRemovesSharedUsersData(t *testing.T) {
+// What the delete dialogs promise: everything hanging off the watch goes, other users' rows (left by a
+// transfer) included.
+func TestWatchDeleteRemovesOtherUsersData(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
 	var w, other watchJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &other)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
 	var hook channelJSON
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
 	var onWatch, everyWatch ruleJSON
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID, "channel_ids": []string{hook.ID}}, http.StatusCreated, &onWatch)
+	if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, watch_id) VALUES ($1, 'on w', $2) RETURNING id::text`, bob.id, w.ID).Scan(&onWatch.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, onWatch.ID, hook.ID)
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "every watch", "channel_ids": []string{hook.ID}}, http.StatusCreated, &everyWatch)
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k'), ($2, 't', '{}', 'k')`, w.ID, other.ID)
 	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT u, e.id FROM events e, unnest($1::uuid[]) u`, []string{alice.id, bob.id})
@@ -371,7 +341,6 @@ func TestWatchDeleteRemovesSharedUsersData(t *testing.T) {
 		args []any
 		want int
 	}{
-		{"shares", `SELECT count(*) FROM watch_shares WHERE watch_id = $1`, []any{w.ID}, 0},
 		{"bob's rule on the watch", `SELECT count(*) FROM rules WHERE id = $1`, []any{onWatch.ID}, 0},
 		{"events", `SELECT count(*) FROM events WHERE watch_id = $1`, []any{w.ID}, 0},
 		{"inbox items of both users, other watch's event", `SELECT count(*) FROM inbox_items`, nil, 2},
@@ -386,7 +355,7 @@ func TestWatchDeleteRemovesSharedUsersData(t *testing.T) {
 	}
 }
 
-// The purged account's rules on a watch it was shared, the higher id inserted first: a purge deleting them
+// The purged account's rules on another user's watch (left by a transfer), the higher id inserted first: a purge deleting them
 // in scan order would hold the higher and wait on the lower while the watch's delete, locking them in id
 // order, holds the lower and waits on the higher. A KEY SHARE (the router's) on the lower parks the purge.
 func TestPurgeRacingWatchDelete(t *testing.T) {
@@ -451,7 +420,7 @@ func TestWatchDeleteRefusedWithoutLocking(t *testing.T) {
 }
 
 // 006-AC10: the old owner's rule on a transferred watch stays but routes nothing and reads with a null
-// watch_name; once the new owner shares the watch back, it routes again.
+// watch_name; once the watch is transferred back, it routes again.
 func TestTransferKeepsRulesOfOldOwner(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
@@ -488,11 +457,11 @@ func TestTransferKeepsRulesOfOldOwner(t *testing.T) {
 		return a.countRows(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, alice.id, ev)
 	}
 	if n := routed("k1"); n != 0 {
-		t.Fatal("the old owner's rule routed an event of a watch it can no longer read")
+		t.Fatal("the old owner's rule routed an event of a watch it no longer owns")
 	}
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": alice.email, "permission": "ro"}, http.StatusCreated, nil)
+	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w.ID+"/transfer", map[string]any{"to_user_id": alice.id}, http.StatusOK, nil)
 	if n := routed("k2"); n != 1 {
-		t.Fatal("the old owner's rule did not route once the watch was shared back")
+		t.Fatal("the old owner's rule did not route once the watch was transferred back")
 	}
 }
 
@@ -545,16 +514,15 @@ func TestTransferRacingWatchDelete(t *testing.T) {
 	}
 }
 
-// Run-all locks a rw sharee's watches in id order, as a purge locks the owner's: a purge holding the lower
-// watch and then taking the higher one does not deadlock with it. The higher id is inserted first, so an
+// Run-all locks the caller's watches in id order, as a purge locks them: a purge holding the lower watch
+// and then taking the higher one does not deadlock with it. The higher id is inserted first, so an
 // unordered scan would lock it first.
 func TestRunAllRacingPurgeLocks(t *testing.T) {
 	a := newDevApp(t)
-	dave, erin := a.signIn(t, "dave"), a.signIn(t, "erin")
+	dave := a.signIn(t, "dave")
 	const low, high = "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-4fff-bfff-ffffffffffff"
 	for _, id := range []string{high, low} {
 		a.exec(t, `INSERT INTO watches (id, owner_id, name, kind, config) VALUES ($1, $2, $3, 'github_repo', '{"repo":"a/b"}')`, id, dave.id, id)
-		a.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'rw')`, id, erin.id)
 	}
 	ctx := context.Background()
 	purge, err := a.pool.Begin(ctx)
@@ -565,7 +533,7 @@ func TestRunAllRacingPurgeLocks(t *testing.T) {
 	if _, err := purge.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, low); err != nil {
 		t.Fatal(err)
 	}
-	run := a.callAsync(erin, http.MethodPost, "/api/v1/watches/run", nil)
+	run := a.callAsync(dave, http.MethodPost, "/api/v1/watches/run", nil)
 	a.waitLockWaiters(t, 1)
 	if _, err := purge.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, high); err != nil {
 		t.Fatalf("purge's second watch lock: %v", err)
@@ -590,31 +558,34 @@ func (a *devApp) waitQueryLocked(t *testing.T, pattern string) {
 	}
 }
 
-// Router versus purge, through the real writers. The router read dave's rule while he
-// was active; a held channel parks it on an earlier rule's delivery, which leaves room for a disable and a
-// purge. The purge deletes the rule and waits on the router's event; the router, let go, waits on the rule.
-// PostgreSQL kills the purge, which waited first, and its retry answers 204 instead of 500.
+// Router versus purge, through the real writers. The router read dave's rules while he was active; a
+// held channel parks it on the first rule's delivery, holding that rule (KEY SHARE), which leaves room for
+// a disable and a purge. The purge deletes the second rule, stored first, and waits on the first; the
+// router, let go, waits on the second. PostgreSQL kills the purge, which waited first, and its retry
+// answers 204 instead of 500.
 func TestPurgeRacingRouterRetries(t *testing.T) {
 	a := newDevApp(t)
 	retries := testpg.AllowDeadlockRetries(t)
-	admin, dave, erin := a.signIn(t, "admin"), a.signIn(t, "dave"), a.signIn(t, "erin")
+	admin, dave := a.signIn(t, "admin"), a.signIn(t, "dave")
 	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
 	var w watchJSON
 	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": erin.email, "permission": "ro"}, http.StatusCreated, nil)
-	rule := func(u apiUser, name, channel string) {
-		t.Helper()
-		a.mustCall(t, u, http.MethodPost, "/api/v1/rules", map[string]any{"name": name, "channel_ids": []string{channel}}, http.StatusCreated, nil)
-	}
-	channel := func(u apiUser, name string) string {
+	channel := func(name string) string {
 		t.Helper()
 		var c channelJSON
-		a.mustCall(t, u, http.MethodPost, "/api/v1/channels", map[string]any{"name": name, "type": "webhook", "config": map[string]any{"url": "https://hook.test/x"}}, http.StatusCreated, &c)
+		a.mustCall(t, dave, http.MethodPost, "/api/v1/channels", map[string]any{"name": name, "type": "webhook", "config": map[string]any{"url": "https://hook.test/x"}}, http.StatusCreated, &c)
 		return c.ID
 	}
-	first := channel(erin, "erin's")
-	rule(erin, "first", first)
-	rule(dave, "second", channel(dave, "dave's"))
+	first, second := channel("first"), channel("second")
+	// Stored in the reverse of the router's order (created_at): the purge's delete meets the second rule first.
+	for _, r := range []struct{ name, channel, age string }{{"second", second, "0"}, {"first", first, "1 hour"}} {
+		var id string
+		if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, created_at) VALUES ($1, $2, now() - $3::interval) RETURNING id::text`,
+			dave.id, r.name, r.age).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		a.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, id, r.channel)
+	}
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k')`, w.ID)
 
 	ctx := context.Background()
@@ -635,7 +606,7 @@ func TestPurgeRacingRouterRetries(t *testing.T) {
 	a.waitQueryLocked(t, "INSERT INTO deliveries%")
 	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/disable", nil, http.StatusNoContent, nil)
 	purge := a.callAsync(admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/purge", nil)
-	a.waitQueryLocked(t, "%DELETE FROM events%")
+	a.waitQueryLocked(t, "%DELETE FROM rules%")
 	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +647,7 @@ func TestWatchDeleteRacingNewRuleRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
-	a.waitQueryLocked(t, "SELECT 1 FROM watches%")
+	a.waitQueryLocked(t, "%FROM watches w%FOR UPDATE OF w")
 	var rule struct {
 		ID string `json:"id"`
 	}

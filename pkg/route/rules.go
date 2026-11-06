@@ -33,8 +33,8 @@ const (
 type Rule struct {
 	ID         string    `json:"id" format:"uuid"`
 	Name       string    `json:"name"`
-	WatchID    *string   `json:"watch_id" format:"uuid" nullable:"true" doc:"Null: every watch the owner can read, owned or shared"`
-	WatchName  *string   `json:"watch_name" nullable:"true" doc:"Null with a watch_id: the owner can no longer read that watch"`
+	WatchID    *string   `json:"watch_id" format:"uuid" nullable:"true" doc:"Null: every watch of the owner"`
+	WatchName  *string   `json:"watch_name" nullable:"true" doc:"Null with a watch_id: the owner no longer owns that watch"`
 	Filter     string    `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
 	Enabled    bool      `json:"enabled"`
 	Priority   string    `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
@@ -56,7 +56,7 @@ type listRulesOutput struct {
 type createRuleInput struct {
 	Body struct {
 		Name       string   `json:"name" minLength:"1" maxLength:"200"`
-		WatchID    string   `json:"watch_id,omitempty" doc:"A watch the caller can read; empty for all of them"`
+		WatchID    string   `json:"watch_id,omitempty" doc:"One of the caller's watches; empty for all of them"`
 		Filter     string   `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty" doc:"Defaults to true"`
 		Priority   string   `json:"priority,omitempty" enum:"normal,high" default:"normal"`
@@ -68,7 +68,7 @@ type updateRuleInput struct {
 	ID   string `path:"id" format:"uuid"`
 	Body struct {
 		Name       *string  `json:"name,omitempty" minLength:"1" maxLength:"200"`
-		WatchID    *string  `json:"watch_id,omitempty" doc:"Empty string: all readable watches"`
+		WatchID    *string  `json:"watch_id,omitempty" doc:"Empty string: all the caller's watches"`
 		Filter     *string  `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty"`
 		Priority   *string  `json:"priority,omitempty" enum:"normal,high"`
@@ -78,7 +78,7 @@ type updateRuleInput struct {
 
 type previewInput struct {
 	Body struct {
-		WatchID string `json:"watch_id,omitempty" doc:"Scope like a rule's; empty for every readable watch"`
+		WatchID string `json:"watch_id,omitempty" doc:"Scope like a rule's; empty for all the caller's watches"`
 		Filter  string `json:"filter" maxLength:"2000"`
 	}
 }
@@ -108,7 +108,7 @@ type previewOutput struct {
 	}
 }
 
-// ruleSelect names a rule's watch only while the owner can read it.
+// ruleSelect names a rule's watch only while the rule's owner owns it.
 var ruleSelect = `SELECT r.id::text, r.name, r.watch_id::text, w.name, r.filter, r.enabled, r.priority,
 		COALESCE((SELECT array_agg(rc.channel_id::text ORDER BY rc.channel_id) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}'),
 		r.created_at, r.updated_at
@@ -152,9 +152,9 @@ func filterError(src string) error {
 	return &huma.ErrorDetail{Location: "body.filter", Message: fe.Error(), Value: map[string]int{"line": fe.Line, "column": fe.Column}}
 }
 
-// checkWatch verifies owner can read the watch.
+// checkWatch verifies owner owns the watch.
 func checkWatch(ctx context.Context, tx pgx.Tx, owner, id string) error {
-	detail := &huma.ErrorDetail{Location: "body.watch_id", Message: "no such watch among the ones you can read", Value: id}
+	detail := &huma.ErrorDetail{Location: "body.watch_id", Message: "no such watch among your watches", Value: id}
 	if uuid.Validate(id) != nil {
 		return huma.Error400BadRequest("invalid rule", detail)
 	}
@@ -419,7 +419,7 @@ func (s *Service) deleteRule(ctx context.Context, in *idPath) (*struct{}, error)
 	return nil, nil
 }
 
-// previewRule evaluates the filter exactly as the router would, on events the caller can read now.
+// previewRule evaluates the filter exactly as the router would, on events of the caller's watches.
 // 001-AC13.
 func (s *Service) previewRule(ctx context.Context, in *previewInput) (*previewOutput, error) {
 	me, err := s.me(ctx)

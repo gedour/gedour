@@ -189,27 +189,33 @@ func TestRouting(t *testing.T) {
 	}
 }
 
-// 001-AC14: a share gives the sharee's rules the watch's events; revoking it stops routing at once.
-func TestRoutingFollowsShares(t *testing.T) {
+// 009-AC8: the router reaches the watch owner's rules only; another user's rules, pinned to the watch or on all
+// watches, route nothing until a transfer makes the watch theirs, and the old owner's then stop at once.
+func TestRoutingOwnedWatchesOnly(t *testing.T) {
 	e := newEnv(t)
 	alice, bob := e.user(t, "alice"), e.user(t, "bob")
 	w := e.watch(t, alice)
+	e.rule(t, alice, &w, "")
 	e.rule(t, bob, nil, "")
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob); err != nil {
+	e.rule(t, bob, &w, "")
+	owned := e.event(t, w, "release.published", "v1")
+	routeAll(t, e.router())
+	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1`, bob); n != 0 {
+		t.Fatal("another user's rules routed the watch's event")
+	}
+	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, alice, owned); n != 1 {
+		t.Fatal("the owner's rule did not route")
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET owner_id = $2 WHERE id = $1`, w, bob); err != nil {
 		t.Fatal(err)
 	}
-	shared := e.event(t, w, "release.published", "v1")
+	moved := e.event(t, w, "release.published", "v2")
 	routeAll(t, e.router())
-	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, bob, shared); n != 1 {
-		t.Fatal("sharee's rule did not route")
+	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE event_id = $1 AND user_id = $2`, moved, bob); n != 1 {
+		t.Fatal("the new owner's rules did not route")
 	}
-	if _, err := e.pool.Exec(context.Background(), `DELETE FROM watch_shares`); err != nil {
-		t.Fatal(err)
-	}
-	revoked := e.event(t, w, "release.published", "v2")
-	routeAll(t, e.router())
-	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE event_id = $1`, revoked); n != 0 {
-		t.Fatal("a revoked share still routes")
+	if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE event_id = $1 AND user_id = $2`, moved, alice); n != 0 {
+		t.Fatal("the old owner's rule still routes")
 	}
 }
 
@@ -609,7 +615,7 @@ func TestRoutingBudget(t *testing.T) {
 	}
 }
 
-// A delivery whose channel owner lost access to the watch is not sent, and ends dead with why.
+// A delivery whose channel owner no longer owns the watch (transferred after routing) is not sent, and ends dead with why.
 func TestDeliveryUnreadableWatch(t *testing.T) {
 	e := newEnv(t)
 	alice, bob := e.user(t, "alice"), e.user(t, "bob")
@@ -617,13 +623,10 @@ func TestDeliveryUnreadableWatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1) }))
 	defer srv.Close()
 	w := e.watch(t, alice)
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob); err != nil {
-		t.Fatal(err)
-	}
-	e.rule(t, bob, nil, "", e.webhook(t, bob, srv.URL))
+	e.rule(t, alice, nil, "", e.webhook(t, alice, srv.URL))
 	e.event(t, w, "release.published", "v1")
 	routeAll(t, e.router())
-	if _, err := e.pool.Exec(context.Background(), `DELETE FROM watch_shares`); err != nil {
+	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET owner_id = $2 WHERE id = $1`, w, bob); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := e.deliverer(t).DeliverOnce(context.Background()); n != 1 || err != nil {

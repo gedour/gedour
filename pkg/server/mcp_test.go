@@ -855,16 +855,15 @@ func TestMCPAdminKey(t *testing.T) {
 	}
 }
 
-// 007-AC24: each read tool returns what REST returns to that user; another user's data is not found; a share reads.
+// 007-AC24: each read tool returns what REST returns to that user; another user's data is not found.
+// 009-AC11: list_watches carries no permission or owner field.
 func TestMCPParity(t *testing.T) {
 	m := newMCPApp(t)
-	alice, bob, carol := m.user(t, "alice"), m.user(t, "bob"), m.user(t, "carol")
+	alice, bob := m.user(t, "alice"), m.user(t, "bob")
 	key, _ := m.key(t, alice.id, "read", "")
 	bobKey, _ := m.key(t, bob.id, "read", "")
-	carolKey, _ := m.key(t, carol.id, "read", "")
 	var w watchJSON
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": carol.email, "permission": "ro"}, http.StatusCreated, nil)
 	var hook channelJSON
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
 	var rule ruleJSON
@@ -922,8 +921,12 @@ func TestMCPParity(t *testing.T) {
 			t.Fatalf("bob on %s: %+v", tt.tool, res)
 		}
 	}
-	if res := m.tool(t, carolKey, "get_watch", map[string]any{"id": w.ID}, nil); res.IsError || res.data(t).(map[string]any)["id"] != w.ID {
-		t.Fatalf("a shared watch: %+v", res)
+	for _, it := range m.tool(t, key, "list_watches", nil, nil).data(t).(map[string]any)["items"].([]any) {
+		for _, k := range []string{"permission", "owner_id", "owner_name"} {
+			if _, ok := it.(map[string]any)[k]; ok {
+				t.Errorf("list_watches item has %s: %v", k, it)
+			}
+		}
 	}
 	if res := m.tool(t, bobKey, "count_inbox", nil, nil); res.IsError || res.data(t).(map[string]any)["unread"] != float64(0) {
 		t.Fatalf("bob's inbox: %+v", res)
@@ -2078,11 +2081,12 @@ func TestMCPRunWatch(t *testing.T) {
 	if got["api_key_id"] != keyID || got["api_key_name"] != "k" || nulled != 1 {
 		t.Fatalf("%v, %d null rows", got, nulled)
 	}
-	// The name is the owner's private label: a sharer of the watch sees the row and the ID.
-	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": carol.email, "permission": "ro"}, http.StatusCreated, nil)
+	// The name is the key owner's private label: the watch's next owner sees the row and the ID.
+	m.exec(t, `UPDATE watches SET owner_id = $2 WHERE id = $1`, w.ID, carol.id)
 	if got, _ := view(carol); got["api_key_id"] != keyID || got["api_key_name"] != nil {
-		t.Fatalf("a sharer's view: %v", got)
+		t.Fatalf("the new owner's view: %v", got)
 	}
+	m.exec(t, `UPDATE watches SET owner_id = $2 WHERE id = $1`, w.ID, alice.id)
 	m.exec(t, `DELETE FROM api_keys WHERE id = $1`, keyID)
 	got, _ = view(alice)
 	if got["api_key_id"] != keyID || got["api_key_name"] != nil {
@@ -2096,11 +2100,7 @@ func TestMCPRunWatch(t *testing.T) {
 	}
 	m.exec(t, `UPDATE watches SET paused = false WHERE id = $1`, w.ID)
 
-	// 007-AC24: a read-only share, and no share at all.
-	carolKey, _ := m.key(t, carol.id, "write", "")
-	if res := m.tool(t, carolKey, "run_watch", map[string]any{"id": w.ID}, nil); !res.IsError || !strings.Contains(res.text(), "read-only share") || due() {
-		t.Fatalf("read-only share: %+v", res)
-	}
+	// 007-AC24, 009-AC6: another user's watch is not found.
 	stranger := m.user(t, "stranger")
 	strangerKey, _ := m.key(t, stranger.id, "write", "")
 	if res := m.tool(t, strangerKey, "run_watch", map[string]any{"id": w.ID}, nil); !res.IsError || !strings.Contains(strings.ToLower(res.text()), "not found") || due() {

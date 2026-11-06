@@ -131,37 +131,6 @@ func TestActingEditRacingPurge(t *testing.T) {
 	}
 }
 
-// A share holds its target user (FOR SHARE, so it waits on a purge) before the watch, as the lock order
-// puts users first. The target creating a rule on that watch holds itself (the cap lock), then the watch
-// (KEY SHARE): with the watch locked first the two would deadlock.
-func TestAddShareRacingRuleCreate(t *testing.T) {
-	a := newDevApp(t)
-	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
-	var w watchJSON
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
-	ctx := context.Background()
-	create, err := a.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = create.Rollback(ctx) }()
-	if _, err := create.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, bob.id); err != nil {
-		t.Fatal(err)
-	}
-	share := a.callAsync(alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "rw"})
-	a.waitLockWaiters(t, 1)
-	if _, err := create.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w.ID); err != nil {
-		t.Fatalf("rule create's watch check: %v", err)
-	}
-	if err := create.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if code := <-share; code != http.StatusConflict {
-		t.Fatalf("share: %d, want 409 (already shared)", code)
-	}
-}
-
 // The channel test cooldown is the effective account's: two tests acting as bob, the second within the
 // interval, are throttled; once alice stops, her own first test is not throttled by the one made as bob.
 func TestChannelTestCooldownWhileActing(t *testing.T) {

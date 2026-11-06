@@ -384,11 +384,9 @@ func TestChannelTest(t *testing.T) {
 func TestRules(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
-	var mine, bobs, shared watchJSON
+	var mine, bobs watchJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &mine)
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &bobs)
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[2], http.StatusCreated, &shared)
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches/"+shared.ID+"/shares", map[string]any{"email": alice.email, "permission": "ro"}, http.StatusCreated, nil)
 	var hook, bobHook channelJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/b"}}, http.StatusCreated, &bobHook)
@@ -410,14 +408,22 @@ func TestRules(t *testing.T) {
 	} {
 		a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", body, http.StatusBadRequest)
 	}
+	// 009-AC8: another user's watch is refused exactly like an unknown one.
+	const unknown = "00000000-0000-4000-8000-000000000000"
+	others, missing := a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "r", "watch_id": bobs.ID}, http.StatusBadRequest),
+		a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "r", "watch_id": unknown}, http.StatusBadRequest)
+	if others.Detail != missing.Detail || len(others.Errors) != 1 || len(missing.Errors) != 1 ||
+		others.Errors[0].Location != missing.Errors[0].Location || others.Errors[0].Message != missing.Errors[0].Message {
+		t.Fatalf("another user's watch %+v, unknown watch %+v", others, missing)
+	}
 
 	var r ruleJSON
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Shared releases", "watch_id": shared.ID,
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Releases", "watch_id": mine.ID,
 		"filter": ` event.type == "release.published" `, "channel_ids": []string{hook.ID, hook.ID}}, http.StatusCreated, &r)
-	if r.Filter != `event.type == "release.published"` || !r.Enabled || len(r.ChannelIDs) != 1 || r.WatchName == nil || *r.WatchName != shared.Name {
+	if r.Filter != `event.type == "release.published"` || !r.Enabled || len(r.ChannelIDs) != 1 || r.WatchName == nil || *r.WatchName != mine.Name {
 		t.Fatalf("created: %+v", r)
 	}
-	a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Shared releases"}, http.StatusConflict)
+	a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Releases"}, http.StatusConflict)
 	var upd ruleJSON
 	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"watch_id": "", "enabled": false, "channel_ids": []string{}}, http.StatusOK, &upd)
 	if upd.WatchID != nil || upd.Enabled || len(upd.ChannelIDs) != 0 || upd.Filter != r.Filter {
@@ -631,7 +637,7 @@ func TestPreviewOnEventsWithoutNotes(t *testing.T) {
 	}
 }
 
-// 001-AC13: the preview evaluates the last 20 events of the watches the caller can read, never others'.
+// 001-AC13, 009-AC8: the preview evaluates the last 20 events of the caller's own watches, never others'.
 func TestRulePreview(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
@@ -655,7 +661,7 @@ func TestRulePreview(t *testing.T) {
 	pv = previewJSON{}
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules/preview", map[string]any{"watch_id": bobs.ID, "filter": ""}, http.StatusOK, &pv)
 	if len(pv.Items) != 0 {
-		t.Fatal("preview scoped to an unreadable watch returned events")
+		t.Fatal("preview scoped to another user's watch returned events")
 	}
 	pv = previewJSON{}
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules/preview", map[string]any{"watch_id": mine.ID, "filter": `event.payload.tag > 3`}, http.StatusOK, &pv)
@@ -701,9 +707,10 @@ func TestInboxAPI(t *testing.T) {
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 'release.published', '{}', g::text FROM generate_series(1, 4) g`, w.ID)
 	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events ORDER BY id`, alice.id)
-	// Bob reads the watch through a share, so his item on it shows.
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
-	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events ORDER BY id LIMIT 1`, bob.id)
+	var bobs watchJSON
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &bobs)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', 'b')`, bobs.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events WHERE watch_id = $2`, bob.id, bobs.ID)
 
 	all := a.inboxIDs(t, alice, "all")
 	if len(all) != 4 || all[0] < all[3] {
@@ -1048,42 +1055,42 @@ func TestRulePreviewRateLimit(t *testing.T) {
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules/preview", map[string]any{"filter": ""}, http.StatusOK, nil)
 }
 
-// A revoked share hides what it brought: inbox items, deliveries and the rule's watch name.
-func TestRevokedShareHides(t *testing.T) {
+// 009-AC8: inbox items, deliveries and a rule's watch name show only while the caller owns the watch: a
+// transfer hides what it brought.
+func TestTransferHides(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
 	var w watchJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches/"+w.ID+"/shares", map[string]any{"email": bob.email, "permission": "ro"}, http.StatusCreated, nil)
 	var hook channelJSON
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
 	var r ruleJSON
-	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Theirs", "watch_id": w.ID, "channel_ids": []string{hook.ID}}, http.StatusCreated, &r)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "Mine", "watch_id": w.ID, "channel_ids": []string{hook.ID}}, http.StatusCreated, &r)
 	if r.WatchName == nil || *r.WatchName != w.Name {
 		t.Fatalf("rule: %+v", r)
 	}
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', 'k')`, w.ID)
-	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events`, bob.id)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events`, alice.id)
 	a.exec(t, `INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT id, $1, $2 FROM events`, r.ID, hook.ID)
 	visible := func() (int, int, int) {
 		var inbox inboxJSON
 		var deliveries deliveriesJSON
 		var count struct{ Unread int }
-		a.mustCall(t, bob, http.MethodGet, "/api/v1/inbox", nil, http.StatusOK, &inbox)
-		a.mustCall(t, bob, http.MethodGet, "/api/v1/deliveries", nil, http.StatusOK, &deliveries)
-		a.mustCall(t, bob, http.MethodGet, "/api/v1/inbox/count", nil, http.StatusOK, &count)
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox", nil, http.StatusOK, &inbox)
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/deliveries", nil, http.StatusOK, &deliveries)
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox/count", nil, http.StatusOK, &count)
 		return len(inbox.Items), len(deliveries.Items), count.Unread
 	}
 	if i, d, c := visible(); i != 1 || d != 1 || c != 1 {
-		t.Fatalf("shared: inbox %d, deliveries %d, unread %d", i, d, c)
+		t.Fatalf("owned: inbox %d, deliveries %d, unread %d", i, d, c)
 	}
-	a.mustCall(t, alice, http.MethodDelete, "/api/v1/watches/"+w.ID+"/shares/"+bob.id, nil, http.StatusNoContent, nil)
+	a.exec(t, `UPDATE watches SET owner_id = $2 WHERE id = $1`, w.ID, bob.id)
 	if i, d, c := visible(); i != 0 || d != 0 || c != 0 {
-		t.Fatalf("revoked: inbox %d, deliveries %d, unread %d", i, d, c)
+		t.Fatalf("transferred: inbox %d, deliveries %d, unread %d", i, d, c)
 	}
-	a.mustCall(t, bob, http.MethodGet, "/api/v1/rules/"+r.ID, nil, http.StatusOK, &r)
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/rules/"+r.ID, nil, http.StatusOK, &r)
 	if r.WatchID == nil || r.WatchName != nil {
-		t.Fatalf("rule after revoke: %+v", r)
+		t.Fatalf("rule after the transfer: %+v", r)
 	}
 }
 

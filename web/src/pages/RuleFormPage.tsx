@@ -202,11 +202,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
               />
             )}
           </Field>
-          <Field
-            label="Watches"
-            error={errors.watch_id}
-            hint="All watches includes those shared with you, as long as they are."
-          >
+          <Field label="Watches" error={errors.watch_id}>
             {(p) => (
               <select
                 {...p}
@@ -218,7 +214,6 @@ function RuleForm({ initial }: { initial?: Rule }) {
                 {watchList.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
-                    {w.permission === "owner" ? "" : ` (shared by ${w.owner_name})`}
                   </option>
                 ))}
               </select>

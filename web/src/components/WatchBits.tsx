@@ -1,6 +1,6 @@
-import { Pause, Users } from "lucide-react";
+import { Pause } from "lucide-react";
 
-import { kindInfo, PERMISSION_LABEL } from "@/lib/watchKinds";
+import { kindInfo } from "@/lib/watchKinds";
 import { STATUS, statusOf } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
 import type { Watch, WatchKind } from "@/types/api";
@@ -32,32 +32,17 @@ export function PausedBadge() {
   );
 }
 
-/** "Shared by Alice · ro" for watches the caller does not own; nothing for their own. */
-export function SharedBadge({ watch }: { watch: Pick<Watch, "permission" | "owner_name"> }) {
-  if (watch.permission === "owner") return null;
-  return (
-    <span
-      className={cn(badge, "bg-sky-500/10 text-sky-800 ring-sky-600/25 dark:text-sky-300")}
-      title={`Shared with you, ${PERMISSION_LABEL[watch.permission]}`}
-    >
-      <Users aria-hidden className="size-3" />
-      Shared by {watch.owner_name || "someone"} ({watch.permission})
-    </span>
-  );
-}
-
-/** Coloured dot for the run status; the label is always in the accessible name, visible on demand. */
 /** What a delete takes with it, for everyone: the cascades of migrations 00004 and 00005. */
 export function DeleteWatchWarning() {
   return (
     <p className="text-sm text-muted">
-      Deleting a watch also removes its shares, its events and every rule on it, including rules of
-      users it is shared with. Every user's inbox items and deliveries for those events go too. This
-      cannot be undone.
+      Deleting a watch also removes its events and every rule on it. Every inbox item and delivery
+      for those events goes too. This cannot be undone.
     </p>
   );
 }
 
+/** Coloured dot for the run status; the label is always in the accessible name, visible on demand. */
 export function StatusDot({
   watch,
   showLabel = false,

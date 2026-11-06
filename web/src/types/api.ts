@@ -58,11 +58,8 @@ type Schemas = components["schemas"];
 export type Watch = Schemas["Watch"];
 export type WatchKind = Watch["kind"];
 export type WatchConfig = Watch["config"];
-export type Permission = Watch["permission"];
 export type CreateWatchBody = Schemas["CreateWatchInputBody"];
 export type UpdateWatchBody = Schemas["UpdateWatchInputBody"];
-export type Share = Schemas["Share"];
-export type SharePermission = Share["permission"];
 export type Credential = Schemas["Credential"];
 export type CredentialKind = Credential["kind"];
 export type CreateCredentialBody = Schemas["CreateCredentialInputBody"];
@@ -82,14 +79,9 @@ export interface EventsPage {
   next_cursor?: string;
 }
 
-export type SharedFilter = NonNullable<
-  NonNullable<operations["list-watches"]["parameters"]["query"]>["shared"]
->;
-
 export interface WatchFilters {
   kind?: WatchKind;
   q?: string;
-  shared?: SharedFilter;
 }
 
 // Phase 5 resources.
@@ -135,7 +127,7 @@ export type UpdateScriptBody = Schemas["UpdateScriptInputBody"];
 export type SampleEvent = Schemas["SampleEvent"];
 export type DryRun = Schemas["DryRun"];
 export type DryRunFetch = Schemas["Fetch"];
-/** The event of a dry run: a real one the caller can read, or a made-up sample. */
+/** The event of a dry run: a real one from the caller's watches, or a made-up sample. */
 export type DryRunEvent = { event_id: number } | { sample: SampleEvent };
 
 // Spec 006 resources.

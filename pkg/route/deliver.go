@@ -32,8 +32,8 @@ const (
 
 const talkPausedError = "held: channel paused after Nextcloud Talk answered HTTP 401; it resumes on its own or when the channel is edited"
 
-// errUnreadable ends a delivery without sending: its channel's owner lost access to the watch.
-var errUnreadable = errors.New("not sent: the channel's owner can no longer read this watch")
+// errUnreadable ends a delivery without sending: its channel's owner no longer owns the watch.
+var errUnreadable = errors.New("not sent: the channel's owner no longer owns this watch")
 
 // errOwnerDisabled ends a delivery queued before its channel's owner was disabled (006-AC8).
 var errOwnerDisabled = errors.New("not sent: the channel's owner is disabled")
@@ -169,7 +169,7 @@ func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify
 	}
 	e := &nd.Event
 	var active bool
-	// The channel owner must still read the watch: a share revoked after routing sends nothing more.
+	// The channel owner must still own the watch: a transfer after routing sends nothing more.
 	err = d.pool.QueryRow(ctx, `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind, `+activeOwner+`
 		FROM events e JOIN watches w ON w.id = e.watch_id JOIN channels c ON c.id = $2 JOIN users u ON u.id = c.owner_id
 		WHERE e.id = $1 AND `+watch.ReadableSQL("w", "c.owner_id"), j.eventID, j.channelID).

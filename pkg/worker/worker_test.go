@@ -981,7 +981,7 @@ func TestLeaseUsesDatabaseClock(t *testing.T) {
 	}
 }
 
-// 006-AC8: a disabled owner's watch keeps collecting, so the users it is shared with keep their events.
+// 006-AC8: a disabled owner's watch keeps collecting.
 func TestDisabledOwnerKeepsCollecting(t *testing.T) {
 	e := newEnv(t)
 	id := e.addWatch(t, "github_repo", `{}`, "1m")

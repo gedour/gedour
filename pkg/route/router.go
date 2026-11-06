@@ -89,7 +89,7 @@ func (r *Router) logRefusedRules(ctx context.Context) {
 }
 
 // activeOwner keeps the users aliased u that are neither disabled nor purged: a disabled account's rules
-// route nothing, while its watches keep collecting for the users they are shared with (006-AC8).
+// route nothing (006-AC8).
 const activeOwner = "u.disabled_at IS NULL AND u.purged_at IS NULL"
 
 type routedEvent struct {
@@ -174,8 +174,8 @@ func (r *Router) RouteOnce(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// routeEvent evaluates the enabled rules of every user who can read the event's watch right now: a
-// revoked share stops routing at once.
+// routeEvent evaluates the enabled rules of the event's watch owner right now: a transfer stops the old
+// owner's routing at once.
 func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notify map[string]bool) error {
 	rows, err := tx.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter, r.priority,
 			COALESCE((SELECT array_agg(rc.channel_id::text) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}')

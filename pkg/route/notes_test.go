@@ -35,22 +35,31 @@ func (e *env) noteEvent(t *testing.T, w, tag, body, cves string) int64 {
 // 004-AC5, 004-AC9: routing reads the stored payload: list membership on cves, a mark deep in body.
 func TestRoutingOnNotes(t *testing.T) {
 	e := newEnv(t)
-	alice, bob, carol := e.user(t, "alice"), e.user(t, "bob"), e.user(t, "carol")
-	w := e.watch(t, alice)
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) SELECT $1, u, 'ro' FROM unnest($2::uuid[]) u`, w, []string{bob, carol}); err != nil {
-		t.Fatal(err)
-	}
-	e.rule(t, alice, nil, `"CVE-2026-1234" in event.payload.cves`)
-	e.rule(t, bob, nil, `event.payload.body matches "60KIB"`)
-	e.rule(t, carol, nil, `len(event.payload.cves) == 0 && event.payload.body == ""`)
-	cve := e.noteEvent(t, w, "v1", "Fixes cve-2026-1234.", `["CVE-2026-1234"]`)
-	deep := e.noteEvent(t, w, "v2", strings.Repeat("x", 60<<10)+"60KIB", `[]`)
-	empty := e.noteEvent(t, w, "v3", "", `[]`)
-	routeAll(t, e.router())
-	for _, tt := range []struct {
+	type match struct {
 		user  string
 		event int64
-	}{{alice, cve}, {bob, deep}, {carol, empty}} {
+	}
+	var want []match
+	for _, tt := range []struct {
+		name, filter string
+		match        int
+	}{
+		{"alice", `"CVE-2026-1234" in event.payload.cves`, 0},
+		{"bob", `event.payload.body matches "60KIB"`, 1},
+		{"carol", `len(event.payload.cves) == 0 && event.payload.body == ""`, 2},
+	} {
+		user := e.user(t, tt.name)
+		w := e.watch(t, user)
+		e.rule(t, user, nil, tt.filter)
+		events := []int64{
+			e.noteEvent(t, w, "v1", "Fixes cve-2026-1234.", `["CVE-2026-1234"]`),
+			e.noteEvent(t, w, "v2", strings.Repeat("x", 60<<10)+"60KIB", `[]`),
+			e.noteEvent(t, w, "v3", "", `[]`),
+		}
+		want = append(want, match{user, events[tt.match]})
+	}
+	routeAll(t, e.router())
+	for _, tt := range want {
 		if n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, tt.user, tt.event); n != 1 {
 			t.Errorf("user %s, event %d: %d items", tt.user, tt.event, n)
 		}
@@ -64,16 +73,11 @@ func TestRoutingOnNotes(t *testing.T) {
 // nothing added to what is stored.
 func TestNotesFiltersOnEventsWithoutThem(t *testing.T) {
 	e := newEnv(t)
-	alice := e.user(t, "alice")
-	w := e.watch(t, alice)
-	pr := e.event(t, w, "pr.state_changed", "pr")
-	// Stored before the collectors wrote the fields.
-	old := e.event(t, w, "release.published", "old")
-	rel := e.noteEvent(t, w, "v1", "Notes for X.", `["x"]`)
 	tests := []struct {
-		filter    string
-		onRelease bool
-		owner     string
+		filter       string
+		onRelease    bool
+		owner        string
+		pr, old, rel int64
 	}{
 		{filter: `len(event.payload.cves) > 0`, onRelease: true},
 		{filter: `any(event.payload.cves, {# == "x"})`, onRelease: true},
@@ -83,9 +87,11 @@ func TestNotesFiltersOnEventsWithoutThem(t *testing.T) {
 	for i := range tests {
 		tt := &tests[i]
 		tt.owner = e.user(t, fmt.Sprintf("u%d", i))
-		if _, err := e.pool.Exec(context.Background(), `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, tt.owner); err != nil {
-			t.Fatal(err)
-		}
+		w := e.watch(t, tt.owner)
+		tt.pr = e.event(t, w, "pr.state_changed", "pr")
+		// Stored before the collectors wrote the fields.
+		tt.old = e.event(t, w, "release.published", "old")
+		tt.rel = e.noteEvent(t, w, "v1", "Notes for X.", `["x"]`)
 		e.rule(t, tt.owner, nil, tt.filter)
 	}
 	core, logs := observer.New(zap.WarnLevel)
@@ -101,14 +107,18 @@ func TestNotesFiltersOnEventsWithoutThem(t *testing.T) {
 			name string
 			id   int64
 			want bool
-		}{{"pr", pr, !tt.onRelease}, {"old release", old, !tt.onRelease}, {"release", rel, tt.onRelease}} {
+		}{{"pr", tt.pr, !tt.onRelease}, {"old release", tt.old, !tt.onRelease}, {"release", tt.rel, tt.onRelease}} {
 			n := e.count(t, `SELECT count(*) FROM inbox_items WHERE user_id = $1 AND event_id = $2`, tt.owner, ev.id)
 			if (n == 1) != ev.want {
 				t.Errorf("%s on %s: %d items, want match %v", tt.filter, ev.name, n, ev.want)
 			}
 		}
 	}
-	if n := e.count(t, `SELECT count(*) FROM events WHERE id = ANY($1) AND (payload ? 'cves' OR payload ? 'body')`, []int64{pr, old}); n != 0 {
+	var plain []int64
+	for _, tt := range tests {
+		plain = append(plain, tt.pr, tt.old)
+	}
+	if n := e.count(t, `SELECT count(*) FROM events WHERE id = ANY($1) AND (payload ? 'cves' OR payload ? 'body')`, plain); n != 0 {
 		t.Errorf("%d stored payloads gained a field", n)
 	}
 }

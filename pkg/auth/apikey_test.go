@@ -1022,3 +1022,18 @@ func TestKeyDeniedSessionFailureRollsBack(t *testing.T) {
 	}
 	e.wantValidKey(t, raw)
 }
+
+// 007-AC14: a key's principal is its user and nothing else: no admin flag, no CSRF token, not acting as anyone.
+func TestWithKeyPrincipal(t *testing.T) {
+	ctx := WithKeyPrincipal(context.Background(), KeyPrincipal{User: User{ID: "u1"}, KeyID: "k1", Scope: "manage"})
+	sess, err := sessionOf(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.ID != "u1" || sess.isAdmin || sess.admin != nil || sess.csrf != "" || sess.id != nil {
+		t.Fatalf("%+v", sess)
+	}
+	if u, ok := UserFrom(ctx); !ok || u.ID != "u1" {
+		t.Fatalf("%+v %v", u, ok)
+	}
+}

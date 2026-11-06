@@ -30,7 +30,7 @@ const SCOPES: { scope: ApiKeyScope; label: string; allows: string }[] = [
   {
     scope: "manage",
     label: "Manage",
-    allows: "Also creates and edits watches and rules, and sees channel names.",
+    allows: "Also creates and edits watches and rules, and lists channels.",
   },
 ];
 

@@ -38,6 +38,13 @@ type KeyPrincipal struct {
 	Dormant bool
 	// EffectiveUntil is nil only in dev mode on a never key.
 	EffectiveUntil *time.Time
+	// ExpiresAt is nil on a never key.
+	ExpiresAt *time.Time
+}
+
+// WithKeyPrincipal puts a key's user on ctx for handlers below Guard: no admin flag and no CSRF token, as a key has neither.
+func WithKeyPrincipal(ctx context.Context, p KeyPrincipal) context.Context {
+	return context.WithValue(ctx, ctxKey{}, &session{User: p.User})
 }
 
 // APIKey is a key as its owner sees it; it has no field for the key or its hash.
@@ -260,11 +267,11 @@ func (s *Service) LookupKey(ctx context.Context, raw string) (KeyPrincipal, erro
 	var p KeyPrincipal
 	var stale bool
 	err := s.pool.QueryRow(ctx, `SELECT k.id::text, k.scope, u.id::text, u.email, u.display_name,
-			COALESCE(`+keySigninEndSQL+` <= now(), false), LEAST(k.expires_at, `+keySigninEndSQL+`),
+			COALESCE(`+keySigninEndSQL+` <= now(), false), LEAST(k.expires_at, `+keySigninEndSQL+`), k.expires_at,
 			k.last_used_at IS NULL OR k.last_used_at < now() - interval '1 minute'
 		FROM api_keys k JOIN users u ON u.id = k.user_id AND u.disabled_at IS NULL AND u.purged_at IS NULL
 		WHERE k.hash = $2 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())`, s.keySigninMaxAge, hashToken(raw)).
-		Scan(&p.KeyID, &p.Scope, &p.User.ID, &p.User.Email, &p.User.DisplayName, &p.Dormant, &p.EffectiveUntil, &stale)
+		Scan(&p.KeyID, &p.Scope, &p.User.ID, &p.User.Email, &p.User.DisplayName, &p.Dormant, &p.EffectiveUntil, &p.ExpiresAt, &stale)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return KeyPrincipal{}, ErrInvalidKey
 	}

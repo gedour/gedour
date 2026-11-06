@@ -16,8 +16,15 @@ import (
 
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/ratelimit"
 	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
+)
+
+// Previews per user: the live editor sends one per pause in typing; a script cannot loop on them.
+const (
+	previewRate  = 2.0
+	previewBurst = 5.0
 )
 
 // Service serves channels, rules, deliveries and the inbox.
@@ -33,8 +40,8 @@ type Service struct {
 	hub       *Hub
 	viewer    func(context.Context) (string, bool)
 	alive     func(*http.Request) bool
-	previews  *limiter
-	dryRuns   *limiter
+	previews  *ratelimit.Limiter
+	dryRuns   *ratelimit.Limiter
 	// Heartbeat is the SSE keep-alive and session re-check period; tests shorten it.
 	Heartbeat time.Duration
 }
@@ -43,8 +50,8 @@ type Service struct {
 // guard the save-time webhook and Nextcloud Talk URL checks.
 func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, guard *netguard.Guard, httpHosts []string, m *Metrics) *Service {
 	return &Service{pool: pool, log: log, box: box, sender: sender, runner: runner, guard: guard, httpHosts: httpHosts, metrics: m,
-		hub: newHub(pool, log, m), Heartbeat: 25 * time.Second, previews: newLimiter(previewRate, previewBurst),
-		dryRuns: newLimiter(dryRunRate, dryRunBurst)}
+		hub: newHub(pool, log, m), Heartbeat: 25 * time.Second, previews: ratelimit.New(previewRate, previewBurst),
+		dryRuns: ratelimit.New(dryRunRate, dryRunBurst)}
 }
 
 // Register mounts the API on api and the inbox stream on mux. viewer returns the authenticated user's ID;

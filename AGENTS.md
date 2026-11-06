@@ -52,7 +52,7 @@
   needs `make openapi`: `TestOpenAPIDrift` (Go) and `pnpm check:api` (web) fail on a stale file. Huma ignores
   embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
-  Other GET paths fall back to `index.html`.
+  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/` and `/.well-known/`.
 - `/metrics` and `/livez` (liveness, ignores PG) live only on the metrics listener; `/healthz` is on both.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite
@@ -88,6 +88,14 @@
   (event, then KEY SHARE on rule/channel/user) and deletes only; events are deleted explicitly before their watch (no reliance on cascade order), and pre-delete rule locks are `NO KEY UPDATE`.
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
+
+## MCP
+
+- A tool is one row of `rows` in `pkg/mcpserver/tools.go`: name, operation ID, scope, description, limit caps, output shaper. Its data
+  path is the REST handler, dispatched in process on the mux below `Guard`: no second code path, so a tool's checks live in the handler.
+- `inputSchema` comes from `api.OpenAPI()`. `mcpserver.New` fails (`server.New` panics) on a row naming an unknown operation or a path
+  under `auth.AdminPrefix`, as the sub-request skips `Guard`'s admin check.
+- Tests sending several calls per key mind the burst of 20 (`keyBurst`).
 
 ## Kubernetes
 

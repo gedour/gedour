@@ -464,7 +464,7 @@ func (s *Service) dryInput(ctx context.Context, me string, eventID *int64, sampl
 
 // dryRun runs src in the sandbox with http.fetch stubbed: no side effect, so no audit row (001-AC18).
 func (s *Service) dryRun(ctx context.Context, me, src string, eventID *int64, sample *SampleEvent) (*dryRunOutput, error) {
-	if !s.dryRuns.allow(me) {
+	if !s.dryRuns.Allow(me) {
 		return nil, huma.ErrorWithHeaders(huma.Error429TooManyRequests("too many dry runs: one per second"), http.Header{"Retry-After": {"1"}})
 	}
 	d, err := s.dryInput(ctx, me, eventID, sample)

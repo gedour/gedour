@@ -45,7 +45,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 |---|---|---|
 | `GEDOUR_DATABASE_URL` | (required) | PostgreSQL URL, e.g. `postgres://user:pass@host:5432/gedour` |
 | `GEDOUR_ROLE` / `--role` | `all` | `web`, `worker` or `all` |
-| `GEDOUR_HTTP_ADDR` | `:8080` | UI, `/api`, `/healthz` |
+| `GEDOUR_HTTP_ADDR` | `:8080` | UI, `/api`, `/mcp`, `/healthz` |
 | `GEDOUR_METRICS_ADDR` | `:9090` | `/metrics`, `/healthz`, `/livez` |
 | `GEDOUR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `GEDOUR_LOG_FORMAT` | `auto` | `auto` (console on a TTY, else JSON), `console`, `json` |
@@ -101,6 +101,7 @@ a failed dev sign-in answers a plain 500.
   another type or non-string items count as no role.
 - With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
   gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
+- Check the role name before enabling `GEDOUR_OIDC_REQUIRED_ROLE`: a sign-in refused for a wrong name revokes that user's API keys for good.
 - Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
   A sign-in refused for a missing role also ends the account's sessions and revokes its active API keys (the
   audit entry holds `deleted_session_count` and `revoked_api_key_count`, when above 0), even if the browser drops the callback.
@@ -180,15 +181,67 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
-| `read` (default) | Your inbox with release notes, owned and shared watches with their config, rules with filters, deliveries without logs | Credentials, channel targets, scripts, audit, other users, admin, other keys |
+| `read` (default) | Your inbox with release notes, owned and shared watches with their config, rules with filters, deliveries with their channel's name and without logs or errors | Credentials, channel targets, scripts, audit, other users, admin, other keys |
 | `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
-| `manage` | Also channel names, creating and editing rules and watches | Credentials, channel targets, delete, shares |
+| `manage` | Also the list of channels, creating and editing rules and watches | Credentials, channel targets, delete, shares |
 
 A `manage` key can silence alerts by disabling a rule or pausing a watch: give it only to clients that confirm
 writes with a person. Keys never open the REST API, which stays session-only.
 
 Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
 expiry, never the key or its hash.
+
+## MCP
+
+`/mcp` is an [MCP](https://modelcontextprotocol.io) server over Streamable HTTP, stateless and JSON only, for
+protocol versions up to `2026-07-28`. A client authenticates with an API key on every request. Serve it over
+HTTPS: the key is a bearer credential.
+
+```sh
+claude mcp add --transport http gedour https://gedour.example.com/mcp --header "Authorization: Bearer <key>"
+```
+
+Or in `.mcp.json`, with the key in an environment variable:
+
+```json
+{
+  "mcpServers": {
+    "gedour": {
+      "type": "http",
+      "url": "https://gedour.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${GEDOUR_API_KEY}" }
+    }
+  }
+}
+```
+
+| Tool | Returns | Limit |
+|---|---|---|
+| `count_inbox` | Unread inbox items | |
+| `list_inbox` | Inbox items with their event; a body over 8 KiB is cut and says so | default 20, max 50 |
+| `list_watches` | Owned and shared watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
+| `get_watch` | One watch | |
+| `list_watch_events` | A watch's events | max 50 |
+| `list_watch_states` | A watch's observed states | max 50 |
+| `list_rules` | Routing rules, with filters | |
+| `get_rule` | One rule | |
+| `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
+
+A key sees what its owner sees through the REST API: the `read` row above says what that reaches. No tool
+takes a URL, a host or a free-form object.
+
+- **Untrusted output**: release notes, titles and errors come from third parties. Every successful result fences them with
+  a nonce and a warning, and drops C0 and C1 controls but tab, LF and CR, format characters (Unicode Cf: bidi,
+  zero-width, tags) and U+2028, U+2029. Other invisible characters, such as variation selectors, stay. No fence stops a model that decides
+  to obey: review what your client does with the tools it holds.
+- **Limits**: 5 requests/s per key with a burst of 20 (429 and `Retry-After`), per replica. A body over 1 MiB gets 413,
+  a result over 512 KiB asks for a smaller `limit`. JSON-RPC batches are refused.
+- **Refusals**: a missing or invalid key gets 401, an `Origin` outside `GEDOUR_PUBLIC_URL` 403; in dev mode, only
+  loopback `Host` and `Origin` pass. A dormant key still lists tools, and each call answers with the URL to sign in at.
+  In a key's last 7 days, each successful result starts with a notice saying when it stops. OAuth is not offered:
+  `/.well-known/` and `/mcp/` answer 404.
+- **Observability**: one `mcp_tool_call` log line per call (key ID, user ID, tool, outcome, duration, request ID, the one an internal error quotes; never the key
+  or the arguments), and the metrics `gedour_mcp_tool_calls_total{tool,outcome}` and `gedour_mcp_auth_failures_total`.
 
 ## Collection
 
@@ -490,6 +543,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
 - `GET /livez` (metrics port only): 200 while the process serves, whatever PostgreSQL does.
+- `POST /mcp`: MCP server, API key only (see [MCP](#mcp)); `GET` and `DELETE` answer 405.
 - `GET /api/openapi.json`: OpenAPI document.
 - `GET /api/v1/version`: build information.
 - `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow. On failure both answer 303 to

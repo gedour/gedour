@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 			log.Warn("dev_mode_enabled", zap.String("user", cfg.DevUser))
 		}
 		watches := watch.New(pool, log, box, cfg.AllowHTTPHosts)
-		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool, watches, routes)))
+		servers = append(servers, newServer(cfg.HTTPAddr, server.New(log, build, ping, ui, authn, pool, watches, routes, reg)))
 		go routes.RunHub(hubCtx)
 	}
 

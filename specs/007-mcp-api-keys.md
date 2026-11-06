@@ -101,7 +101,7 @@ before the page loads. So the message goes through the client's LLM:
   reads no data and says: `This key needs its owner to sign in: <url>. It works again right after.`
 - **Last 7 days**: each result starts, outside the fence, with `This key stops on <date> unless its owner signs in at <url>`,
   or `This key expires on <date>: create a new one at <url>` when the key's own expiry comes first.
-- `<url>` is the instance's public URL for the request, picked as `auth.publicURL` does, never built from `Host`.
+- `<url>` is the instance's public URL for the request, picked as `auth.publicURL` does, never built from `Host`. Dev mode has no configured URL and uses the loopback `Host` that `Guard` already checked.
 
 ### Guard and CSRF
 
@@ -135,13 +135,13 @@ Fixed order, so client prompt caches hold ([spec SHOULD](https://modelcontextpro
 |---|---|---|---|---|
 | `count_inbox` | `count-inbox` | read | true | |
 | `list_inbox` | `list-inbox` | read | true | `limit` default 20, max 50; `event.payload.body` cut at 8 KiB |
-| `list_watches` | `list-watches` | read | true | `limit` default 50, max 200 |
+| `list_watches` | `list-watches` | read | true | `limit` default 50, max 200; `truncated: true` when it returns as many as the limit, as REST has no cursor here |
 | `get_watch` | `get-watch` | read | true | |
 | `list_watch_events` | `list-watch-events` | read | true | `limit` max 50 |
 | `list_watch_states` | `list-watch-states` | read | true | `limit` max 50 |
 | `list_rules` | `list-rules` | read | true | |
 | `get_rule` | `get-rule` | read | true | |
-| `list_deliveries` | `list-deliveries` | read | true | `limit` max 50; `logs` removed |
+| `list_deliveries` | `list-deliveries` | read | true | `limit` max 50; `logs` and `last_error` removed, as errors name channel targets |
 | `mark_inbox_read` | `read-inbox` | write | false | |
 | `mark_inbox_unread` | `unread-inbox` | write | false | |
 | `archive_inbox` | `archive-inbox` | write | false | |
@@ -196,13 +196,13 @@ lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limit
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
-| read | Owner's inbox with release notes, owned and shared watches with config, rules with filters, deliveries without logs | Credentials, channel targets, scripts, audit, other users, admin, other keys |
+| read | Owner's inbox with release notes, owned and shared watches with config, rules with filters, deliveries with their channel's name and without logs or errors | Credentials, channel targets, scripts, audit, other users, admin, other keys |
 | write | Also inbox state, and scheduling a run of a watch the owner can write | Creating or changing anything else |
-| manage | Also channel names, creating and editing rules and watches, within the host and credential rules above | Credentials, channel targets, delete, shares |
+| manage | Also the list of channels, creating and editing rules and watches, within the host and credential rules above | Credentials, channel targets, delete, shares |
 
 Bounded by expiry (none on a `never` key), the sign-in freshness check and revocation.
 
-**Logging.** One `mcp_tool_call` line per call: key ID, user ID, tool, outcome, duration. Never the key, the
+**Logging.** One `mcp_tool_call` line per call: request ID, key ID, user ID, tool, outcome, duration. Never the key, the
 `Authorization` header or the arguments. The SDK gets no logger. Metrics: `gedour_mcp_tool_calls_total{tool,outcome}`,
 `gedour_mcp_auth_failures_total`. The audit stores key ID, name, scope and expiry, never the key or its hash.
 
@@ -215,7 +215,7 @@ covers them.
 legitimate proxy hop on loopback (checked in phase 2), since Origin and the dev-mode check cover the same risk.
 
 **Discovery probes.** `GET /` serves the SPA on any path, so `/.well-known/oauth-protected-resource/mcp` would
-answer HTML with 200 to a client probing for OAuth. `GET /.well-known/` answers 404.
+answer HTML with 200 to a client probing for OAuth. `GET /.well-known/` and `GET /mcp/` answer 404, the latter for path-suffixed probes.
 
 **CSP.** Unchanged. `/mcp` returns JSON behind `secureHeaders`. The page uses the native `<dialog>` and no inline
 style. The e2e CSP guard covers it.
@@ -225,7 +225,7 @@ Every 401 has the same body, whether the key is unknown, revoked, expired or its
 
 ### Prompt injection
 
-Release notes, titles, tags, watch errors and delivery errors come from third parties and reach an LLM. MCP has
+Release notes, titles, tags and watch errors come from third parties and reach an LLM. MCP has
 no taint field, and no marking stops a model that decides to obey. So the defence comes in two layers.
 
 1. **What an injection can do through gedour is limited by the catalog.** No tool opens a new destination: no
@@ -246,8 +246,9 @@ Data from third-party sources (release notes, tags, titles, error messages). Rep
 
 - The nonce is random per response, so a payload cannot close the fence.
 - `structuredContent` holds `{"trust": "untrusted_third_party", "data": ...}`.
-- Before both, every string, map keys included, loses C0 and C1 controls except tab, LF and CR, bidi controls
-  (U+202A to U+202E, U+2066 to U+2069), U+200B, U+FEFF and Unicode tags (U+E0000 to U+E007F).
+- Before both, every string, map keys included, loses C0 and C1 controls except tab, LF and CR, every format
+  character (Unicode category Cf: bidi controls, zero-width characters, U+FEFF, Unicode tags) and the line and
+  paragraph separators U+2028 and U+2029. Emoji joined by U+200D come apart. Variation selectors and other blank characters stay: this removes known smuggling characters, not every invisible one.
 - `ServerOptions.Instructions` and each list tool's description repeat the warning.
 - Annotations set `readOnlyHint` so clients can gate writes. The spec says clients treat annotations as
   untrusted, so this helps only clients that trust gedour.
@@ -299,7 +300,7 @@ Transport and auth:
 - [ ] **AC18** Absent Origin passes. A listed Origin passes. Any other gets 403 without touching the key table. In dev mode a non-loopback Host gets 403.
 - [ ] **AC19** No key, a malformed key, an unknown, revoked or expired key, and a disabled owner's key all get an identical 401 with `WWW-Authenticate: Bearer` and no `resource_metadata`. A key in the query string is ignored. A valid session cookie on `/mcp` gets 401.
 - [ ] **AC20** A database failure during lookup answers 5xx, never 401.
-- [ ] **AC21** `GET /.well-known/oauth-protected-resource/mcp` and `GET /.well-known/oauth-authorization-server` get 404, not HTML.
+- [ ] **AC21** `GET /.well-known/oauth-protected-resource/mcp` `GET /.well-known/oauth-authorization-server` and `GET /mcp/.well-known/oauth-protected-resource` get 404, not HTML.
 - [ ] **AC22** A session cookie on an `/api` mutation without CSRF still gets 403, with or without a bearer key beside it. A bearer key alone on any `/api` path but the public ones gets 401.
 
 Tools:
@@ -309,12 +310,12 @@ Tools:
 - [ ] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog.
 - [ ] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`. A REST audit row has `api_key_id` null. The audit view shows the key's name, or its ID once the key is gone.
 - [ ] **AC27** Every successful result fences its text with a nonce differing between two calls, and `structuredContent` has `trust` and `data`. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
-- [ ] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+FEFF, U+E0041), in a value and in a map key, comes out without it, in text and in `structuredContent`. Tab and newline stay.
-- [ ] **AC29** `list_inbox` cuts a 64 KiB body at 8 KiB and says so; `list_deliveries` has no `logs`; `limit` above the tool's max gets `isError`; a result over 512 KiB gets `isError` asking for a smaller `limit`.
+- [ ] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it, in text and in `structuredContent`. Tab and newline stay.
+- [ ] **AC29** `list_inbox` cuts a 64 KiB body at 8 KiB and says so; `list_deliveries` has no `logs` and no `last_error`; `list_watches` says `truncated` when it returns as many as its limit; `limit` above the tool's max gets `isError`; a result over 512 KiB gets `isError` asking for a smaller `limit`.
 - [ ] **AC30** Past the burst, `POST /mcp` gets 429 with `Retry-After`, per key. The 7th `run_watch` in a minute gets `isError`. A body over 1 MiB gets 413.
 - [ ] **AC31** Logs captured over the AC15 to AC30 scenarios never contain a key or arguments, and contain one `mcp_tool_call` per call. Both metrics move.
 
-- [ ] **AC40** 7 days or less before a key's effective end, every successful result starts with the matching notice from the Account state section, outside the fence, naming the date and a configured public URL even under a forged `Host`. 8 days before, no notice. A dormant key's message and this notice appear only to a caller holding that key.
+- [ ] **AC40** 7 days or less before a key's effective end, every successful result starts with the matching notice from the Account state section, outside the fence, naming the date and a configured public URL even under a forged `Host` (dev mode: its checked loopback `Host`). 8 days before, no notice. A dormant key's message and this notice appear only to a caller holding that key.
 
 UI and interop:
 
@@ -410,5 +411,6 @@ None. Answered by babs:
 - A `missing_role` denial deletes sessions: a change from 006, where a removed role stays effective until the session ends. It only applies once gedour knows, at a refused sign-in, and it closes a live session minting a new key after the revocation.
 - A wrong roles claim revokes each user's keys at their next sign-in, irreversibly: accepted, as a revoked key is one new key away, and the audit shows the count.
 - Revoked keys count against no cap until cleaned up after 30 days: self-inflicted, it needs a session.
+- A 2026-07-28 request with a version below it that the SDK does not know gets its plain 400; only versions at or above 2026-07-28 get `-32022`.
 - Failed-key attempts get a metric, no IP limiter: guessing is infeasible and client IPs behind a proxy are not trustworthy.
 - Known client risk: [a closed Claude Code report](https://github.com/anthropics/claude-code/issues/80785) describes a static Bearer header failing because the client probed OAuth discovery and choked on the answer. The well-known 404s (AC21) target that; AC33 checks it with a real client.

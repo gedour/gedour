@@ -426,7 +426,7 @@ func (s *Service) previewRule(ctx context.Context, in *previewInput) (*previewOu
 	if err != nil {
 		return nil, err
 	}
-	if !s.previews.allow(me) {
+	if !s.previews.Allow(me) {
 		return nil, huma.ErrorWithHeaders(huma.Error429TooManyRequests("too many previews: slow down"), http.Header{"Retry-After": {"1"}})
 	}
 	src := strings.TrimSpace(in.Body.Filter)

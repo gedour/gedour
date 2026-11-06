@@ -67,7 +67,8 @@ found in the whole notes in `payload.cves`. A rule can then read
   any other field is priced at 4 KiB as before.
 - [x] **AC10** The budget is 4,000,000 units: a 60-instruction pattern on `body` is accepted, a filter above the
   budget is refused on save with its computed cost. On hostile payloads a filter takes about 45 ms and 100 rules
-  about 4.5 s (measured); the timing tests gate at 2.5 times that for slower runners.
+  about 4.5 s (measured); the timing tests gate at 2.5 times that, counted in references run in the same process
+  so a slower runner cancels out.
 - [x] **AC11** While a worst-case rule set evaluates an event, other due watches and deliveries still run on time
   (routing does not block them); if it does, the fix is part of this spec.
 

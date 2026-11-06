@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/expr-lang/expr/ast"
@@ -96,11 +95,11 @@ func bodyShapes(t *testing.T) []string {
 	return s
 }
 
-// A filter measures about 45 ms and a user's 100 rules about 4.5 s on the machine the budget was set on (spec 004,
-// Decisions); these gates are 2.5 times the measured figure, for slower runners.
+// Gates, in references (cost_test.go). The worst shape measures 28 to 31 references with and without the race detector
+// and coverage; a gate is 2.5 times that, since the proportion can differ between CPUs.
 const (
-	filterGate  = 110 * time.Millisecond
-	ruleSetGate = 11 * time.Second
+	filterGate  = 80.0
+	ruleSetGate = 100 * filterGate
 )
 
 // 004-AC10: the budget's exact edge: 60 instructions pass, the first size above the budget is refused

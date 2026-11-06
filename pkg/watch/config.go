@@ -154,6 +154,16 @@ func sameTarget(a, b map[string]any) bool {
 	return reflect.DeepEqual(strip(a), strip(b))
 }
 
+// boxChecked reports a box going from off to on: the run that baselines it must come before the items it should report.
+func boxChecked(before, next map[string]any) bool {
+	for _, k := range boxKeys {
+		if next[k] == true && before[k] != true {
+			return true
+		}
+	}
+	return false
+}
+
 // comparableTarget is a target's host, non-default port and path.
 // Security: only ASCII folds. unicode.ToLower maps U+0130 to i and U+212A to k, and the HTTP client would resolve that homoglyph elsewhere; a non-ASCII host compares as saved, with no IDNA.
 func comparableTarget(raw string) string {

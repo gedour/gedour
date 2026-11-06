@@ -432,6 +432,10 @@ func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMess
 	return insertEvents(ctx, tx, j.id, prevID, events, now)
 }
 
+// maxDedupKey is the longest key stored as is. Longer ones are hashed: a btree row holds 2704 bytes, 28 of them
+// overhead here, and a change of label names (from/to JSON in the subject) has no upper bound.
+const maxDedupKey = 2048
+
 // insertEvents keys each event on the state it diffs from: replaying the same change (a run retried
 // after a crash) inserts nothing new (001-AC9). It returns the types actually inserted.
 func insertEvents(ctx context.Context, tx pgx.Tx, watchID string, prevID int64, events []collect.Event, now time.Time) ([]string, error) {
@@ -445,9 +449,22 @@ func insertEvents(ctx context.Context, tx pgx.Tx, watchID string, prevID int64, 
 		if payload, err = collect.StripNUL(payload); err != nil {
 			return nil, err
 		}
+		key := fmt.Sprintf("%s:%s:%d", e.Type, e.Subject, prevID)
+		if len(key) > maxDedupKey {
+			// PostgreSQL compresses index rows, so a repetitive key far past the limit may be stored raw: a replay collapses on it.
+			var stored bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM events WHERE watch_id = $1 AND dedup_key = $2)`, watchID, key).Scan(&stored); err != nil {
+				return nil, err
+			}
+			if stored {
+				continue
+			}
+			sum := sha256.Sum256([]byte(key))
+			key = "sha256:" + hex.EncodeToString(sum[:])
+		}
 		tag, err := tx.Exec(ctx, `INSERT INTO events (watch_id, type, occurred_at, observed_at, payload, dedup_key)
 			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (watch_id, dedup_key) DO NOTHING`,
-			watchID, e.Type, e.OccurredAt, now, payload, fmt.Sprintf("%s:%s:%d", e.Type, e.Subject, prevID))
+			watchID, e.Type, e.OccurredAt, now, payload, key)
 		if err != nil {
 			return nil, err
 		}

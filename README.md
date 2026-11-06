@@ -295,13 +295,15 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
 - A GitHub repository watch reports releases. Its boxes `new_issues` and `new_prs` (config, default `false`) add
   `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 2 requests
-  instead of 1 (the 50 newest issues and PRs, one list for both boxes). Payload: `number`, `title`, `author`,
+  instead of 1 (the 50 newest issues and PRs, one list for both boxes). A run reports at most those 50: more than
+  that opened between two runs are not reported. Payload: `number`, `title`, `author`,
   `labels` (names, `[]` without any), `url`, `created_at`. A box is not part of the target: toggling one keeps
   the release states, but it is a config change, so on a watch with a credential only its owner may toggle it,
   from the UI. The run stores the numbers listed, one list per checked box, not the items: the first run after a
   box is checked takes its kind as a baseline (an uncheck then a check with no run between keep the list going),
-  and an item numbered at or below the oldest one stored for its kind is not new. To follow an item once opened,
-  add a `github_pr` or `github_issue` watch.
+  and an item numbered at or below the oldest one stored for its kind is not new. Checking a box makes the watch
+  due at once; items opened before that first run succeeds are in its baseline and are not reported. A paused
+  watch takes the baseline when it resumes. To follow an item once opened, add a `github_pr` or `github_issue` watch.
 - A `github_issue` watch (config `repo`, `number`, `api_url`, like `github_pr`) follows one issue: 2 GitHub
   requests per run (3 past 100 comments). Events, each with `number`, `title`, `url`: `issue.state_changed`
   (`from`, `to`: `open` or `closed`, plus `state_reason` as GitHub reports it, e.g. `completed`, `not_planned`,

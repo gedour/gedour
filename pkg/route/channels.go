@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -246,12 +247,12 @@ const (
 // validateConfig normalizes a channel config; it returns field errors, never a server error.
 func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any, []error) {
 	var norm any
-	var errs []error
+	raw, sched, errs := splitDelivery(typ, raw)
 	switch typ {
 	case notify.TypeTelegram:
 		var c notify.TelegramConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		if c.ChatID = strings.TrimSpace(c.ChatID); !chatIDRe.MatchString(c.ChatID) {
 			errs = append(errs, configError("chat_id", "a numeric chat id (e.g. -1001234567890) or @channelname", c.ChatID))
@@ -260,7 +261,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeNextcloudTalk:
 		var c notify.NextcloudTalkConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		c.URL = strings.TrimRight(strings.TrimSpace(c.URL), "/")
 		if msg := s.checkTalkURL(c.URL); msg != "" {
@@ -273,7 +274,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeEmail:
 		var c notify.EmailConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		var to []string
 		for i, a := range c.To {
@@ -296,7 +297,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeWebhook:
 		var c notify.WebhookConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		c.URL = strings.TrimSpace(c.URL)
 		if msg := s.checkTargetURL(c.URL, "https://hooks.example.com/gedour"); msg != "" {
@@ -306,7 +307,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeScript:
 		var c ScriptConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		// Canonical form: the in-use check matches config->>'script_id' as text.
 		if id, err := uuid.Parse(c.ScriptID); err != nil {
@@ -316,8 +317,9 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 		}
 		norm = c
 	case notify.TypeWebPush:
-		norm, errs = validatePushConfig(raw)
-		if norm == nil {
+		var perrs []error
+		norm, perrs = validatePushConfig(raw)
+		if errs = append(errs, perrs...); norm == nil {
 			return nil, errs
 		}
 	default:
@@ -326,6 +328,9 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	b, _ := json.Marshal(norm)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
+	if sched != nil {
+		out["delivery"], out["at"], out["tz"] = deliveryDigest, sched.At, sched.TZ
+	}
 	return out, errs
 }
 
@@ -603,6 +608,11 @@ func (s *Service) updateChannel(ctx context.Context, in *updateChannelInput) (*c
 		}
 		if b.Config != nil && before.Type == notify.TypeWebPush {
 			if err := setPushDevices(ctx, tx, me, in.ID, next.Config); err != nil {
+				return err
+			}
+		}
+		if old, now := scheduleOf(before.Config), scheduleOf(next.Config); b.Config != nil && !reflect.DeepEqual(old, now) {
+			if err := reschedule(ctx, tx, in.ID, now); err != nil {
 				return err
 			}
 		}

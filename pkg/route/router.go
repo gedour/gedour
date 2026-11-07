@@ -20,6 +20,8 @@ const (
 	routeBudget = 2 * time.Second
 	// maxPrograms bounds the compiled filter cache; past it the cache starts over.
 	maxPrograms = 1000
+	// maxLocations bounds the digest time zone cache; past it the cache starts over.
+	maxLocations = 100
 )
 
 // Router turns unrouted events into inbox items and pending deliveries.
@@ -30,11 +32,13 @@ type Router struct {
 	poll    time.Duration
 	budget  time.Duration
 	progs   map[string]*filter.Program
+	locs    map[string]*time.Location
 }
 
 // NewRouter builds a router polling every poll.
 func NewRouter(pool *pgxpool.Pool, log *zap.Logger, m *Metrics, poll time.Duration) *Router {
-	return &Router{pool: pool, log: log, metrics: m, poll: poll, budget: routeBudget, progs: map[string]*filter.Program{}}
+	return &Router{pool: pool, log: log, metrics: m, poll: poll, budget: routeBudget, progs: map[string]*filter.Program{},
+		locs: map[string]*time.Location{}}
 }
 
 // Run routes until ctx ends. An interrupted batch rolls back: its events stay unrouted for the next run.
@@ -196,6 +200,7 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 	env := envOf(x.ev, x.w)
 	// Decided over all of a user's rules before the insert, as the item is written once.
 	items := map[string]string{}
+	var hits []matchRule
 	for _, rule := range rules {
 		matched, err := r.match(rule, env)
 		if err != nil {
@@ -210,11 +215,11 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 			items[rule.owner] = rule.priority
 		}
 		if len(rule.channels) > 0 {
-			if _, err := tx.Exec(ctx, `INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT $1, $2, unnest($3::uuid[])
-				ON CONFLICT (event_id, channel_id) DO NOTHING`, x.ev.ID, rule.id, rule.channels); err != nil {
-				return err
-			}
+			hits = append(hits, rule)
 		}
+	}
+	if err := r.insertDeliveries(ctx, tx, x.ev.ID, hits); err != nil {
+		return err
 	}
 	for owner, priority := range items {
 		// One item per user per event, however many of their rules match. DO NOTHING: a replay keeps the stored level.
@@ -227,6 +232,90 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 		}
 	}
 	return nil
+}
+
+// insertDeliveries queues one delivery per channel of the matched rules. On a digest channel it waits for
+// the next scheduled time, unless a high priority rule takes it: then it is due now and sent alone (012-AC6).
+func (r *Router) insertDeliveries(ctx context.Context, tx pgx.Tx, event int64, hits []matchRule) error {
+	if len(hits) == 0 {
+		return nil
+	}
+	due, err := r.digestDue(ctx, tx, hits)
+	if err != nil {
+		return err
+	}
+	for _, rule := range hits {
+		at := make([]*time.Time, len(rule.channels))
+		if rule.priority != priorityHigh {
+			for i, c := range rule.channels {
+				if t, ok := due[c]; ok {
+					at[i] = &t
+				}
+			}
+		}
+		// The update only lets a high priority rule take a delivery an earlier rule left waiting for a digest.
+		if _, err := tx.Exec(ctx, `INSERT INTO deliveries (event_id, rule_id, channel_id, next_attempt_at, digest)
+				SELECT $1, $2, u.c, COALESCE(u.t, now()), u.t IS NOT NULL FROM unnest($3::uuid[], $4::timestamptz[]) AS u (c, t)
+			ON CONFLICT (event_id, channel_id) DO UPDATE SET rule_id = EXCLUDED.rule_id, next_attempt_at = EXCLUDED.next_attempt_at, digest = false
+				WHERE deliveries.digest AND NOT EXCLUDED.digest`, event, rule.id, rule.channels, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// digestDue maps the digest channels among the rules' channels to their next scheduled time on the database clock.
+// KEY SHARE on every channel (the delivery FK takes it anyway) waits out an edit in flight; a WHERE on the mode would skip one turning digest.
+func (r *Router) digestDue(ctx context.Context, tx pgx.Tx, hits []matchRule) (map[string]time.Time, error) {
+	var ids []string
+	for _, rule := range hits {
+		ids = append(ids, rule.channels...)
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text, config, now() FROM channels WHERE id = ANY($1::uuid[]) FOR KEY SHARE`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("digest channels: %w", err)
+	}
+	defer rows.Close()
+	due := map[string]time.Time{}
+	for rows.Next() {
+		var id string
+		var cfg map[string]any
+		var now time.Time
+		if err := rows.Scan(&id, &cfg, &now); err != nil {
+			return nil, fmt.Errorf("digest channels: %w", err)
+		}
+		sched := scheduleOf(cfg)
+		if sched == nil {
+			continue
+		}
+		t, err := sched.next(now, r.location)
+		if err != nil {
+			// A bad stored schedule must not stall routing: the delivery goes out now instead.
+			r.log.Warn("digest_schedule_invalid", zap.String("channel_id", id), zap.Error(err))
+			continue
+		}
+		due[id] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("digest channels: %w", err)
+	}
+	return due, nil
+}
+
+// location caches time.LoadLocation, which reads zoneinfo on every call.
+func (r *Router) location(name string) (*time.Location, error) {
+	if l, ok := r.locs[name]; ok {
+		return l, nil
+	}
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.locs) >= maxLocations {
+		r.locs = map[string]*time.Location{}
+	}
+	r.locs[name] = l
+	return l, nil
 }
 
 func (r *Router) match(rule matchRule, env filter.Env) (bool, error) {

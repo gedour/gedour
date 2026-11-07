@@ -129,26 +129,29 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
 
 - Admins (`GEDOUR_OIDC_ADMIN_ROLE` at sign-in, or the dev user) get an Administration entry in the
   navigation: every account with its last sign-in (never-signed-in first, then oldest), status (active,
-  disabled, purged) and what it owns (watches, shared ones apart, channels, rules, scripts, credentials).
+  disabled, purged) and what it owns (watches, channels, rules, scripts, credentials).
 - Disable (not your own account): every session of the account ends at once (its next call gets 401),
   its API keys are revoked for good (enabling does not bring them back),
   its sign-in is refused with "No access to gedour" (`user.login_denied`, reason `disabled`), its rules
   route nothing and it gets no inbox items. Deliveries already queued for its channels end unsent
-  ("not sent: the channel's owner is disabled"). Its data stays; watches it shares keep collecting for the
-  users they are shared with.
-- Enable restores sign-in and routing for new events. What was skipped while disabled is not replayed.
+  ("not sent: the channel's owner is disabled"). Its watches stop collecting until it is enabled again. Its
+  data stays.
+- Enable restores sign-in, routing for new events and collection. A due time that passed while disabled
+  moves to now; a future one (a rate-limit hold) stays, and so does a leased watch's. The next run reports what changed
+  since the watch's last run, as far as the forge still lists it. Inbox items skipped while disabled are not
+  replayed; the owner can retry dead deliveries by hand.
 - Both are audited (`user.disable`, `user.enable`) with the status before and after; a disable also holds
   `revoked_api_key_count` when it revoked any.
 - Transfer (an account's watch count opens its watches): the watch goes to another active account. Its
   credential goes with it, renamed `<name> (transferred)` (then `(transferred 2)`, ...) on a name clash;
   the secret still decrypts. A credential another watch of the old owner uses refuses the transfer (409,
-  those watches listed). The new owner's share on the watch is dropped, other users keep theirs. The old
-  owner loses access; its rules targeting that watch stay and route nothing while it cannot read the watch
-  (a share or a transfer back restores routing).
+  those watches listed). A due time gone stale moves to now. The old
+  owner loses access; its rules targeting that watch stay and route nothing while it does not own the watch
+  (a transfer back restores routing).
   Audited as `watch.transfer` (owners, credential; never the secret).
 - Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
-  scripts, credentials, API keys, shares and inbox, and blanks its email and name. Other users lose the watches it
-  shared with them and their rules on those watches; the confirmation lists both. The account row stays
+  scripts, credentials, API keys and inbox, and blanks its email and name. It also deletes the rules other
+  users still hold on its watches after a transfer; the confirmation lists them. The account row stays
   as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
   append-only and untouched: entries written before the purge (such as the account's creation) keep
   what they recorded. Audited as `user.purge` with the deleted counts, never the email or name.
@@ -181,9 +184,9 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
-| `read` (default) | Your inbox with release notes, owned and shared watches with their config, their owner's name and ID and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
-| `write` | Also inbox state, and scheduling a run of a watch you can write | Creating or changing anything else |
-| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete, shares |
+| `read` (default) | Your inbox with release notes, your watches with their config and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
+| `write` | Also inbox state, and scheduling a run of one of your watches | Creating or changing anything else |
+| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete |
 
 A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, route events to your existing
 channels, and put a watch name of its choosing, and text and links from a repository it controls, in their
@@ -222,7 +225,7 @@ Or in `.mcp.json`, with the key in an environment variable:
 |---|---|---|
 | `count_inbox` | Unread inbox items | |
 | `list_inbox` | Inbox items with their event; a body over 8 KiB is cut and says so | default 20, max 50 |
-| `list_watches` | Owned and shared watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
+| `list_watches` | Your watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
 | `get_watch` | One watch | |
 | `list_watch_events` | A watch's events | max 50 |
 | `list_watch_states` | A watch's observed states | max 50 |
@@ -231,7 +234,7 @@ Or in `.mcp.json`, with the key in an environment variable:
 | `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
 | `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
 | `archive_inbox`, `unarchive_inbox` | Archive items or take them back: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
-| `run_watch` | Schedules a run of a watch the owner can write and does not wait; refused on a paused watch, a read-only share, or while the upstream's rate limit holds the watch | `write` key; shared budget |
+| `run_watch` | Schedules a run of one of your watches and does not wait; refused on a paused watch, or while the upstream's rate limit holds the watch | `write` key; shared budget |
 | `get_filter_reference` | What a rule's filter may use, and its limits | `manage` key |
 | `list_channels` | Your channels: ID, name and type, nothing else | `manage` key |
 | `create_watch` | Creates a watch without a credential | `manage` key; shared budget; refused past 200 owned watches |
@@ -247,7 +250,7 @@ A `manage` key has three refusals, because a config decides where gedour sends r
 
 - **No credential**: `create_watch` and `update_watch` refuse `credential_id`, even one you hold, and cannot detach one. A private repository starts in the UI.
 - **No retarget of a watch with a credential**: its config cannot change through a key, yours included, or an injected prompt could send your token to another host. Name, schedule and paused still work.
-- **Known hosts only**: `api_url`, `base_url` and `registry` must name, with no path, the kind's default (GitHub kinds `api.github.com`, GitLab kinds `gitlab.com`, `oci_tags` `docker.io` or `ghcr.io`), or the host and path of a watch you own, not one shared with you. A default on another kind is refused, even if a watch of yours saved it. A new host or path starts in the UI, so a URL cannot carry data to an attacker's server, nor through a known host's redirect. Targets compare exactly, after folding ASCII host case, a trailing dot, a default port and a trailing `/`. `?` and `#` are refused for everyone. A non-ASCII host compares as it was saved: its punycode form is another host, and a homoglyph of a known host is refused.
+- **Known hosts only**: `api_url`, `base_url` and `registry` must name, with no path, the kind's default (GitHub kinds `api.github.com`, GitLab kinds `gitlab.com`, `oci_tags` `docker.io` or `ghcr.io`), or the host and path of a watch you own. A default on another kind is refused, even if a watch of yours saved it. A new host or path starts in the UI, so a URL cannot carry data to an attacker's server, nor through a known host's redirect. Targets compare exactly, after folding ASCII host case, a trailing dot, a default port and a trailing `/`. `?` and `#` are refused for everyone. A non-ASCII host compares as it was saved: its punycode form is another host, and a homoglyph of a known host is refused.
 
 While the upstream's rate limit holds a watch, a key's `update_watch` leaves its next run where it is: a new schedule, an unpause or a new config take effect, the run waits. A session's edit still runs it at once.
 
@@ -275,6 +278,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
+  Watches of a disabled owner are not claimed, and `gedour_watches_due` leaves them out.
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
   `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
   the watch reads `running: true`, and the request is kept for when the run ends, unless that run ends on the upstream's rate limit, which sets the next run; a changed target still runs at once.
@@ -346,8 +350,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `event.type` or targets a watch. New issues and PRs carry their label names in `payload.labels`:
   `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
-- The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule whose owner can
-  read the watch now (own or shared) is evaluated; a match adds one inbox item per user and one delivery
+- The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule of the watch's
+  owner now, on that watch or on all watches, is evaluated; a match adds one inbox item and one delivery
   per channel. A filter failing on an event counts as no match (`gedour_rule_eval_errors_total`).
   A rule's `priority` is `normal` or `high`: an event taken by a high rule of a user is high in that user's
   inbox, with a badge and a "High priority" filter, for example on `len(event.payload.cves) > 0`. The level is
@@ -355,7 +359,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   Events stored before this version are not routed.
 - Deliveries retry after 30 s, 2 min, 10 min and 30 min; the 5th failure is final (`dead`). A failed or
   dead delivery can be retried by hand. Lease and backoff use the database clock. A delivery whose
-  channel owner can no longer read the watch is not sent (`dead`). On SIGTERM, sends in flight get
+  channel owner no longer owns the watch is not sent (`dead`). On SIGTERM, sends in flight get
   `GEDOUR_SHUTDOWN_TIMEOUT`; past it they are cancelled and released, not counted as attempts.
 - Webhooks: `POST` JSON `{delivery_id, event, watch, rule, sent_at}` with `X-Gedour-Signature:
   sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
@@ -587,6 +591,22 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 `K8S_SMOKE_PORT`, `K8S_SMOKE_FAKE_PORT`, `COMPOSE_SMOKE_PORT`, `COMPOSE_SMOKE_METRICS_PORT`,
 `COMPOSE_SMOKE_DB_PORT`.
 
+## Upgrading
+
+- Watch sharing is gone (migration 17). The upgrade deletes every watch share. Each user a watch was shared
+  with loses their rules pinned to it, and their inbox items and deliveries for its events. The owner keeps
+  everything. Each removed share leaves a system `watch_share.removed` audit entry, readable by the watch
+  owner, with the user and permission.
+- During a rolling update, pods of the previous version answer 500 on every route that reads watches
+  (watches, inbox, rules, deliveries, script test events, audit, admin) until they are replaced, and their
+  router and delivery loops fail; collection carries on. No event is lost: the new workers route what the
+  old ones could not. A delivery an old worker loads in that window may spend one retry.
+- Rollback: deploy the older image first. It starts on the migrated database but fails those same routes.
+  Once no pod of the new version runs (web and worker), run migration 17's `Down` section by hand (`psql`)
+  and delete version 17 from `goose_db_version`: a new-version pod starting before that would apply 17
+  again. Shares come back as an empty table. Only a backup taken before the upgrade restores the deleted
+  rules, inbox items and deliveries.
+
 ## Endpoints
 
 - `GET /healthz`: 200 when PostgreSQL answers, 503 otherwise.
@@ -603,20 +623,18 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   A missing or stale token answers 403 problem+json with `title: "CSRF token invalid"`; refetch
   `/api/v1/me` and retry once.
 - `GET /api/v1/audit`: audit entries, newest first (`target_type`, `actor`, `from`, `to`, `cursor`, `limit`).
-  A user sees what they did, plus entries on watches they can read now and on their credentials; share
-  entries go to the watch owner and, for their own share only, to the sharee. `GET /api/v1/audit/actors`: the actors of those entries.
-- `/api/v1/watches` (`GET ?kind=&q=&shared=mine|with_me|all`, `POST`), `/api/v1/watches/{id}` (`GET`,
+  A user sees what they did or what was done as them, plus entries on the watches, credentials, channels, rules
+  and deliveries (through the channel) they own now. `watch_share` entries from before migration 17, the
+  upgrade's system entries included, go to the watch owner. `GET /api/v1/audit/actors`: the actors of those entries.
+- `/api/v1/watches` (`GET ?kind=&q=`, `POST`), `/api/v1/watches/{id}` (`GET`,
   `PATCH`, `DELETE`), `POST /api/v1/watches/{id}/pause|resume`. A watch carries its run status:
   `next_run_at`, `running` (true while a worker holds the claim), `last_run_at`, `last_status` (`ok`, `error`,
   `rate_limited`), `last_error`, `consecutive_failures`.
 - `GET /api/v1/watches/{id}/events?cursor=&limit=`: events, newest first. `GET /api/v1/watches/{id}/states?limit=`:
-  state history, latest first. `POST /api/v1/watches/{id}/run` (read-write share or owner, 409 when paused):
+  state history, latest first. `POST /api/v1/watches/{id}/run` (409 when paused):
   runs at the next poll. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
-  watch the caller owns or shares read-write and answers `{scheduled}`.
-- `/api/v1/watches/{id}/shares` (`GET`, `POST {email, permission}`), `/api/v1/watches/{id}/shares/{user_id}`
-  (`PUT {permission}`, `DELETE`). Shares are `ro` (read) or `rw` (edit, pause; not credential, sharing or
-  delete; not the config of a watch that uses the owner's credential). A sharee lists only their own
-  share. A watch the caller cannot read answers 404, one they cannot change 403.
+  watch the caller owns and answers `{scheduled}`.
+- Watches are private to their owner: another user's watch answers 404 on every watch route, as an unknown one does.
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
   it), `PUT /api/v1/credentials/{id}/secret`. Secrets are write-only; responses carry `last4` (empty for
   secrets under 16 characters). Credentials are private to their owner.
@@ -628,18 +646,18 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.
   Secrets are write-only (`last4` only).
 - `/api/v1/rules` (`GET`, `POST`), `/api/v1/rules/{id}` (`GET`, `PATCH`, `DELETE`),
-  `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 readable events in scope.
+  `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 events of your watches in scope.
   `GET /api/v1/filters/reference`: what a filter may use, and its limits.
 - `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
 - `/api/v1/scripts` (`GET` without sources, `POST`), `/api/v1/scripts/{id}` (`GET`, `PATCH`, `DELETE`),
   `POST /api/v1/scripts/{id}/dry-run` and `POST /api/v1/scripts/dry-run {source}`, each with
-  `{event_id}` (a readable event) or `{sample: {type, payload, occurred_at, watch}}`: answers
+  `{event_id}` (an event of one of your watches) or `{sample: {type, payload, occurred_at, watch}}`: answers
   `{ok, outcome, error, logs, result, fetches, duration_ms}`.
 - `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&cursor=`, `GET /api/v1/inbox/count`,
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
-  tests and delivery retries are audited. Inbox items and deliveries of a watch the user can no longer
-  read are hidden, and a rule's `watch_name` is null then.
+  tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer
+  owns are hidden, and a rule's `watch_name` is null then.
 
 - `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/disable|enable` (204; 404 unknown account; 409
   on your own account, a purged one, or one already in the asked state). Every `/api/v1/admin/` call needs

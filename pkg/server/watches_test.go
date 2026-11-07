@@ -844,7 +844,7 @@ func TestWatchWriteReadsLockedRow(t *testing.T) {
 	}
 }
 
-// 001-AC5: reads take no row lock: a watch held by a write still reads at once.
+// Reads take no row lock, so a watch held by a write still reads at once.
 func TestWatchReadsDoNotWait(t *testing.T) {
 	a := newDevApp(t)
 	ctx := context.Background()

@@ -84,8 +84,9 @@ A disabled account's watches stop collecting: without sharing, their events reac
   `pkg/server/noshare_test.go`, whose `shareNames` holds the pattern and enforces it.
 - [ ] **AC14** README, AGENTS.md and `specs/README.md` describe no sharing; AGENTS.md's lock order has
   no `addShare` and no share wait. `grep -niE 'shar(e|es|ing)\b|shared with' README.md AGENTS.md`
-  matches only PostgreSQL lock modes (`FOR SHARE`, `KEY SHARE`); in `specs/README.md` only the
-  001 and 006 rows name sharing, to say 009 removed it.
+  matches only PostgreSQL lock modes (`FOR SHARE`, `KEY SHARE`), unrelated wording ("share the
+  load"), the README's upgrade note on the removal and the `watch_share` audit target type of old
+  entries; in `specs/README.md` only the 001 and 006 rows name sharing, to say 009 removed it.
 
 ## Phases
 
@@ -128,13 +129,16 @@ A disabled account's watches stop collecting: without sharing, their events reac
 
 ## Rollout and rollback
 
-- Rolling update: while old pods run next to a migrated database, their watch, inbox and routing
-  queries fail with 500 because `watch_shares` is gone. Events are not lost: a failed routing
-  transaction leaves them unrouted, and the new workers route them. A delivery loaded by an old worker
-  in that window may spend one retry.
-- Rollback: an older image starts on a version-17 database, since goose ignores versions it does not
-  know, but it fails on every watch query. Run migration 17's down section by hand (`psql`), delete
-  version 17 from `goose_db_version`, then deploy the older image. Shares come back empty.
+- Rolling update: until they are replaced, pods of the previous version answer 500 on every route that
+  reads watches (watches, inbox, rules, deliveries, script test events, audit, admin), and their router
+  and delivery loops fail; collection carries on. Events are not lost: a failed routing transaction
+  leaves them unrouted, and the new workers route them. A delivery loaded by an old worker in that
+  window may spend one retry.
+- Rollback: deploy the older image first. It starts on a version-17 database, since goose ignores
+  versions it does not know, but fails those same routes. Once no pod of the new version runs (web and
+  worker), run migration 17's down section by hand (`psql`) and delete version 17 from
+  `goose_db_version`: a new-version pod starting before that would apply 17 again. Shares come back
+  empty.
 - The deleted rules, inbox items and deliveries come back only from a database backup taken before
   the upgrade. Share rows can be rebuilt by hand from the audit log: each `watch_share.removed` row
   holds the user and permission.

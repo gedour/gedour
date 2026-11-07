@@ -148,7 +148,6 @@ describe("WatchFormPage (new)", () => {
       "/api/v1/credentials": { items: [credential()] },
       "/api/v1/watches": () => new Promise<Response>((r) => (release = r)),
       "/api/v1/watches/w9": watch({ id: "w9", name: "Mine" }),
-      "/api/v1/watches/w9/shares": { items: [] },
     });
     renderApp("/watches/new");
     await userEvent.selectOptions(
@@ -206,15 +205,15 @@ describe("WatchFormPage (new)", () => {
 });
 
 describe("WatchFormPage (edit)", () => {
+  // 009-AC10: no read-only branch: the config and the credential stay editable.
   it("edits name and config; the kind is locked", async () => {
     let saved = false;
     const fn = mockApi({
-      "/api/v1/credentials": { items: [] },
+      "/api/v1/credentials": { items: [credential()] },
       "/api/v1/watches/w1": (_: URL, init?: RequestInit) => {
         saved ||= init?.method === "PATCH";
-        return Response.json(saved ? watch({ name: "Renamed" }) : watch());
+        return Response.json(saved ? watch({ name: "Renamed" }) : watch({ credential_id: "c1" }));
       },
-      "/api/v1/watches/w1/shares": { items: [] },
     });
     renderApp("/watches/w1/edit");
     const name = await screen.findByLabelText("Name");
@@ -223,85 +222,27 @@ describe("WatchFormPage (edit)", () => {
     expect(screen.queryByLabelText(/Paste a URL/)).not.toBeInTheDocument();
     await userEvent.clear(name);
     await userEvent.type(name, "Renamed");
+    await screen.findByRole("option", { name: "GitHub bot (••••cdef)" });
+    expect(screen.getByLabelText("Credential (optional)")).toHaveValue("c1");
+    await userEvent.clear(screen.getByLabelText("Repository"));
+    await userEvent.type(screen.getByLabelText("Repository"), "golang/tools");
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Renamed" })).toBeInTheDocument();
     expect(lastCall(fn, "/api/v1/watches/w1", "PATCH")?.body).toEqual({
       name: "Renamed",
       config: {
-        repo: "golang/go",
+        repo: "golang/tools",
         include_prereleases: false,
         new_issues: false,
         new_prs: false,
         api_url: "https://api.github.com",
       },
       schedule: "15m",
-      credential_id: "",
+      credential_id: "c1",
     });
   });
 
-  // 001-AC5: a rw sharee edits without the credential field; ro gets no form.
-  it("hides the credential from a read-write sharee", async () => {
-    let name = "A";
-    const fn = mockApi({
-      "/api/v1/watches/w1": (_: URL, init?: RequestInit) => {
-        if (init?.method === "PATCH") name = "B";
-        return Response.json(watch({ permission: "rw", name }));
-      },
-      "/api/v1/watches/w1/shares": { items: [] },
-    });
-    renderApp("/watches/w1/edit");
-    await screen.findByLabelText("Name");
-    expect(screen.queryByLabelText("Credential (optional)")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { level: 1, name: "B" });
-    expect(lastCall(fn, "/api/v1/watches/w1", "PATCH")?.body).not.toHaveProperty("credential_id");
-    expect(lastCall(fn, "/api/v1/credentials")).toBeUndefined();
-  });
-
-  // 001-AC5: the owner's credential pins the target; a rw sharee keeps name and schedule only.
-  it("locks the config of a credentialed watch for a read-write sharee", async () => {
-    let name = "A";
-    const fn = mockApi({
-      "/api/v1/watches/w1": (_: URL, init?: RequestInit) => {
-        if (init?.method === "PATCH") name = "B";
-        return Response.json(
-          watch({ permission: "rw", credential_id: "c1", owner_name: "Alice", name }),
-        );
-      },
-      "/api/v1/watches/w1/shares": { items: [] },
-    });
-    renderApp("/watches/w1/edit");
-    const repo = await screen.findByLabelText("Repository");
-    expect(repo).toHaveAttribute("readonly");
-    expect(repo).toHaveAccessibleDescription(
-      /^The config is read-only: this watch uses a credential of Alice, so only they can change it\./,
-    );
-    expect(screen.getByRole("checkbox", { name: "Include pre-releases" })).toBeDisabled();
-    expect(screen.getByLabelText("Name")).not.toHaveAttribute("readonly");
-    expect(screen.getByLabelText("Schedule", { exact: true })).not.toHaveAttribute("readonly");
-    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { level: 1, name: "B" });
-    const body = lastCall(fn, "/api/v1/watches/w1", "PATCH")?.body;
-    expect(body).not.toHaveProperty("config");
-    expect(body).toMatchObject({ name: "A", schedule: "15m" });
-  });
-
-  it("keeps the config editable for a rw sharee when no credential is attached", async () => {
-    mockApi({
-      "/api/v1/watches/w1": watch({ permission: "rw" }),
-      "/api/v1/watches/w1/shares": { items: [] },
-    });
-    renderApp("/watches/w1/edit");
-    expect(await screen.findByLabelText("Repository")).not.toHaveAttribute("readonly");
-    expect(screen.queryByText(/config is read-only/)).not.toBeInTheDocument();
-  });
-
-  it("refuses a read-only share, a missing watch, and reports load errors", async () => {
-    mockApi({ "/api/v1/watches/w1": watch({ permission: "ro" }) });
-    const { unmount } = renderApp("/watches/w1/edit");
-    expect(await screen.findByText("This watch is shared with you read-only.")).toBeInTheDocument();
-    unmount();
-
+  it("shows a missing watch as not found and reports load errors", async () => {
     mockApi({ "/api/v1/watches/w2": () => problem(404, "watch not found") });
     const second = renderApp("/watches/w2/edit");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument();

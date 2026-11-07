@@ -76,7 +76,7 @@ func (s *Service) registerActivity(api huma.API) {
 
 type runAllOutput struct {
 	Body struct {
-		Scheduled int `json:"scheduled" doc:"Watches made due now: owned or shared read-write, paused ones left out"`
+		Scheduled int `json:"scheduled" doc:"Watches made due now: the caller's, paused ones left out"`
 	}
 }
 
@@ -90,8 +90,7 @@ func (s *Service) runAll(ctx context.Context, _ *struct{}) (*runAllOutput, error
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// Locked in id order (AGENTS.md), as a purge locks the owner's watches.
 		rows, err := tx.Query(ctx, `UPDATE watches w SET next_run_at = now()
-			WHERE w.id IN (SELECT x.id FROM watches x WHERE NOT x.paused AND (x.owner_id = $1 OR EXISTS (SELECT 1 FROM watch_shares s
-				WHERE s.watch_id = x.id AND s.user_id = $1 AND s.permission = 'rw')) ORDER BY x.id FOR NO KEY UPDATE)
+			WHERE w.id IN (SELECT x.id FROM watches x WHERE NOT x.paused AND x.owner_id = $1 ORDER BY x.id FOR NO KEY UPDATE)
 			RETURNING w.id::text`, me)
 		if err != nil {
 			return err
@@ -128,7 +127,7 @@ func (s *Service) listEvents(ctx context.Context, in *listEventsInput) (*listEve
 	if err != nil {
 		return nil, err
 	}
-	if _, err := authorize(ctx, s.pool, me, in.ID, levelRead, false); err != nil {
+	if _, err := authorize(ctx, s.pool, me, in.ID, false); err != nil {
 		return nil, s.fail("list-watch-events", err)
 	}
 	before := int64(1<<63 - 1)
@@ -163,7 +162,7 @@ func (s *Service) listStates(ctx context.Context, in *listStatesInput) (*listSta
 	if err != nil {
 		return nil, err
 	}
-	if _, err := authorize(ctx, s.pool, me, in.ID, levelRead, false); err != nil {
+	if _, err := authorize(ctx, s.pool, me, in.ID, false); err != nil {
 		return nil, s.fail("list-watch-states", err)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT id, observed_at, state FROM watch_states WHERE watch_id = $1 ORDER BY id DESC LIMIT $2`,
@@ -189,7 +188,7 @@ func (s *Service) runWatch(ctx context.Context, in *idPath) (*watchOutput, error
 	}
 	var w Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		before, err := authorize(ctx, tx, me, in.ID, levelWrite, true)
+		before, err := authorize(ctx, tx, me, in.ID, true)
 		if err != nil {
 			return err
 		}
@@ -202,7 +201,7 @@ func (s *Service) runWatch(ctx context.Context, in *idPath) (*watchOutput, error
 		if _, err := tx.Exec(ctx, `UPDATE watches SET next_run_at = now() WHERE id = $1`, in.ID); err != nil {
 			return err
 		}
-		if w, err = authorize(ctx, tx, me, in.ID, levelRead, false); err != nil {
+		if w, err = authorize(ctx, tx, me, in.ID, false); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.run_requested", TargetType: "watch", TargetID: in.ID, After: w.Spec})

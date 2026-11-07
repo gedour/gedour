@@ -94,7 +94,7 @@ type SampleWatch struct {
 type dryRunInput struct {
 	ID   string `path:"id" format:"uuid"`
 	Body struct {
-		EventID *int64       `json:"event_id,omitempty" minimum:"1" doc:"An event the caller can read; or give sample"`
+		EventID *int64       `json:"event_id,omitempty" minimum:"1" doc:"An event of one of the caller's watches; or give sample"`
 		Sample  *SampleEvent `json:"sample,omitempty"`
 	}
 }
@@ -102,7 +102,7 @@ type dryRunInput struct {
 type dryRunSourceInput struct {
 	Body struct {
 		Source  string       `json:"source" maxLength:"65536" doc:"Unsaved code to run"`
-		EventID *int64       `json:"event_id,omitempty" minimum:"1" doc:"An event the caller can read; or give sample"`
+		EventID *int64       `json:"event_id,omitempty" minimum:"1" doc:"An event of one of the caller's watches; or give sample"`
 		Sample  *SampleEvent `json:"sample,omitempty"`
 	}
 }
@@ -434,7 +434,7 @@ func (s *Service) deleteScript(ctx context.Context, in *idPath) (*struct{}, erro
 // sampleWatchID marks the made-up watch of a sample event.
 const sampleWatchID = "00000000-0000-0000-0000-000000000000"
 
-// dryInput is the delivery a dry run pretends to make: a readable event, or the caller's sample.
+// dryInput is the delivery a dry run pretends to make: an event of one of the caller's watches, or the caller's sample.
 func (s *Service) dryInput(ctx context.Context, me string, eventID *int64, sample *SampleEvent) (notify.Delivery, error) {
 	var d notify.Delivery
 	switch {
@@ -453,7 +453,7 @@ func (s *Service) dryInput(ctx context.Context, me string, eventID *int64, sampl
 		FROM events e JOIN watches w ON w.id = e.watch_id WHERE e.id = $1 AND `+watch.ReadableSQL("w", "$2::uuid"), *eventID, me).
 		Scan(&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &d.Watch.ID, &d.Watch.Name, &d.Watch.Kind)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return d, huma.Error400BadRequest("invalid dry run", &huma.ErrorDetail{Location: "body.event_id", Message: "no such event among the ones you can read", Value: *eventID})
+		return d, huma.Error400BadRequest("invalid dry run", &huma.ErrorDetail{Location: "body.event_id", Message: "no such event among your watches' events", Value: *eventID})
 	}
 	if err != nil {
 		return d, err

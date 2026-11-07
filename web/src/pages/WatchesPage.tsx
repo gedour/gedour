@@ -9,20 +9,14 @@ import { ErrorState } from "@/components/ErrorState";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { inputClass } from "@/components/ui/field";
-import {
-  DeleteWatchWarning,
-  KindIcon,
-  PausedBadge,
-  SharedBadge,
-  StatusDot,
-} from "@/components/WatchBits";
+import { DeleteWatchWarning, KindIcon, PausedBadge, StatusDot } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { problemText } from "@/lib/problems";
 import { describeSchedule, KINDS, targetSummary } from "@/lib/watchKinds";
 import { nextRunLabel } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
-import type { SharedFilter, Watch, WatchKind } from "@/types/api";
+import type { Watch, WatchKind } from "@/types/api";
 
 // The search term, marked in the name and target a row shows. The server also matches the whole
 // config, so a row can match with no mark.
@@ -48,12 +42,6 @@ function Highlight({ text }: { text: string }) {
   parts.push(text.slice(at));
   return parts;
 }
-
-const SHARED: { value: SharedFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "mine", label: "Mine" },
-  { value: "with_me", label: "Shared with me" },
-];
 
 export function NewWatchButton({ ref }: { ref?: Ref<HTMLAnchorElement> }) {
   return (
@@ -85,7 +73,7 @@ function RunAllButton() {
     <Button
       variant="outline"
       disabled={run.isPending}
-      title="Run every watch you can run now; paused ones are skipped"
+      title="Run every watch now; paused ones are skipped"
       onClick={() => run.mutate()}
     >
       <Play aria-hidden className={cn(run.isPending && "animate-pulse")} />
@@ -170,10 +158,9 @@ export function WatchesPage({ item }: { item: NavItem }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<WatchKind | "">("");
-  const [shared, setShared] = useState<SharedFilter>("all");
   const ids = { q: useId(), kind: useId() };
-  const filters = { q: q.trim() || undefined, kind: kind || undefined, shared };
-  const filtered = Boolean(filters.q || filters.kind || shared !== "all");
+  const filters = { q: q.trim() || undefined, kind: kind || undefined };
+  const filtered = Boolean(filters.q || filters.kind);
   const query = useQuery({
     queryKey: ["watches", filters],
     queryFn: () => listWatches(filters),
@@ -182,10 +169,10 @@ export function WatchesPage({ item }: { item: NavItem }) {
     refetchInterval: 30_000,
   });
   const now = new Date();
-  // Only owners can delete; ids hidden by a filter stay selected but out of the action.
-  const owned = (query.data ?? []).filter((w) => w.permission === "owner");
-  const chosen = owned.filter((w) => selected.has(w.id));
-  const allSelected = owned.length > 0 && chosen.length === owned.length;
+  // Ids hidden by a filter stay selected but out of the action.
+  const shown = query.data ?? [];
+  const chosen = shown.filter((w) => selected.has(w.id));
+  const allSelected = shown.length > 0 && chosen.length === shown.length;
   const newWatch = useRef<HTMLAnchorElement>(null);
   const selecting = chosen.length > 0;
   const wasSelecting = useRef(false);
@@ -205,7 +192,6 @@ export function WatchesPage({ item }: { item: NavItem }) {
   const clear = () => {
     setQ("");
     setKind("");
-    setShared("all");
   };
 
   return (
@@ -215,9 +201,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="flex flex-col gap-2">
             <h1 className="font-display text-3xl font-semibold tracking-tight">{item.label}</h1>
-            <p className="max-w-prose text-muted">
-              Things gedour follows upstream for you, and those others share with you.
-            </p>
+            <p className="max-w-prose text-muted">Things gedour follows upstream for you.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <RunAllButton />
@@ -267,26 +251,6 @@ export function WatchesPage({ item }: { item: NavItem }) {
                 </option>
               ))}
             </select>
-          </div>
-          <div
-            role="group"
-            aria-label="Ownership"
-            className="inline-flex h-9 rounded-md border border-line bg-surface p-0.5 shadow-xs"
-          >
-            {SHARED.map((s) => (
-              <button
-                key={s.value}
-                type="button"
-                aria-pressed={shared === s.value}
-                onClick={() => setShared(s.value)}
-                className={cn(
-                  "rounded px-3 text-sm font-medium whitespace-nowrap text-muted transition-colors hover:text-ink",
-                  shared === s.value && "bg-beacon-soft text-ink",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
           </div>
         </form>
 
@@ -342,10 +306,10 @@ export function WatchesPage({ item }: { item: NavItem }) {
                     variant="ghost"
                     size="sm"
                     onClick={() =>
-                      setSelected(allSelected ? new Set() : new Set(owned.map((w) => w.id)))
+                      setSelected(allSelected ? new Set() : new Set(shown.map((w) => w.id)))
                     }
                   >
-                    {allSelected ? "Select none" : `Select all ${owned.length}`}
+                    {allSelected ? "Select none" : `Select all ${shown.length}`}
                   </Button>
                   <Button
                     variant="ghost"
@@ -387,41 +351,37 @@ function WatchRow({
   watch: Watch;
   now: Date;
   selected: boolean;
-  /** Some row is selected: every owned tile shows as a checkbox. */
+  /** Some row is selected: every tile shows as a checkbox. */
   selecting: boolean;
   onToggle: () => void;
 }) {
-  const owner = watch.permission === "owner";
-  const on = owner && selected;
   return (
     <li
       className={cn(
         "flex items-center rounded-xl border border-line bg-surface transition-colors hover:border-beacon/50 hover:bg-beacon-soft/30",
-        on && "border-beacon bg-beacon-soft/40",
+        selected && "border-beacon bg-beacon-soft/40",
       )}
     >
       {/* The kind tile is the selection toggle: a checkbox on hover or focus, and on every
-          owned row once one is selected. */}
+          row once one is selected. */}
       <button
         type="button"
-        aria-pressed={on}
+        aria-pressed={selected}
         aria-label={`Select: ${watch.name}`}
-        title={owner ? undefined : "Only the owner can delete it"}
-        disabled={!owner}
         onClick={onToggle}
-        className="group/tile relative ml-4 grid size-10 shrink-0 place-items-center rounded-lg disabled:cursor-not-allowed"
+        className="group/tile relative ml-4 grid size-10 shrink-0 place-items-center rounded-lg"
       >
         <KindIcon kind={watch.kind} />
         <span
           aria-hidden
           className={cn(
             "absolute inset-0 grid place-items-center rounded-lg border-2 opacity-0 transition-opacity",
-            on ? "border-beacon bg-beacon text-surface" : "border-line bg-surface text-muted",
-            owner && (on || selecting) && "opacity-100",
-            owner && "group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100",
+            selected ? "border-beacon bg-beacon text-surface" : "border-line bg-surface text-muted",
+            (selected || selecting) && "opacity-100",
+            "group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100",
           )}
         >
-          <Check className={cn("size-5", !on && "opacity-40")} />
+          <Check className={cn("size-5", !selected && "opacity-40")} />
         </span>
       </button>
       <Link
@@ -435,7 +395,6 @@ function WatchRow({
               <Highlight text={watch.name} />
             </span>
             {watch.paused && <PausedBadge />}
-            <SharedBadge watch={watch} />
           </span>
           <span className="truncate font-mono text-xs text-muted">
             <Highlight text={targetSummary(watch)} />

@@ -51,7 +51,7 @@ describe("RulesPage", () => {
       await within(items[0] as HTMLElement).findByRole("list", { name: "Channels of Releases" }),
     ).toHaveTextContent("InboxDeploy bot");
     expect(items[1]).toHaveTextContent("Postgres tags·every event");
-    expect(items[2]).toHaveTextContent("A watch you can no longer read");
+    expect(items[2]).toHaveTextContent("A watch you no longer own");
     const sw = screen.getByRole("switch", { name: "Tags enabled" });
     expect(sw).toHaveAttribute("aria-checked", "false");
     await userEvent.click(sw);
@@ -136,7 +136,8 @@ describe("RuleFormPage", () => {
   it("tests the filter against recent events", async () => {
     const fn = mockApi({
       "/api/v1/watches": {
-        items: [watch(), watch({ id: "w2", name: "Shared", permission: "ro", owner_name: "Bob" })],
+        // 009-AC10: every watch of the caller is an option, a paused one too.
+        items: [watch(), watch({ id: "w2", name: "Postgres", paused: true })],
       },
       "/api/v1/rules/preview": {
         items: [
@@ -147,7 +148,9 @@ describe("RuleFormPage", () => {
       },
     });
     renderApp("/rules/new");
-    await screen.findByRole("option", { name: "Shared (shared by Bob)" });
+    await screen.findByRole("option", { name: "Postgres" });
+    // 009-AC10: the rule form names no share.
+    expect(document.body).not.toHaveTextContent(/shar/i);
     await userEvent.selectOptions(screen.getByLabelText("Watches"), "w1");
     await userEvent.click(screen.getByRole("button", { name: "Test against last 20 events" }));
     const table = await screen.findByRole("table", { name: "Preview against recent events" });

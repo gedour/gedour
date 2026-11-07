@@ -64,7 +64,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only) */
+    /** Disable an account: sessions revoked, sign-in refused, rules route nothing, watches stop collecting (admin only) */
     post: operations["admin-disable-user"];
     delete?: never;
     options?: never;
@@ -113,7 +113,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** What purging an account deletes, other users' shared watches and rules included (admin only) */
+    /** What purging an account deletes, other users' rules on its watches included (admin only) */
     get: operations["admin-purge-preview"];
     put?: never;
     post?: never;
@@ -669,7 +669,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Watches the caller owns or that are shared with them */
+    /** Watches the caller owns */
     get: operations["list-watches"];
     put?: never;
     /** Create a watch */
@@ -708,7 +708,7 @@ export interface paths {
     get: operations["get-watch"];
     put?: never;
     post?: never;
-    /** Delete a watch (owner only) */
+    /** Delete a watch */
     delete: operations["delete-watch"];
     options?: never;
     head?: never;
@@ -779,42 +779,6 @@ export interface paths {
     /** Schedule a run now */
     post: operations["run-watch"];
     delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/watches/{id}/shares": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** Users a watch is shared with; a sharee sees only their own share */
-    get: operations["list-watch-shares"];
-    put?: never;
-    /** Share a watch with a user, by exact email (owner only) */
-    post: operations["add-watch-share"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/watches/{id}/shares/{user_id}": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    /** Change a share's permission (owner only) */
-    put: operations["update-watch-share"];
-    post?: never;
-    /** Stop sharing a watch with a user (owner only) */
-    delete: operations["delete-watch-share"];
     options?: never;
     head?: never;
     patch?: never;
@@ -906,12 +870,6 @@ export interface components {
     ActorsOutputBody: {
       items: components["schemas"]["Actor"][] | null;
     };
-    AddShareInputBody: {
-      /** @description Exact email of a user who has signed in at least once */
-      email: string;
-      /** @enum {string} */
-      permission: "ro" | "rw";
-    };
     Admin: {
       display_name: string;
       email: string;
@@ -945,11 +903,6 @@ export interface components {
       rules: number;
       /** Format: int64 */
       scripts: number;
-      /**
-       * Format: int64
-       * @description Owned watches shared with at least one other user, included in watches
-       */
-      shared_watches: number;
       /** Format: int64 */
       watches: number;
     };
@@ -960,11 +913,6 @@ export interface components {
       id: string;
       kind: string;
       name: string;
-      /**
-       * Format: int64
-       * @description Users the watch is shared with
-       */
-      shares: number;
     };
     BuildInfo: {
       /** @description Build time, ISO 8601 */
@@ -1137,7 +1085,7 @@ export interface components {
        * @enum {string}
        */
       priority: "normal" | "high";
-      /** @description A watch the caller can read; empty for all of them */
+      /** @description One of the caller's watches; empty for all of them */
       watch_id?: string;
     };
     CreateScriptInputBody: {
@@ -1255,7 +1203,7 @@ export interface components {
     DryRunInputBody: {
       /**
        * Format: int64
-       * @description An event the caller can read; or give sample
+       * @description An event of one of the caller's watches; or give sample
        */
       event_id?: number;
       sample?: components["schemas"]["SampleEvent"];
@@ -1263,7 +1211,7 @@ export interface components {
     DryRunSourceInputBody: {
       /**
        * Format: int64
-       * @description An event the caller can read; or give sample
+       * @description An event of one of the caller's watches; or give sample
        */
       event_id?: number;
       sample?: components["schemas"]["SampleEvent"];
@@ -1486,10 +1434,6 @@ export interface components {
       /** @description Sorted by name */
       items: components["schemas"]["ScriptSummary"][] | null;
     };
-    ListSharesOutputBody: {
-      /** @description Sorted by email */
-      items: components["schemas"]["Share"][] | null;
-    };
     ListStatesOutputBody: {
       /** @description Latest first; the first item is the current state */
       items: components["schemas"]["StateSnapshot"][] | null;
@@ -1528,7 +1472,7 @@ export interface components {
     };
     PreviewInputBody: {
       filter: string;
-      /** @description Scope like a rule's; empty for every readable watch */
+      /** @description Scope like a rule's; empty for all the caller's watches */
       watch_id?: string;
     };
     PreviewItem: {
@@ -1567,11 +1511,6 @@ export interface components {
       scripts: number;
       /** Format: int64 */
       sessions: number;
-      /**
-       * Format: int64
-       * @description Watches of other users shared with the account
-       */
-      shares_received: number;
       /** Format: int64 */
       watches: number;
     };
@@ -1579,8 +1518,6 @@ export interface components {
       counts: components["schemas"]["PurgeCounts"];
       /** @description Sorted by owner, then name */
       other_rules: components["schemas"]["OtherRule"][] | null;
-      /** @description Sorted by name */
-      shared_watches: components["schemas"]["SharedWatch"][] | null;
     };
     Ref: {
       /** @description Functions; date() takes at most 2 arguments */
@@ -1616,10 +1553,10 @@ export interface components {
       updated_at: string;
       /**
        * Format: uuid
-       * @description Null: every watch the owner can read, owned or shared
+       * @description Null: every watch of the owner
        */
       watch_id: string | null;
-      /** @description Null with a watch_id: the owner can no longer read that watch */
+      /** @description Null with a watch_id: the owner no longer owns that watch */
       watch_name: string | null;
     };
     RuleRef: {
@@ -1630,7 +1567,7 @@ export interface components {
     RunAllOutputBody: {
       /**
        * Format: int64
-       * @description Watches made due now: owned or shared read-write, paused ones left out
+       * @description Watches made due now: the caller's, paused ones left out
        */
       scheduled: number;
     };
@@ -1687,23 +1624,6 @@ export interface components {
       /** @description Write-only, never returned */
       secret: string;
     };
-    Share: {
-      /** Format: date-time */
-      created_at: string;
-      display_name: string;
-      email: string;
-      /** @enum {string} */
-      permission: "ro" | "rw";
-      /** Format: uuid */
-      user_id: string;
-    };
-    SharedWatch: {
-      /** Format: uuid */
-      id: string;
-      name: string;
-      /** @description Names (or emails) of the users it is shared with */
-      shared_with: string[] | null;
-    };
     StateSnapshot: {
       /** Format: int64 */
       id: number;
@@ -1731,8 +1651,6 @@ export interface components {
       credential_moved: boolean;
       /** @description Its name at the new owner, suffixed on a clash */
       credential_name: string | null;
-      /** @description The new owner's share on the watch was removed */
-      dropped_share: boolean;
       /** Format: uuid */
       owner_id: string;
     };
@@ -1753,23 +1671,19 @@ export interface components {
       name?: string;
       /** @enum {string} */
       priority?: "normal" | "high";
-      /** @description Empty string: all readable watches */
+      /** @description Empty string: all the caller's watches */
       watch_id?: string;
     };
     UpdateScriptInputBody: {
       name?: string;
       source?: string;
     };
-    UpdateShareInputBody: {
-      /** @enum {string} */
-      permission: "ro" | "rw";
-    };
     UpdateWatchInputBody: {
       /** @description Replaces the whole config */
       config?: {
         [key: string]: unknown;
       };
-      /** @description Owner only; empty string detaches */
+      /** @description Empty string detaches */
       credential_id?: string;
       name?: string;
       paused?: boolean;
@@ -1812,15 +1726,7 @@ export interface components {
        * @description When the worker runs the watch next; ignored while paused
        */
       next_run_at: string;
-      /** Format: uuid */
-      owner_id: string;
-      owner_name: string;
       paused: boolean;
-      /**
-       * @description The caller's access to this watch
-       * @enum {string}
-       */
-      permission: "owner" | "rw" | "ro";
       /** @description A worker holds the watch right now */
       running: boolean;
       /** @description Go duration (1m to 168h) or 5-field cron expression */
@@ -3433,8 +3339,6 @@ export interface operations {
           | "oci_tags";
         /** @description Case-insensitive match on the name or the config */
         q?: string;
-        /** @description Owned by the caller, shared with them, or both */
-        shared?: "mine" | "with_me" | "all";
         limit?: number;
       };
       header?: never;
@@ -3736,138 +3640,6 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["Watch"];
         };
-      };
-      /** @description Error */
-      default: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/problem+json": components["schemas"]["ErrorModel"];
-        };
-      };
-    };
-  };
-  "list-watch-shares": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description OK */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["ListSharesOutputBody"];
-        };
-      };
-      /** @description Error */
-      default: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/problem+json": components["schemas"]["ErrorModel"];
-        };
-      };
-    };
-  };
-  "add-watch-share": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["AddShareInputBody"];
-      };
-    };
-    responses: {
-      /** @description Created */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["Share"];
-        };
-      };
-      /** @description Error */
-      default: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/problem+json": components["schemas"]["ErrorModel"];
-        };
-      };
-    };
-  };
-  "update-watch-share": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-        user_id: string;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["UpdateShareInputBody"];
-      };
-    };
-    responses: {
-      /** @description OK */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["Share"];
-        };
-      };
-      /** @description Error */
-      default: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/problem+json": components["schemas"]["ErrorModel"];
-        };
-      };
-    };
-  };
-  "delete-watch-share": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-        user_id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description No Content */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
       };
       /** @description Error */
       default: {

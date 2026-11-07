@@ -21,7 +21,7 @@ function account(over: Partial<AdminUser> = {}): AdminUser {
     last_login_at: "2026-11-01T10:00:00Z",
     status: "active",
     disabled_at: null,
-    counts: { watches: 3, shared_watches: 1, channels: 2, rules: 4, scripts: 1, credentials: 1 },
+    counts: { watches: 3, channels: 2, rules: 4, scripts: 1, credentials: 1 },
     ...over,
   };
 }
@@ -30,7 +30,7 @@ const ALICE = account({
   id: ME.id,
   email: ME.email,
   display_name: ME.display_name,
-  counts: { watches: 0, shared_watches: 0, channels: 0, rules: 0, scripts: 0, credentials: 0 },
+  counts: { watches: 0, channels: 0, rules: 0, scripts: 0, credentials: 0 },
 });
 
 const DEE = account({
@@ -45,7 +45,6 @@ function watchOf(over: Partial<AdminWatch> = {}): AdminWatch {
     name: "Go releases",
     kind: "github_repo",
     credential_name: "gh",
-    shares: 1,
     ...over,
   };
 }
@@ -97,7 +96,14 @@ describe("AdminUsersPage", () => {
       "/api/v1/me": ADMIN,
       "/api/v1/admin/users": {
         items: [
-          account({ id: "n", email: "new@example.test", display_name: "", last_login_at: null }),
+          account({
+            id: "n",
+            email: "new@example.test",
+            display_name: "",
+            last_login_at: null,
+            // Distinct counts, so a column swap shows.
+            counts: { watches: 3, channels: 2, rules: 4, scripts: 1, credentials: 5 },
+          }),
           account(),
           account({ id: "d", email: "dee@example.test", display_name: "Dee", status: "disabled" }),
           account({ id: "p", email: "", display_name: "", status: "purged" }),
@@ -110,9 +116,7 @@ describe("AdminUsersPage", () => {
     await within(table).findByText("Bob");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(5);
-    expect(rows[0]).toHaveTextContent(
-      /^new@example\.testNeverActive3 \(1 shared\)2411Act asDisable$/,
-    );
+    expect(rows[0]).toHaveTextContent(/^new@example\.testNeverActive32415Act asDisable$/);
     expect(rows[1]).toHaveTextContent("Bobbob@example.test");
     expect(within(rows[1] as HTMLElement).getByRole("time")).toHaveAttribute(
       "datetime",
@@ -271,14 +275,33 @@ describe("AdminUsersPage", () => {
     });
     renderApp("/admin/users", ADMIN);
     await userEvent.click(await screen.findByRole("button", { name: "Disable Bob" }));
+    // 009-AC12: the intro says disabling stops the account's watches too.
+    expect(screen.getByText(/^Every account/)).toHaveTextContent(
+      "Disabling one signs it out at once and stops its rules and watches; its data stays.",
+    );
     const dialog = screen.getByRole("dialog", { name: "Disable Bob?" });
-    expect(dialog).toHaveTextContent("Signs the account out everywhere");
+    // 009-AC12: a disabled account's watches do not collect.
+    expect(dialog).toHaveTextContent(
+      "Signs the account out everywhere and refuses its sign-in. Its rules route nothing and queued deliveries are not sent. Its watches stop collecting until it is enabled again. Its data stays.",
+    );
+    // 009-AC10: the disable dialog names no share.
+    expect(dialog).not.toHaveTextContent(/shar/i);
     await userEvent.click(within(dialog).getByRole("button", { name: "Disable" }));
     expect(await screen.findByText("Disabled Bob")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Enable Bob" })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Enable Bob" }));
     const enable = screen.getByRole("dialog", { name: "Enable Bob?" });
+    // 009-AC12: re-enabled watches run again and report a diff against their last stored state, no replay.
+    expect(enable).toHaveTextContent(
+      "The account can sign in again, its rules route new changes and its watches run again.",
+    );
+    expect(enable).toHaveTextContent(
+      "Each watch's next run reports what changed since its last run, as far as the forge still lists it.",
+    );
+    expect(enable).toHaveTextContent(
+      "Inbox items skipped while disabled are not replayed; the owner can retry dead deliveries from the Channels page.",
+    );
     await userEvent.click(within(enable).getByRole("button", { name: "Enable" }));
     expect(await screen.findByRole("button", { name: "Disable Bob" })).toBeInTheDocument();
     expect(lastCall(fn, `/api/v1/admin/users/${bob.id}/enable`, "POST")).toBeDefined();
@@ -381,7 +404,6 @@ describe("AdminUsersPage", () => {
           credential_id: "c",
           credential_moved: true,
           credential_name: "gh (transferred)",
-          dropped_share: false,
         }),
     });
     renderApp("/admin/users", ADMIN);
@@ -390,11 +412,15 @@ describe("AdminUsersPage", () => {
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     const list = await screen.findByRole("list", { name: "Watches of Bob" });
-    expect(list).toHaveTextContent("Go releasesgithub_repo · credential gh · shared with 1 user");
+    expect(list).toHaveTextContent("Go releasesgithub_repo · credential gh");
     await userEvent.click(within(list).getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
-    expect(d).toHaveTextContent("Its credential gh moves with it");
+    expect(d).toHaveTextContent(
+      "Its credential gh moves with it, unless another watch of Bob uses it.",
+    );
     expect(d).not.toHaveTextContent("rule");
+    // 009-AC10: the transfer dialog names no share.
+    expect(d).not.toHaveTextContent(/shar/i);
     const confirm = within(d).getByRole("button", { name: "Transfer" });
     expect(confirm).toBeDisabled();
     const select = within(d).getByRole("combobox", { name: "New owner" });
@@ -425,7 +451,7 @@ describe("AdminUsersPage", () => {
       "/api/v1/me": ADMIN,
       "/api/v1/admin/users": { items: [account(), DEE] },
       [`/api/v1/admin/users/${account().id}/watches`]: {
-        items: [watchOf({ credential_name: null, shares: 0 })],
+        items: [watchOf({ credential_name: null })],
       },
       [`/api/v1/admin/watches/${watchOf().id}/transfer`]: () =>
         problem(409, "the credential is also used by also, Zed"),
@@ -457,13 +483,12 @@ describe("AdminUsersPage", () => {
       scripts: 0,
       credential_count: 0,
       api_key_count: 0,
-      shares_received: 0,
       inbox_items: 0,
       sessions: 0,
     };
     const second = deferred();
     let route: () => Response | Promise<Response> = () =>
-      Response.json({ counts, shared_watches: [], other_rules: [] });
+      Response.json({ counts, other_rules: [] });
     mockApi({
       "/api/v1/me": ADMIN,
       "/api/v1/admin/users": { items: [account({ ...DEE, status: "disabled" })] },
@@ -478,9 +503,7 @@ describe("AdminUsersPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Purge Dee" }));
     expect(await within(dialog("Purge Dee?")).findByTestId("purge-counts")).toBeInTheDocument();
     expect(purge()).toBeDisabled();
-    second.answer(
-      Response.json({ counts: { ...counts, rules: 3 }, shared_watches: [], other_rules: [] }),
-    );
+    second.answer(Response.json({ counts: { ...counts, rules: 3 }, other_rules: [] }));
     await waitFor(() => expect(purge()).toBeEnabled());
     expect(within(dialog("Purge Dee?")).getByTestId("purge-counts")).toHaveTextContent("3 rules");
   });
@@ -514,11 +537,9 @@ describe("AdminUsersPage", () => {
           scripts: 0,
           credential_count: 1,
           api_key_count: 0,
-          shares_received: 1,
           inbox_items: 4,
           sessions: 0,
         },
-        shared_watches: [{ id: "w1", name: "w", shared_with: ["Bob", "Carl"] }],
         other_rules: [{ id: "r1", name: "r", owner: "Bob" }],
       },
       [`/api/v1/admin/users/${DEE.id}/purge`]: () => {
@@ -532,14 +553,17 @@ describe("AdminUsersPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Purge Dee" }));
     const d = dialog("Purge Dee?");
     expect(await within(d).findByTestId("purge-counts")).toHaveTextContent(
-      "1 watch, 2 channels, 1 rule, 0 scripts, 1 credential, 0 API keys, 1 share received, 4 inbox items.",
+      "1 watch, 2 channels, 1 rule, 0 scripts, 1 credential, 0 API keys, 4 inbox items.",
     );
     expect(d).toHaveTextContent("Other users lose these:");
     expect(
-      within(within(d).getByRole("list", { name: "Shared watches deleted" }))
+      within(within(d).getByRole("list", { name: "Rules of other users deleted" }))
         .getAllByRole("listitem")
         .map((l) => l.textContent),
-    ).toEqual(["Watch w, shared with Bob, Carl", "Rule r of Bob"]);
+    ).toEqual(["Rule r of Bob"]);
+    expect(d).toHaveTextContent("Transfer a watch first to keep it for them.");
+    // 009-AC10: the purge dialog names no share.
+    expect(d).not.toHaveTextContent(/shar/i);
     await userEvent.click(within(d).getByRole("button", { name: "Purge" }));
     expect(await screen.findByText("Purged Dee")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -549,7 +573,7 @@ describe("AdminUsersPage", () => {
     expect(within(row).queryByRole("button")).toBeNull();
   });
 
-  it("purge dialog: loading, a preview without shares, a failed preview and a failed purge", async () => {
+  it("purge dialog: loading, a preview without other users' rules, a failed preview and a failed purge", async () => {
     const dee = account({ ...DEE, status: "disabled" });
     const empty = {
       counts: {
@@ -560,11 +584,9 @@ describe("AdminUsersPage", () => {
         scripts: 1,
         credential_count: 0,
         api_key_count: 0,
-        shares_received: 0,
         inbox_items: 0,
         sessions: 0,
       },
-      shared_watches: [],
       other_rules: [],
     };
     const first = deferred();
@@ -608,11 +630,9 @@ describe("AdminUsersPage", () => {
           scripts: 0,
           credential_count: 0,
           api_key_count: 0,
-          shares_received: 0,
           inbox_items: 0,
           sessions: 0,
         },
-        shared_watches: null,
         other_rules: null,
       },
       [`/api/v1/admin/users/${DEE.id}/purge`]: () => {
@@ -680,11 +700,9 @@ describe("AdminUsersPage", () => {
           scripts: 0,
           credential_count: 0,
           api_key_count: 0,
-          shares_received: 0,
           inbox_items: 0,
           sessions: 0,
         },
-        shared_watches: [],
         other_rules: [],
       };
       const other = watchOf({ id: "55555555-5555-5555-5555-555555555555", name: "Other" });
@@ -739,7 +757,6 @@ describe("AdminUsersPage", () => {
                 credential_id: null,
                 credential_moved: false,
                 credential_name: null,
-                dropped_share: false,
               })
             : l.answer.clone(),
         );

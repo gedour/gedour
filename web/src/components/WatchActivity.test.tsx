@@ -24,7 +24,6 @@ const snapshot = (id: number, state: unknown): StateSnapshot => ({
 function routes(w: Watch, extra: Record<string, unknown> = {}) {
   return {
     [`/api/v1/watches/${w.id}`]: w,
-    [`/api/v1/watches/${w.id}/shares`]: { items: [] },
     [`/api/v1/watches/${w.id}/events`]: { items: [] },
     [`/api/v1/watches/${w.id}/states`]: { items: [] },
     ...extra,
@@ -78,7 +77,9 @@ describe("StatusCard", () => {
     const card = await screen.findByRole("region", { name: "Status" });
     expect(card).toHaveTextContent("Message");
     expect(card).toHaveTextContent("Next runPaused");
-    expect(within(card).getByRole("button", { name: "Run now" })).toBeDisabled();
+    const run = within(card).getByRole("button", { name: "Run now" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", "Resume the watch to run it");
   });
 
   // Run now: scheduling, then running until the watch's last run moves, then refreshed events.
@@ -160,23 +161,17 @@ describe("StatusCard", () => {
     expect(clear).toHaveBeenCalledWith(timers()[1]);
   });
 
-  it("reports a refused run and hides the button from read-only sharees", async () => {
+  it("reports a refused run", async () => {
     mockApi(
       routes(watch(), {
         "/api/v1/watches/w1/run": () => problem(409, "the watch is paused: resume it to run it"),
       }),
     );
-    const first = renderApp("/watches/w1");
+    renderApp("/watches/w1");
     await userEvent.click(await screen.findByRole("button", { name: "Run now" }));
     expect(
       await screen.findByText(/Could not run the watch: the watch is paused/),
     ).toBeInTheDocument();
-    first.unmount();
-
-    mockApi(routes(watch({ permission: "ro", owner_name: "Alice" })));
-    renderApp("/watches/w1");
-    await screen.findByRole("region", { name: "Status" });
-    expect(screen.queryByRole("button", { name: "Run now" })).not.toBeInTheDocument();
   });
 });
 

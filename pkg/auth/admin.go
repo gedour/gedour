@@ -24,12 +24,11 @@ const (
 
 // AdminUserCounts is what an account owns.
 type AdminUserCounts struct {
-	Watches       int `json:"watches"`
-	SharedWatches int `json:"shared_watches" doc:"Owned watches shared with at least one other user, included in watches"`
-	Channels      int `json:"channels"`
-	Rules         int `json:"rules"`
-	Scripts       int `json:"scripts"`
-	Credentials   int `json:"credentials"`
+	Watches     int `json:"watches"`
+	Channels    int `json:"channels"`
+	Rules       int `json:"rules"`
+	Scripts     int `json:"scripts"`
+	Credentials int `json:"credentials"`
 }
 
 // AdminUser is one account in the admin list.
@@ -62,12 +61,15 @@ type userState struct {
 	RevokedKeys int64 `json:"revoked_api_key_count,omitempty"`
 }
 
+// staleDueToNow moves a watch's past due time to now so it does not jump other owners' work; a future one (a
+// rate-limit hold) and a leased one stay, as the worker reads a changed due time as a run-now (009-AC12).
+const staleDueToNow = `CASE WHEN leased_until > now() THEN next_run_at ELSE GREATEST(next_run_at, now()) END`
+
 const statusSQL = `CASE WHEN u.purged_at IS NOT NULL THEN 'purged' WHEN u.disabled_at IS NOT NULL THEN 'disabled' ELSE 'active' END`
 
 // 006-AC6: never signed in first, then oldest sign-in; counts in the same query.
 const adminUsersSQL = `SELECT u.id::text, u.email, u.display_name, u.created_at, u.last_login_at, ` + statusSQL + `, u.disabled_at,
 		(SELECT count(*) FROM watches w WHERE w.owner_id = u.id),
-		(SELECT count(*) FROM watches w WHERE w.owner_id = u.id AND EXISTS (SELECT 1 FROM watch_shares ws WHERE ws.watch_id = w.id)),
 		(SELECT count(*) FROM channels c WHERE c.owner_id = u.id),
 		(SELECT count(*) FROM rules r WHERE r.owner_id = u.id),
 		(SELECT count(*) FROM scripts sc WHERE sc.owner_id = u.id),
@@ -83,7 +85,7 @@ func (s *Service) registerAdmin(api huma.API) {
 	}, s.listUsers)
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-disable-user", Method: http.MethodPost, Path: AdminPrefix + "users/{id}/disable",
-		Summary: "Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only)", Tags: tags,
+		Summary: "Disable an account: sessions revoked, sign-in refused, rules route nothing, watches stop collecting (admin only)", Tags: tags,
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, in *userIDPath) (*struct{}, error) {
 		return nil, s.setDisabled(ctx, in.ID, true)
@@ -118,7 +120,7 @@ func (s *Service) listUsers(ctx context.Context, _ *struct{}) (*listUsersOutput,
 		var u AdminUser
 		c := &u.Counts
 		err := r.Scan(&u.ID, &u.Email, &u.DisplayName, &u.CreatedAt, &u.LastLoginAt, &u.Status, &u.DisabledAt,
-			&c.Watches, &c.SharedWatches, &c.Channels, &c.Rules, &c.Scripts, &c.Credentials)
+			&c.Watches, &c.Channels, &c.Rules, &c.Scripts, &c.Credentials)
 		return u, err
 	})
 	if err != nil {
@@ -177,6 +179,12 @@ func (s *Service) setDisabled(ctx context.Context, id string, disable bool) erro
 			}
 			if after.RevokedKeys, err = revokeActiveKeys(ctx, tx, uid); err != nil {
 				return err
+			}
+		} else {
+			// Watches in id order after the user (AGENTS.md).
+			if _, err := tx.Exec(ctx, `UPDATE watches w SET next_run_at = `+staleDueToNow+`
+				WHERE w.id IN (SELECT x.id FROM watches x WHERE NOT x.paused AND x.owner_id = $1 ORDER BY x.id FOR NO KEY UPDATE)`, uid); err != nil {
+				return fmt.Errorf("reschedule watches: %w", err)
 			}
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: sess.ID, Action: action, TargetType: "user", TargetID: uid,

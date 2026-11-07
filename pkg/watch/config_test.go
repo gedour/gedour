@@ -171,11 +171,6 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("%s: %s", kind, CredentialKindFor(kind))
 		}
 	}
-	for p, want := range map[string]level{"owner": levelOwner, "rw": levelWrite, "ro": levelRead, "": levelNone} {
-		if levelOf(p) != want {
-			t.Errorf("levelOf(%q)", p)
-		}
-	}
 }
 
 // 007-AC36: a target reduces to one exact string: host case, a trailing dot, a default port and a trailing slash fold; nothing else does, and non-ASCII never does.

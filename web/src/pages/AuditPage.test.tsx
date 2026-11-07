@@ -171,7 +171,8 @@ describe("AuditPage", () => {
       expect(last.pathname).toBe("/api/v1/audit");
       expect(last.searchParams.get("actor")).toBe("u1");
     });
-    expect(screen.getByLabelText("Target type")).toContainHTML("Watch share");
+    // 009-AC2: the owner can still filter the dropped shares' entries.
+    expect(screen.getByRole("option", { name: "Watch share" })).toHaveValue("watch_share");
   });
 
   // 001-AC22: filters by target type and date go to the API.
@@ -278,6 +279,8 @@ describe("actionTone", () => {
     ["user.created", "emerald"],
     ["user.login", "emerald"],
     ["watch.deleted", "rose"],
+    // 009-AC2: a dropped share reads as a removal.
+    ["watch_share.removed", "rose"],
     ["session.logout", "rose"],
     ["watch.updated", "beacon"],
   ])("%s is %s", (action, tone) => {

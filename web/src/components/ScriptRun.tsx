@@ -9,7 +9,7 @@ import { SAMPLES, type SampleKey } from "@/lib/scripts";
 import { cn } from "@/lib/utils";
 import type { DryRun } from "@/types/api";
 
-/** Recent events of the watches the caller can read (an empty filter matches all), then built-in samples. */
+/** Recent events of the caller's watches (an empty filter matches all), then built-in samples. */
 export function SamplePicker({
   id,
   value,

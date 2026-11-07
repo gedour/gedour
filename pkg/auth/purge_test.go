@@ -40,7 +40,7 @@ func TestPurgeActiveRefused(t *testing.T) {
 }
 
 // 006-AC13: a disabled account's watches, channels (one used by its rule: rule_channels RESTRICT),
-// rules, scripts, credentials, shares, inbox and sessions go in one tx, other users' rules on its watches
+// rules, scripts, credentials, inbox and sessions go in one tx, other users' rules on its watches
 // with them; email and name are blanked, every audit row stays, and the list shows it purged.
 // 006-AC18: audited with the status before and the counts after. 006-AC14: its sign-in stays refused.
 func TestPurgeUser(t *testing.T) {
@@ -51,7 +51,6 @@ func TestPurgeUser(t *testing.T) {
 	e.exec(t, `UPDATE users SET display_name = 'Dave' WHERE id = $1`, dave)
 	cred, _ := e.sealedCredential(t, dave, "gh", "plain-secret-value-123")
 	w := e.watchOf(t, dave, "dave's", &cred)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
 	ch := e.id(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook') RETURNING id::text`, dave)
 	daveRule := e.ruleOf(t, dave, "mine", &w)
 	e.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, daveRule, ch)
@@ -60,7 +59,6 @@ func TestPurgeUser(t *testing.T) {
 	e.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, erinOnW, erinCh)
 	erinAll := e.ruleOf(t, erin, "erin all", nil)
 	erinW := e.watchOf(t, erin, "erin's", nil)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, erinW, dave)
 	e.exec(t, `INSERT INTO scripts (owner_id, name, source) VALUES ($1, 's', '')`, dave)
 	ev := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, erinW)
 	daveEv := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, w)
@@ -69,15 +67,16 @@ func TestPurgeUser(t *testing.T) {
 	// Set straight in the table, so dave's session row stays: the purge must not rely on the disable's revocation.
 	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
 
-	resp := e.call(t, http.MethodGet, "/api/v1/admin/users/"+dave+"/purge-preview", token, "")
+	code, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+dave+"/purge-preview", token, "", nil)
 	var preview purgePreviewOutput
-	if err := json.NewDecoder(resp.Body).Decode(&preview.Body); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(raw, &preview.Body); code != http.StatusOK || err != nil {
+		t.Fatalf("preview: %d %v", code, err)
 	}
-	wantCounts := PurgeCounts{Watches: 1, Channels: 1, Rules: 1, OtherUsersRules: 1, Scripts: 1, Credentials: 1, SharesReceived: 1, InboxItems: 2, Sessions: 1}
+	// 009-AC9: the preview names no share.
+	noShareKeys(t, raw)
+	wantCounts := PurgeCounts{Watches: 1, Channels: 1, Rules: 1, OtherUsersRules: 1, Scripts: 1, Credentials: 1, InboxItems: 2, Sessions: 1}
 	p := preview.Body
-	if p.Counts != wantCounts || len(p.SharedWatches) != 1 || p.SharedWatches[0].Name != "dave's" || p.SharedWatches[0].ID != w || len(p.SharedWatches[0].SharedWith) != 1 ||
-		p.SharedWatches[0].SharedWith[0] != "erin@x.test" || len(p.OtherRules) != 1 || p.OtherRules[0] != (OtherRule{ID: erinOnW, Name: "erin on dave's", Owner: "erin@x.test"}) {
+	if p.Counts != wantCounts || len(p.OtherRules) != 1 || p.OtherRules[0] != (OtherRule{ID: erinOnW, Name: "erin on dave's", Owner: "erin@x.test"}) {
 		t.Fatalf("preview %+v", p)
 	}
 
@@ -101,7 +100,6 @@ func TestPurgeUser(t *testing.T) {
 		{`SELECT count(*) FROM rules WHERE owner_id = $1`, 0},
 		{`SELECT count(*) FROM scripts WHERE owner_id = $1`, 0},
 		{`SELECT count(*) FROM credentials WHERE owner_id = $1`, 0},
-		{`SELECT count(*) FROM watch_shares WHERE user_id = $1`, 0},
 		{`SELECT count(*) FROM inbox_items WHERE user_id = $1`, 0},
 		{`SELECT count(*) FROM sessions WHERE user_id = $1`, 0},
 		{`SELECT count(*) FROM users WHERE id = $1 AND email = '' AND display_name = '' AND purged_at IS NOT NULL AND oidc_sub = 'dave-sub'`, 1},
@@ -126,10 +124,13 @@ func TestPurgeUser(t *testing.T) {
 	var before map[string]any
 	var after purgeAfter
 	var actor string
-	if err := e.pool.QueryRow(context.Background(), `SELECT actor_user_id::text, before, after FROM audit_log WHERE action = 'user.purge' AND target_id = $1`, dave).
-		Scan(&actor, &before, &after); err != nil {
+	var afterRaw []byte
+	if err := e.pool.QueryRow(context.Background(), `SELECT actor_user_id::text, before, after, after::text FROM audit_log WHERE action = 'user.purge' AND target_id = $1`, dave).
+		Scan(&actor, &before, &after, &afterRaw); err != nil {
 		t.Fatal(err)
 	}
+	// 009-AC9: the purge's audit counts name no share.
+	noShareKeys(t, afterRaw)
 	if actor != admin || !equalJSON(t, before, map[string]string{"status": "disabled"}) || after.Status != "purged" {
 		t.Fatalf("purge audit by %s: before %v after %+v", actor, before, after)
 	}
@@ -180,7 +181,7 @@ func TestAdminDataDatabaseFailure(t *testing.T) {
 		{"credentials", http.MethodGet, "/api/v1/admin/users/" + alice + "/purge-preview", nil},
 		{"credentials", http.MethodPost, "/api/v1/admin/watches/" + withCred + "/transfer", map[string]string{"to_user_id": bob}},
 		{"credentials", http.MethodPost, "/api/v1/admin/users/" + alice + "/purge", nil},
-		{"watch_shares", http.MethodPost, "/api/v1/admin/watches/" + plain + "/transfer", map[string]string{"to_user_id": bob}},
+		{"audit_log", http.MethodPost, "/api/v1/admin/watches/" + plain + "/transfer", map[string]string{"to_user_id": bob}},
 	} {
 		e.exec(t, `ALTER TABLE `+tt.table+` RENAME TO gone`)
 		code, raw := e.send(t, tt.method, tt.path, token, csrf, tt.body)
@@ -209,7 +210,6 @@ func TestPurgeRacingRouter(t *testing.T) {
 			dave, _, _ := e.signedIn(t, "dave", false)
 			erin, _, _ := e.signedIn(t, "erin", false)
 			w := e.watchOf(t, dave, "w", nil)
-			e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
 			r := e.ruleOf(t, erin, "erin on w", &w)
 			ev := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, w)
 			e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
@@ -239,7 +239,7 @@ func TestPurgeRacingRouter(t *testing.T) {
 	}
 }
 
-// 006-AC13, 006-AC18: a sharee's rule created on the purged account's watch, committed while the purge waits
+// 006-AC13, 006-AC18: another user's rule created on the purged account's watch, committed while the purge waits
 // on that watch, is deleted by the cascade and counted: the audit's other_users_rules matches what went.
 func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
 	e := setup(t, false)
@@ -247,7 +247,6 @@ func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
 	dave, _, _ := e.signedIn(t, "dave", false)
 	erin, _, _ := e.signedIn(t, "erin", false)
 	w := e.watchOf(t, dave, "w", nil)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
 	early := e.ruleOf(t, erin, "early", &w)
 	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
 	ctx := context.Background()
@@ -284,7 +283,7 @@ func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
 	}
 }
 
-// A sharee's rule edit holds the rule, then takes the watch's KEY SHARE (rules API order). The purge locks
+// Another user's rule edit holds the rule, then takes the watch's KEY SHARE (rules API order). The purge locks
 // other users' rules before its watches, so it waits on the edit instead of deadlocking with it.
 func TestPurgeRacingRuleEdit(t *testing.T) {
 	e := setup(t, false)
@@ -292,7 +291,6 @@ func TestPurgeRacingRuleEdit(t *testing.T) {
 	dave, _, _ := e.signedIn(t, "dave", false)
 	erin, _, _ := e.signedIn(t, "erin", false)
 	w := e.watchOf(t, dave, "w", nil)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, erin)
 	r := e.ruleOf(t, erin, "erin on w", &w)
 	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
 	ctx := context.Background()
@@ -339,5 +337,59 @@ func TestCrossedPurgesInbox(t *testing.T) {
 	}
 	if d, er := <-pd, <-pe; d != http.StatusNoContent || er != http.StatusNoContent {
 		t.Fatalf("purges %d and %d, want 204 both", d, er)
+	}
+}
+
+// 006-AC13, 006-AC18, 009-AC9: one count per type, each a different number, so a count read or written into
+// another type's field shows in the preview and in the audit's deleted counts. Dave's inbox items sit on
+// erin's events (left by a transfer): his own items are counted, not the items on his watches.
+func TestPurgeCountsPerType(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	other, _, _ := e.signedIn(t, "other-admin", true)
+	w := e.watchOf(t, dave, "w", nil)
+	erinW := e.watchOf(t, erin, "erin's", nil)
+	for _, s := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO channels (owner_id, name, type) SELECT $1, 'c' || g, 'webhook' FROM generate_series(1, 2) g`, []any{dave}},
+		{`INSERT INTO rules (owner_id, name) SELECT $1, 'r' || g FROM generate_series(1, 3) g`, []any{dave}},
+		{`INSERT INTO rules (owner_id, name, watch_id) SELECT $1, 'o' || g, $2 FROM generate_series(1, 4) g`, []any{erin, w}},
+		{`INSERT INTO scripts (owner_id, name, source) SELECT $1, 's' || g, '' FROM generate_series(1, 5) g`, []any{dave}},
+		{`INSERT INTO credentials (id, owner_id, name, kind, secret_ciphertext, secret_nonce, key_version)
+			SELECT gen_random_uuid(), $1, 'k' || g, 'github_token', '\x00', '\x00', 1 FROM generate_series(1, 6) g`, []any{dave}},
+		{`INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 't', '{}', 'k' || g FROM generate_series(1, 7) g`, []any{erinW}},
+		{`INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events WHERE watch_id = $2`, []any{dave, erinW}},
+		// signedIn opened the first of dave's 8 sessions.
+		{`INSERT INTO sessions (id, user_id, csrf_token, expires_at) SELECT sha256(('d' || g)::bytea), $1, 'x', now() + interval '1 hour'
+			FROM generate_series(2, 8) g`, []any{dave}},
+		{`INSERT INTO sessions (id, user_id, csrf_token, expires_at, is_admin, acting_as) SELECT sha256(('a' || g)::bytea), $1, 'x',
+			now() + interval '1 hour', true, $2 FROM generate_series(1, 9) g`, []any{other, dave}},
+		{`INSERT INTO api_keys (user_id, name, hash, prefix, scope) SELECT $1, 'k' || g, sha256(('k' || g)::bytea), 'p', 'read'
+			FROM generate_series(1, 10) g`, []any{dave}},
+		{`UPDATE users SET disabled_at = now() WHERE id = $1`, []any{dave}},
+	} {
+		e.exec(t, s.sql, s.args...)
+	}
+	want := PurgeCounts{Watches: 1, Channels: 2, Rules: 3, OtherUsersRules: 4, Scripts: 5, Credentials: 6, InboxItems: 7,
+		Sessions: 8, ActingSessions: 9, APIKeys: 10}
+
+	code, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+dave+"/purge-preview", token, "", nil)
+	var preview purgePreviewOutput
+	if err := json.Unmarshal(raw, &preview.Body); code != http.StatusOK || err != nil || preview.Body.Counts != want {
+		t.Fatalf("preview %d %v: %+v, want %+v", code, err, preview.Body.Counts, want)
+	}
+	if code, raw := e.purge(t, token, csrf, dave); code != http.StatusNoContent {
+		t.Fatalf("purge: %d %s", code, raw)
+	}
+	var after purgeAfter
+	if err := e.pool.QueryRow(context.Background(), `SELECT after FROM audit_log WHERE action = 'user.purge' AND target_id = $1`, dave).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Deleted != want {
+		t.Fatalf("audit deleted %+v, want %+v", after.Deleted, want)
 	}
 }

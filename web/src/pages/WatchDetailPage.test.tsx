@@ -5,21 +5,11 @@ import { describe, expect, it } from "vitest";
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { credential, lastCall, pending, problem, watch } from "@/test/watches";
-import type { Share } from "@/types/api";
-
-const bob: Share = {
-  user_id: "u-bob",
-  email: "bob@example.test",
-  display_name: "Bob",
-  permission: "ro",
-  created_at: "2026-11-01T00:00:00Z",
-};
 
 describe("WatchDetailPage", () => {
   it("shows the config, schedule and attached credential to the owner", async () => {
     mockApi({
       "/api/v1/watches/w1": watch({ credential_id: "c1", schedule: "0 9 * * 1-5" }),
-      "/api/v1/watches/w1/shares": { items: [] },
       "/api/v1/credentials": { items: [credential()] },
     });
     renderApp("/watches/w1");
@@ -31,15 +21,34 @@ describe("WatchDetailPage", () => {
     expect(config).toHaveTextContent("Include pre-releasesNo");
     expect(config).toHaveTextContent("At 09:00 on weekdays");
     expect(await within(config).findByText("GitHub bot")).toBeInTheDocument();
-    expect(screen.getByText("Not shared with anyone.")).toBeInTheDocument();
+    expect(config).toHaveTextContent("GitHub bot••••cdef");
+    // 009-AC10: no share section, badge or form.
+    expect(screen.queryByRole("region", { name: "Sharing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Share" })).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/shar/i);
     expect(screen.getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/watches/w1/edit");
+  });
+
+  // 009-AC10: the owner is the only reader, so every control shows whatever the watch's state.
+  it("offers every control on a paused watch without a credential", async () => {
+    mockApi({ "/api/v1/watches/w1": watch({ paused: true }) });
+    renderApp("/watches/w1");
+    expect(await screen.findByRole("switch", { name: "Paused" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("link", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete watch" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(screen.getByRole("region", { name: "Configuration" })).toHaveTextContent(
+      "CredentialNone",
+    );
   });
 
   // 001-AC4: pause and resume from the detail view.
   it("pauses through the switch", async () => {
     const fn = mockApi({
       "/api/v1/watches/w1": watch(),
-      "/api/v1/watches/w1/shares": { items: [] },
       "/api/v1/watches/w1/pause": watch({ paused: true }),
     });
     renderApp("/watches/w1");
@@ -51,84 +60,11 @@ describe("WatchDetailPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Paused Go releases");
   });
 
-  // 001-AC5: the owner shares by email, changes the permission and removes the share.
-  it("lets the owner manage shares", async () => {
-    let shares: Share[] = [];
-    const fn = mockApi({
-      "/api/v1/watches/w1": watch(),
-      "/api/v1/watches/w1/shares": (_: URL, init?: RequestInit) => {
-        if (init?.method !== "POST") return Response.json({ items: shares });
-        const body = JSON.parse(String(init.body)) as { email: string };
-        if (body.email === "ghost@example.test") {
-          return problem(404, "no user with that email has signed in yet", [
-            { location: "body.email", message: "no user with that email has signed in yet" },
-          ]);
-        }
-        shares = [bob];
-        return Response.json(bob, { status: 201 });
-      },
-      "/api/v1/watches/w1/shares/u-bob": (_: URL, init?: RequestInit) => {
-        if (init?.method === "DELETE") {
-          shares = [];
-          return new Response(null, { status: 204 });
-        }
-        shares = [{ ...bob, permission: "rw" }];
-        return Response.json(shares[0]);
-      },
-    });
-    renderApp("/watches/w1");
-    const email = await screen.findByLabelText("Email");
-    await userEvent.type(email, "ghost@example.test");
-    await userEvent.click(screen.getByRole("button", { name: "Share" }));
-    expect(
-      await screen.findByText("no user with that email has signed in yet"),
-    ).toBeInTheDocument();
-
-    await userEvent.clear(email);
-    await userEvent.type(email, "bob@example.test");
-    await userEvent.selectOptions(screen.getByLabelText("Access"), "rw");
-    await userEvent.click(screen.getByRole("button", { name: "Share" }));
-    const list = await screen.findByRole("list", { name: "Shared with" });
-    expect(list).toHaveTextContent("Bob");
-    expect(lastCall(fn, "/api/v1/watches/w1/shares", "POST")?.body).toEqual({
-      email: "bob@example.test",
-      permission: "rw",
-    });
-
-    await userEvent.selectOptions(screen.getByLabelText("Access of bob@example.test"), "rw");
-    await waitFor(() =>
-      expect(lastCall(fn, "/api/v1/watches/w1/shares/u-bob", "PUT")?.body).toEqual({
-        permission: "rw",
-      }),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Remove bob@example.test" }));
-    expect(await screen.findByText("Not shared with anyone.")).toBeInTheDocument();
-  });
-
-  // 001-AC5: a read-only sharee sees the watch and their permission, no edit controls.
-  it("shows a read-only sharee no edit controls", async () => {
-    mockApi({
-      "/api/v1/watches/w1": watch({ permission: "ro", owner_name: "Alice", credential_id: "c1" }),
-      "/api/v1/watches/w1/shares": { items: [bob] },
-    });
-    renderApp("/watches/w1");
-    await screen.findByRole("heading", { level: 1, name: "Go releases" });
-    expect(screen.getByText("Shared by Alice (ro)")).toBeInTheDocument();
-    expect(screen.getByText(/Alice shared this watch with you, read-only/)).toBeInTheDocument();
-    expect(screen.getByText("Attached by the owner")).toBeInTheDocument();
-    for (const name of ["Edit", "Paused", "Delete watch", "Share"]) {
-      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
-      expect(screen.queryByRole("link", { name })).not.toBeInTheDocument();
-    }
-    expect(await screen.findByRole("list", { name: "Shared with" })).toHaveTextContent("read-only");
-  });
-
   // 001-AC4: deletion asks for confirmation in a native dialog first.
   it("deletes after confirmation", async () => {
     const fn = mockApi({
       "/api/v1/watches/w1": (_: URL, init?: RequestInit) =>
         init?.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json(watch()),
-      "/api/v1/watches/w1/shares": { items: [] },
       "/api/v1/watches": { items: [] },
     });
     renderApp("/watches/w1");
@@ -150,13 +86,14 @@ describe("WatchDetailPage", () => {
     mockApi({
       "/api/v1/watches/w1": (_: URL, init?: RequestInit) =>
         init?.method === "DELETE" ? pending() : Response.json(watch()),
-      "/api/v1/watches/w1/shares": { items: [] },
     });
     renderApp("/watches/w1");
     await userEvent.click(await screen.findByRole("button", { name: "Delete watch" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent(/its shares, its events and every rule on it/);
-    expect(dialog).toHaveTextContent(/Every user's inbox items and deliveries/);
+    expect(dialog).toHaveTextContent(/its events and every rule on it/);
+    expect(dialog).toHaveTextContent(/Every inbox item and delivery for those events/);
+    // 009-AC10: the delete dialog names no share.
+    expect(dialog).not.toHaveTextContent(/shar/i);
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
     expect(fireEvent(dialog, new Event("cancel", { cancelable: true }))).toBe(false);
@@ -167,10 +104,7 @@ describe("WatchDetailPage", () => {
   it("reports a failed delete and a failed pause", async () => {
     mockApi({
       "/api/v1/watches/w1": (_: URL, init?: RequestInit) =>
-        init?.method === "DELETE"
-          ? problem(403, "only the watch owner can do this")
-          : Response.json(watch()),
-      "/api/v1/watches/w1/shares": { items: [] },
+        init?.method === "DELETE" ? problem(409, "the watch changed") : Response.json(watch()),
       "/api/v1/watches/w1/pause": () => problem(403, "nope"),
     });
     renderApp("/watches/w1");
@@ -184,7 +118,7 @@ describe("WatchDetailPage", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0] as HTMLElement);
   });
 
-  // 001-AC5: a watch that is not shared reads as not found.
+  // 009-AC6: another user's watch answers 404 and reads as not found, like a missing one.
   it("shows the not-found view on 404, an error with retry otherwise, and a loading state", async () => {
     mockApi({ "/api/v1/watches/w1": () => problem(404, "watch not found") });
     const first = renderApp("/watches/w1");

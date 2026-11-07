@@ -23,19 +23,11 @@ type PurgeCounts struct {
 	Scripts         int `json:"scripts"`
 	// Not "credentials": the audit redacts every key naming a credential but a few exact ones.
 	Credentials    int `json:"credential_count"`
-	SharesReceived int `json:"shares_received" doc:"Watches of other users shared with the account"`
 	InboxItems     int `json:"inbox_items"`
 	Sessions       int `json:"sessions"`
 	ActingSessions int `json:"acting_sessions" doc:"Admin sessions acting as the account, sent back to their admin's own data"`
 	// Not "api_keys": the audit redacts every name ending in key or keys.
 	APIKeys int `json:"api_key_count"`
-}
-
-// SharedWatch is an owned watch other users lose with the purge.
-type SharedWatch struct {
-	ID         string   `json:"id" format:"uuid"`
-	Name       string   `json:"name"`
-	SharedWith []string `json:"shared_with" doc:"Names (or emails) of the users it is shared with"`
 }
 
 // OtherRule is another user's rule a purge deletes because it targets one of the account's watches.
@@ -47,9 +39,8 @@ type OtherRule struct {
 
 type purgePreviewOutput struct {
 	Body struct {
-		Counts        PurgeCounts   `json:"counts"`
-		SharedWatches []SharedWatch `json:"shared_watches" doc:"Sorted by name"`
-		OtherRules    []OtherRule   `json:"other_rules" doc:"Sorted by owner, then name"`
+		Counts     PurgeCounts `json:"counts"`
+		OtherRules []OtherRule `json:"other_rules" doc:"Sorted by owner, then name"`
 	}
 }
 
@@ -62,7 +53,7 @@ type purgeAfter struct {
 func (s *Service) registerPurge(api huma.API, tags []string) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-purge-preview", Method: http.MethodGet, Path: AdminPrefix + "users/{id}/purge-preview",
-		Summary: "What purging an account deletes, other users' shared watches and rules included (admin only)", Tags: tags,
+		Summary: "What purging an account deletes, other users' rules on its watches included (admin only)", Tags: tags,
 	}, s.purgePreview)
 	huma.Register(api, huma.Operation{
 		OperationID: "admin-purge-user", Method: http.MethodPost, Path: AdminPrefix + "users/{id}/purge",
@@ -79,15 +70,10 @@ const purgePreviewSQL = `SELECT
 		(SELECT count(*) FROM rules r JOIN watches w ON w.id = r.watch_id WHERE w.owner_id = u.id AND r.owner_id <> u.id),
 		(SELECT count(*) FROM scripts WHERE owner_id = u.id),
 		(SELECT count(*) FROM credentials WHERE owner_id = u.id),
-		(SELECT count(*) FROM watch_shares WHERE user_id = u.id),
 		(SELECT count(*) FROM inbox_items WHERE user_id = u.id),
 		(SELECT count(*) FROM sessions WHERE user_id = u.id),
 		(SELECT count(*) FROM sessions WHERE acting_as = u.id),
 		(SELECT count(*) FROM api_keys WHERE user_id = u.id),
-		(SELECT coalesce(json_agg(json_build_object('id', s.id, 'name', s.name, 'shared_with', s.users) ORDER BY lower(s.name), s.id), '[]')
-			FROM (SELECT w.id, w.name, array_agg(` + userLabelSQL + ` ORDER BY lower(` + userLabelSQL + `)) AS users
-				FROM watches w JOIN watch_shares ws ON ws.watch_id = w.id JOIN users o ON o.id = ws.user_id
-				WHERE w.owner_id = u.id GROUP BY w.id, w.name) s),
 		(SELECT coalesce(json_agg(json_build_object('id', r.id, 'name', r.name, 'owner', ` + userLabelSQL + `)
 				ORDER BY lower(` + userLabelSQL + `), lower(r.name), r.id), '[]')
 			FROM rules r JOIN watches w ON w.id = r.watch_id JOIN users o ON o.id = r.owner_id
@@ -102,7 +88,7 @@ func (s *Service) purgePreview(ctx context.Context, in *userIDPath) (*purgePrevi
 	b := &out.Body
 	c := &b.Counts
 	err := s.pool.QueryRow(ctx, purgePreviewSQL, in.ID).Scan(&c.Watches, &c.Channels, &c.Rules, &c.OtherUsersRules, &c.Scripts,
-		&c.Credentials, &c.SharesReceived, &c.InboxItems, &c.Sessions, &c.ActingSessions, &c.APIKeys, &b.SharedWatches, &b.OtherRules)
+		&c.Credentials, &c.InboxItems, &c.Sessions, &c.ActingSessions, &c.APIKeys, &b.OtherRules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, huma.Error404NotFound("no such account")
 	}
@@ -114,7 +100,7 @@ func (s *Service) purgePreview(ctx context.Context, in *userIDPath) (*purgePrevi
 
 // purgeSteps run in this order, which follows the lock order in AGENTS.md and keeps every ON DELETE RESTRICT
 // quiet: rules before the channels they use (rule_channels), every watch before the credentials they use. The
-// account's own rows (inbox, shares received, sessions) go before its watches, whose cascade would remove
+// account's own rows (inbox, sessions) go before its watches, whose cascade would remove
 // some uncounted. A nil count is not reported.
 var purgeSteps = []struct {
 	sql   string
@@ -131,7 +117,6 @@ var purgeSteps = []struct {
 		func(c *PurgeCounts) *int { return &c.OtherUsersRules }},
 	{`WITH d AS (DELETE FROM channels WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Channels }},
 	{`WITH d AS (DELETE FROM inbox_items WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.InboxItems }},
-	{`WITH d AS (DELETE FROM watch_shares WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.SharesReceived }},
 	{`WITH d AS (DELETE FROM sessions WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Sessions }},
 	// The row stays, so ON DELETE SET NULL never fires: other admins' sessions acting as it end here.
 	{`WITH d AS (UPDATE sessions SET acting_as = NULL WHERE acting_as = $1 RETURNING 1) SELECT count(*) FROM d`,
@@ -139,7 +124,7 @@ var purgeSteps = []struct {
 	{`WITH d AS (DELETE FROM api_keys WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.APIKeys }},
 	// Not left to the watches' cascade: its trigger order may delete rules first and wait on a router holding an event.
 	{`WITH d AS (DELETE FROM events WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) RETURNING 1) SELECT count(*) FROM d`, nil},
-	// Cascades to other users' rules on them, shares, states, cache.
+	// Cascades to other users' rules on them, states, cache.
 	{`WITH d AS (DELETE FROM watches WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Watches }},
 	{`WITH d AS (DELETE FROM credentials WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Credentials }},
 	{`WITH d AS (DELETE FROM scripts WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Scripts }},
@@ -162,7 +147,7 @@ func (s *Service) purgeUser(ctx context.Context, in *userIDPath) (*struct{}, err
 			return fmt.Errorf("purge lock: %w", err)
 		}
 		var status string
-		// NO KEY UPDATE: sign-in, act-as start, shares and transfers still wait, FK checks (audit rows of a
+		// NO KEY UPDATE: sign-in, act-as start and transfers still wait, FK checks (audit rows of a
 		// stop or of a change made acting as the account, holding rows this purge needs) do not.
 		err := tx.QueryRow(ctx, `SELECT `+statusSQL+` FROM users u WHERE u.id = $1 FOR NO KEY UPDATE`, in.ID).Scan(&status)
 		if errors.Is(err, pgx.ErrNoRows) {

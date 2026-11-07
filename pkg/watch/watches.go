@@ -33,9 +33,6 @@ type Spec struct {
 	CredentialID *string        `json:"credential_id" format:"uuid" nullable:"true"`
 	Schedule     string         `json:"schedule" doc:"Go duration (1m to 168h) or 5-field cron expression"`
 	Paused       bool           `json:"paused"`
-	OwnerID      string         `json:"owner_id" format:"uuid"`
-	OwnerName    string         `json:"owner_name"`
-	Permission   string         `json:"permission" enum:"owner,rw,ro" doc:"The caller's access to this watch"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
@@ -59,10 +56,9 @@ type idPath struct {
 }
 
 type listWatchesInput struct {
-	Kind   string `query:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
-	Q      string `query:"q" maxLength:"200" doc:"Case-insensitive match on the name or the config"`
-	Shared string `query:"shared" enum:"mine,with_me,all" default:"all" doc:"Owned by the caller, shared with them, or both"`
-	Limit  int    `query:"limit" minimum:"1" maximum:"500" default:"500"`
+	Kind  string `query:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
+	Q     string `query:"q" maxLength:"200" doc:"Case-insensitive match on the name or the config"`
+	Limit int    `query:"limit" minimum:"1" maximum:"500" default:"500"`
 }
 
 type listWatchesOutput struct {
@@ -87,7 +83,7 @@ type updateWatchInput struct {
 	Body struct {
 		Name         *string        `json:"name,omitempty" minLength:"1" maxLength:"200"`
 		Config       map[string]any `json:"config,omitempty" doc:"Replaces the whole config"`
-		CredentialID *string        `json:"credential_id,omitempty" doc:"Owner only; empty string detaches"`
+		CredentialID *string        `json:"credential_id,omitempty" doc:"Empty string detaches"`
 		Schedule     *string        `json:"schedule,omitempty"`
 		Paused       *bool          `json:"paused,omitempty"`
 	}
@@ -97,7 +93,7 @@ func (s *Service) registerWatches(api huma.API) {
 	tags := []string{"watches"}
 	huma.Register(api, huma.Operation{
 		OperationID: "list-watches", Method: http.MethodGet, Path: "/api/v1/watches",
-		Summary: "Watches the caller owns or that are shared with them", Tags: tags,
+		Summary: "Watches the caller owns", Tags: tags,
 	}, s.listWatches)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-watch", Method: http.MethodGet, Path: "/api/v1/watches/{id}",
@@ -107,7 +103,7 @@ func (s *Service) registerWatches(api huma.API) {
 		if err != nil {
 			return nil, err
 		}
-		w, err := authorize(ctx, s.pool, me, in.ID, levelRead, false)
+		w, err := authorize(ctx, s.pool, me, in.ID, false)
 		if err != nil {
 			return nil, s.fail("get-watch", err)
 		}
@@ -138,7 +134,7 @@ func (s *Service) registerWatches(api huma.API) {
 	s.registerActivity(api)
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-watch", Method: http.MethodDelete, Path: "/api/v1/watches/{id}",
-		Summary: "Delete a watch (owner only)", Tags: tags, DefaultStatus: http.StatusNoContent,
+		Summary: "Delete a watch", Tags: tags, DefaultStatus: http.StatusNoContent,
 	}, s.deleteWatch)
 }
 
@@ -149,12 +145,6 @@ func (s *Service) listWatches(ctx context.Context, in *listWatchesInput) (*listW
 	}
 	sql := watchSelect
 	args := pgx.NamedArgs{"viewer": me, "limit": in.Limit}
-	switch in.Shared {
-	case "mine":
-		sql += " AND w.owner_id = @viewer"
-	case "with_me":
-		sql += " AND s.user_id IS NOT NULL"
-	}
 	if in.Kind != "" {
 		sql += " AND w.kind = @kind"
 		args["kind"] = in.Kind
@@ -209,7 +199,7 @@ func keyCredentialError() error {
 	return huma.Error403Forbidden("an API key cannot attach or detach a credential: use the UI")
 }
 
-// checkKnownHost keeps a key's config from carrying data to a host its owner never chose: a shared watch's host does not count.
+// checkKnownHost keeps a key's config from carrying data to a host its owner never chose.
 func checkKnownHost(ctx context.Context, tx pgx.Tx, owner, kind string, cfg map[string]any) error {
 	field, raw := targetOf(cfg)
 	target := comparableTarget(raw)
@@ -303,7 +293,7 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 			return err
 		}
 		var err error
-		if w, err = authorize(ctx, tx, me, id, levelOwner, false); err != nil {
+		if w, err = authorize(ctx, tx, me, id, false); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.created", TargetType: "watch", TargetID: id, After: w.Spec})
@@ -326,12 +316,7 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 	}
 	var after Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		need := levelWrite
-		// Credentials are private to the owner, so only the owner may attach or detach one.
-		if b.CredentialID != nil {
-			need = levelOwner
-		}
-		before, err := authorize(ctx, tx, me, in.ID, need, true)
+		before, err := authorize(ctx, tx, me, in.ID, true)
 		if err != nil {
 			return err
 		}
@@ -362,15 +347,10 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		// Authz reads any config change, a box included: a box spends the owner's token on another call.
 		changed := !reflect.DeepEqual(next.Config, before.Config)
 		retargeted := !sameTarget(next.Config, before.Config)
-		// The config decides where the owner's credential is sent: a sharee retargeting it could hand the
-		// token to another host or read the owner's private repositories with it. A hijacked key could too, owner's included.
-		if before.CredentialID != nil && changed {
-			if viaKey {
-				return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
-			}
-			if levelOf(before.Permission) < levelOwner {
-				return huma.Error403Forbidden("only the owner can change the config of a watch that uses their credential")
-			}
+		// The config decides where the credential is sent: a hijacked key retargeting it could hand the
+		// token to another host or read the owner's private repositories with it.
+		if before.CredentialID != nil && changed && viaKey {
+			return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
 		}
 		if viaKey && changed {
 			if err := checkKnownHost(ctx, tx, me, before.Kind, next.Config); err != nil {
@@ -380,7 +360,7 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		if b.CredentialID != nil {
 			next.CredentialID = nil
 			if *b.CredentialID != "" {
-				if err := checkCredential(ctx, tx, before.OwnerID, before.Kind, *b.CredentialID); err != nil {
+				if err := checkCredential(ctx, tx, me, before.Kind, *b.CredentialID); err != nil {
 					return err
 				}
 				next.CredentialID = b.CredentialID
@@ -410,7 +390,7 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 				return err
 			}
 		}
-		if after, err = authorize(ctx, tx, me, in.ID, levelRead, false); err != nil {
+		if after, err = authorize(ctx, tx, me, in.ID, false); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "watch.updated", TargetType: "watch", TargetID: in.ID, Before: before.Spec, After: after.Spec})
@@ -435,7 +415,7 @@ func (s *Service) setPaused(ctx context.Context, op, action, id string, paused b
 	}
 	var w Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		before, err := authorize(ctx, tx, me, id, levelWrite, true)
+		before, err := authorize(ctx, tx, me, id, true)
 		if err != nil {
 			return err
 		}
@@ -447,7 +427,7 @@ func (s *Service) setPaused(ctx context.Context, op, action, id string, paused b
 			next_run_at = CASE WHEN $2 THEN next_run_at ELSE now() END WHERE id = $1`, id, paused); err != nil {
 			return err
 		}
-		if w, err = authorize(ctx, tx, me, id, levelRead, false); err != nil {
+		if w, err = authorize(ctx, tx, me, id, false); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: action, TargetType: "watch", TargetID: id, Before: before.Spec, After: w.Spec})
@@ -464,8 +444,8 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		return nil, err
 	}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		// Unlocked first: a caller who may not delete the watch gets its 404/403 without locking anything.
-		if _, err := authorize(ctx, tx, me, in.ID, levelOwner, false); err != nil {
+		// Unlocked first: a caller who does not own the watch gets its 404 without locking anything.
+		if _, err := authorize(ctx, tx, me, in.ID, false); err != nil {
 			return err
 		}
 		// Rules before the watch (lock order in AGENTS.md): a rule edit holds its rule, then wants the watch's KEY SHARE.
@@ -473,7 +453,7 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE watch_id = $1 ORDER BY id FOR NO KEY UPDATE`, in.ID); err != nil {
 			return fmt.Errorf("lock rules: %w", err)
 		}
-		before, err := authorize(ctx, tx, me, in.ID, levelOwner, true)
+		before, err := authorize(ctx, tx, me, in.ID, true)
 		if err != nil {
 			return err
 		}

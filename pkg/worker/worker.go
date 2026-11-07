@@ -145,12 +145,15 @@ func (w *Worker) dispatch(ctx, hard context.Context, sem chan struct{}, wg *sync
 // shares, so a worker with a skewed clock cannot steal or overstay a claim.
 const leaseFree = `(leased_until IS NULL OR leased_until <= now())`
 
+// ownerEnabled skips a disabled owner's watches (009-AC12); a sub-select, so FOR UPDATE never locks users.
+const ownerEnabled = `NOT EXISTS (SELECT 1 FROM users u WHERE u.id = watches.owner_id AND u.disabled_at IS NOT NULL)`
+
 // claim leases up to n due watches; SKIP LOCKED lets replicas claim side by side, each watch once (001-AC9).
 // The lease lives in its own columns: a run-now or an edit moves next_run_at, never the claim.
 func (w *Worker) claim(ctx context.Context, n int) ([]job, error) {
 	now := w.now()
 	rows, err := w.pool.Query(ctx, `UPDATE watches w SET claim_token = gen_random_uuid(), leased_until = now() + make_interval(secs => $2)
-		FROM (SELECT id FROM watches WHERE NOT paused AND next_run_at <= $1 AND `+leaseFree+`
+		FROM (SELECT id FROM watches WHERE NOT paused AND next_run_at <= $1 AND `+leaseFree+` AND `+ownerEnabled+`
 			ORDER BY next_run_at LIMIT $3 FOR UPDATE SKIP LOCKED) due
 		WHERE w.id = due.id
 		RETURNING w.id::text, w.kind, w.config::text, w.schedule, w.credential_id::text, w.claim_token::text, w.next_run_at`,
@@ -171,7 +174,7 @@ func (w *Worker) claim(ctx context.Context, n int) ([]job, error) {
 
 func (w *Worker) updateDue(ctx context.Context) {
 	var n int
-	if err := w.pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE NOT paused AND next_run_at <= $1 AND `+leaseFree, w.now()).Scan(&n); err == nil {
+	if err := w.pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE NOT paused AND next_run_at <= $1 AND `+leaseFree+` AND `+ownerEnabled, w.now()).Scan(&n); err == nil {
 		w.metrics.due.Set(float64(n))
 	}
 }

@@ -39,7 +39,7 @@ type row struct {
 }
 
 const (
-	budgetNote = " A burst of 6, then one every 10 s, shared with run_watch and the manage edits, per replica."
+	budgetNote = " A burst of 6, then one every 10 s, one budget for run_watch and the manage edits, per replica."
 	filterNote = " Filters run over event and watch: get_filter_reference gives the language, list_watch_events shows real field names."
 )
 
@@ -52,7 +52,7 @@ var rows = []row{
 	{name: "list_inbox", op: "list-inbox", scope: scopeRead, readOnly: true, limitDefault: 20, limitMax: 50, shape: cutInboxBodies,
 		desc: "List inbox items with their event and watch; a long event body is cut."},
 	{name: "list_watches", op: "list-watches", scope: scopeRead, readOnly: true, limitDefault: 50, limitMax: 200, shape: markTruncated,
-		desc: "List the watches owned by or shared with the key's owner; truncated: true means there may be more, narrow with kind or q."},
+		desc: "List the watches of the key's owner; truncated: true means there may be more, narrow with kind or q."},
 	{name: "get_watch", op: "get-watch", scope: scopeRead, readOnly: true, desc: "Read one watch."},
 	{name: "list_watch_events", op: "list-watch-events", scope: scopeRead, readOnly: true, limitMax: 50, desc: "List the events a watch fired, newest first."},
 	{name: "list_watch_states", op: "list-watch-states", scope: scopeRead, readOnly: true, limitMax: 50, desc: "List the upstream states a watch observed, newest first."},

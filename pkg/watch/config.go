@@ -1,4 +1,4 @@
-// Package watch serves watches, their credentials and shares over the API, with per-kind validation.
+// Package watch serves watches and their credentials over the API, with per-kind validation.
 package watch
 
 import (

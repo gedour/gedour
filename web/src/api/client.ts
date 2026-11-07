@@ -37,8 +37,6 @@ import type {
   EventsPage,
   Me,
   ProblemDetail,
-  Share,
-  SharePermission,
   StateSnapshot,
   TransferResult,
   UpdateWatchBody,
@@ -258,18 +256,6 @@ export async function listWatchStates(id: string, limit = 20): Promise<StateSnap
   return (await getJSON<{ items: StateSnapshot[] }>(`${watchPath(id)}/states?limit=${limit}`))
     .items;
 }
-
-export async function listShares(watchId: string): Promise<Share[]> {
-  return (await getJSON<{ items: Share[] }>(`${watchPath(watchId)}/shares`)).items;
-}
-export const addShare = (watchId: string, email: string, permission: SharePermission) =>
-  sendJSON<Share>("POST", `${watchPath(watchId)}/shares`, { email, permission });
-export const updateShare = (watchId: string, userId: string, permission: SharePermission) =>
-  sendJSON<Share>("PUT", `${watchPath(watchId)}/shares/${encodeURIComponent(userId)}`, {
-    permission,
-  });
-export const deleteShare = (watchId: string, userId: string) =>
-  sendJSON<undefined>("DELETE", `${watchPath(watchId)}/shares/${encodeURIComponent(userId)}`);
 
 export async function listApiKeys(): Promise<ApiKey[]> {
   return (await getJSON<{ items: ApiKey[] }>("/api/v1/api-keys")).items;

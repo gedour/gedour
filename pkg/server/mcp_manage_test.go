@@ -92,6 +92,7 @@ func walkNames(v any, visit func(key string, val any)) {
 }
 
 // 007-AC23, 007-AC25, 007-AC39: each scope's tools in the table's order; no credential, url or host input anywhere, config only where it must be; no delete, share or credential tool at any scope.
+// 009-AC11: no description names a share.
 func TestMCPManageCatalog(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
@@ -112,6 +113,9 @@ func TestMCPManageCatalog(t *testing.T) {
 			var names []string
 			for _, tool := range list.Tools {
 				names = append(names, tool.Name)
+				if strings.Contains(strings.ToLower(tool.Description), "share") {
+					t.Errorf("%s names a share: %s", tool.Name, tool.Description)
+				}
 				for _, bad := range []string{"delete", "share", "credential", "script", "preview", "key"} {
 					if strings.Contains(tool.Name, bad) {
 						t.Errorf("%s exists", tool.Name)
@@ -304,7 +308,7 @@ const (
 // registryStored is what the worker reads: registryBase maps only a bare docker.io to Docker Hub's API host.
 var registryStored = map[string]string{"docker.io:443": "docker.io", "index.docker.io:443": "docker.io", "registry-1.docker.io:443": "docker.io", "doc\u212Aer.io": "docker.io", "index.docker.io": "docker.io", "registry-1.docker.io": "docker.io"}
 
-// Saved below for alice, bob and carol. A refused value is refused on the exact string, never on a suffix or prefix. {default} is the field's kind's own default host.
+// Saved below for alice and bob. A refused value is refused on the exact string, never on a suffix or prefix. {default} is the field's kind's own default host.
 var urlHostCases = []hostCase{
 	{"unknown", "https://evil.example", reasonKnown},
 	{"own default", "https://{default}", ""},
@@ -330,7 +334,6 @@ var urlHostCases = []hostCase{
 	{"saved path then empty fragment", "https://ghe.alice.example/api/v3#", reasonQuery},
 	{"owner's registry host", "https://reg.alice.example:5000", ""},
 	{"another user's watch", "https://bob-only.example", reasonKnown},
-	{"a shared watch", "https://shared-only.example", reasonKnown},
 	{"uppercase", "https://{DEFAULT}", ""},
 	{"trailing dot", "https://{default}.", ""},
 	{"default port", "https://{default}:443", ""},
@@ -378,7 +381,6 @@ var registryHostCases = []hostCase{
 	{"owner's registry without its port", "reg.alice.example", reasonKnown},
 	{"owner's registry on another port", "reg.alice.example:5001", reasonKnown},
 	{"another user's watch", "bob-only.example", reasonKnown},
-	{"a shared watch", "shared-only.example", reasonKnown},
 	{"uppercase", "GHCR.IO", ""},
 	{"default port", "ghcr.io:443", ""},
 	{"other port", "ghcr.io:8443", reasonKnown},
@@ -395,10 +397,10 @@ var registryHostCases = []hostCase{
 	{"github default folded by the validator", "api.g\u0130thub.com", reasonKnown},
 }
 
-// 007-AC36: unknown, default, the owner's, another user's and a shared watch's host, and each normalization and bypass shape, on each field, on create and on update; a session passes.
+// 007-AC36: unknown, default, the owner's and another user's host, and each normalization and bypass shape, on each field, on create and on update; a session passes.
 func TestMCPManageKnownHosts(t *testing.T) {
 	m := newMCPApp(t)
-	alice, bob, carol := m.user(t, "alice"), m.user(t, "bob"), m.user(t, "carol")
+	alice, bob := m.user(t, "alice"), m.user(t, "bob")
 	seed := func(u apiUser, kind string, cfg map[string]any) string {
 		var w watchJSON
 		m.mustCall(t, u, http.MethodPost, "/api/v1/watches", newWatch("seed", kind, cfg), http.StatusCreated, &w)
@@ -416,21 +418,6 @@ func TestMCPManageKnownHosts(t *testing.T) {
 	seed(alice, "gitlab_release", map[string]any{"project": "a/b", "base_url": "https://xn--mnchen-3ya.alice.example"})
 	seed(bob, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://bob-only.example"})
 	seed(bob, "oci_tags", map[string]any{"repository": "a/b", "registry": "bob-only.example"})
-	var shared string
-	for _, tt := range []struct {
-		kind string
-		cfg  map[string]any
-	}{
-		{"github_repo", map[string]any{"repo": "a/b", "api_url": "https://shared-only.example"}},
-		{"oci_tags", map[string]any{"repository": "a/b", "registry": "shared-only.example"}},
-	} {
-		id := seed(carol, tt.kind, tt.cfg)
-		if tt.kind == "github_repo" {
-			shared = id
-		}
-		m.mustCall(t, carol, http.MethodPost, "/api/v1/watches/"+id+"/shares", map[string]any{"email": alice.email, "permission": "rw"}, http.StatusCreated, nil)
-	}
-	seed(carol, "github_repo", map[string]any{"repo": "a/b", "api_url": "https://carol-only.example"})
 	for _, f := range []struct {
 		field, kind, def string
 		base             map[string]any
@@ -512,26 +499,6 @@ func TestMCPManageKnownHosts(t *testing.T) {
 			}
 		})
 	}
-	// A sharee's key is judged on the key owner's hosts, never the watch owner's, and only when the config moves.
-	t.Run("a sharee's key", func(t *testing.T) {
-		stored := m.watchConfig(t, shared)
-		if res := m.manage(t, alice, "update_watch", map[string]any{"id": shared, "name": "renamed by alice"}); res.IsError {
-			t.Fatalf("rename: %+v", res)
-		}
-		for name, url := range map[string]string{"carol's host of this watch": "https://shared-only.example", "a host only carol owns": "https://carol-only.example"} {
-			res := m.manage(t, alice, "update_watch", map[string]any{"id": shared, "config": map[string]any{"repo": "c/d", "api_url": url}})
-			if !res.IsError || !strings.Contains(res.text(), reasonKnown) || !strings.Contains(res.text(), "body.config.api_url") {
-				t.Fatalf("%s: %+v", name, res)
-			}
-		}
-		if got := m.watchConfig(t, shared); !reflect.DeepEqual(got, stored) {
-			t.Fatalf("%v", got)
-		}
-		// Carol's key is on her own hosts, on the same watch.
-		if res := m.manage(t, carol, "update_watch", map[string]any{"id": shared, "config": map[string]any{"repo": "c/d", "api_url": "https://carol-only.example"}}); res.IsError {
-			t.Fatalf("the owner: %+v", res)
-		}
-	})
 }
 
 // 007-AC41: update_watch cannot walk past the rate-limit hold: schedule, unpause, a checked box and retarget leave next_run_at alone on a key, and move it on a session or with no hold.
@@ -610,9 +577,9 @@ func TestMCPManageRuleChecks(t *testing.T) {
 	hook := map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}
 	m.mustCall(t, bob, http.MethodPost, "/api/v1/channels", hook, http.StatusCreated, &bobHook)
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/channels", hook, http.StatusCreated, &aliceHook)
-	var bobWatch, readable watchJSON
+	var bobWatch, aliceWatch watchJSON
 	m.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &bobWatch)
-	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &readable)
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &aliceWatch)
 	var mine, bobs struct {
 		ID string `json:"id"`
 	}
@@ -624,7 +591,7 @@ func TestMCPManageRuleChecks(t *testing.T) {
 		want string
 	}{
 		{"another user's channel", map[string]any{"channel_ids": []string{bobHook.ID}}, "body.channel_ids[0]"},
-		{"an unreadable watch", map[string]any{"watch_id": bobWatch.ID}, "body.watch_id"},
+		{"another user's watch", map[string]any{"watch_id": bobWatch.ID}, "body.watch_id"},
 		{"a bad filter", map[string]any{"filter": `event.type ==`}, "body.filter"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -647,7 +614,7 @@ func TestMCPManageRuleChecks(t *testing.T) {
 	if res := m.manage(t, alice, "update_rule", map[string]any{"id": bobs.ID, "enabled": false}); !res.IsError || !strings.Contains(strings.ToLower(res.text()), "not found") {
 		t.Fatalf("another user's rule: %+v", res)
 	}
-	ok := map[string]any{"name": "works", "watch_id": readable.ID, "channel_ids": []string{aliceHook.ID}, "filter": `event.type == "release.published"`, "priority": "high"}
+	ok := map[string]any{"name": "works", "watch_id": aliceWatch.ID, "channel_ids": []string{aliceHook.ID}, "filter": `event.type == "release.published"`, "priority": "high"}
 	if res := m.manage(t, alice, "create_rule", ok); res.IsError {
 		t.Fatalf("%+v", res)
 	}

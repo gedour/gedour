@@ -178,51 +178,32 @@ test("alice creates, edits, pauses, resumes and deletes watches of every kind", 
   }
 });
 
-// 001-AC5: bob sees nothing until shared; ro hides edit controls and the API refuses writes; rw edits
-// but cannot delete; a non-shared watch reads as not found.
-test("sharing with bob, read-only then read-write", async ({ page, browser, baseURL }) => {
+// 009-AC6: bob opening alice's watch sees the not-found view; every watch route answers 404, never 403.
+test("another user's watch reads as not found", async ({ page, browser, baseURL }) => {
   const t = tag();
-  const id = await createWatch(page, `Shared ${t}`);
-  const hidden = await createWatch(page, `Private ${t}`);
+  const id = await createWatch(page, `Private ${t}`);
   const bob = await bobPage(browser, baseURL);
   const bobApi = await api(bob.page);
 
   await bob.page.goto(`/watches/${id}`);
   await expect(bob.page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  expect((await bobApi("PATCH", `/api/v1/watches/${id}`, { name: "x" })).status()).toBe(404);
-
-  await page.goto(`/watches/${id}`);
-  await page.getByLabel("Email").fill("bob@example.test");
-  await page.getByRole("button", { name: "Share" }).click();
-  await expect(page.getByRole("list", { name: "Shared with" })).toContainText("bob@example.test");
-
-  await bob.page.reload();
-  await expect(bob.page.getByRole("heading", { level: 1, name: `Shared ${t}` })).toBeVisible();
-  await expect(bob.page.getByText(`Shared by ${ALICE.name} (ro)`)).toBeVisible();
-  await expect(bob.page.getByRole("link", { name: "Edit" })).toHaveCount(0);
-  await expect(bob.page.getByRole("switch", { name: "Paused" })).toHaveCount(0);
-  await expect(bob.page.getByRole("button", { name: "Delete watch" })).toHaveCount(0);
-  expect((await bobApi("PATCH", `/api/v1/watches/${id}`, { name: "x" })).status()).toBe(403);
-
-  await page.getByLabel("Access of bob@example.test").selectOption("rw");
-  await expect
-    .poll(async () => (await (await bobApi("GET", `/api/v1/watches/${id}`)).json()).permission)
-    .toBe("rw");
-  await bob.page.reload();
-  await bob.page.getByRole("link", { name: "Edit" }).click();
-  await expect(bob.page.getByLabel("Credential (optional)")).toHaveCount(0);
-  await bob.page.getByLabel("Name").fill(`Bob renamed ${t}`);
-  await bob.page.getByRole("button", { name: "Save changes" }).click();
-  await expect(bob.page.getByRole("heading", { level: 1, name: `Bob renamed ${t}` })).toBeVisible();
-  await expect(bob.page.getByRole("button", { name: "Delete watch" })).toHaveCount(0);
-  expect((await bobApi("DELETE", `/api/v1/watches/${id}`)).status()).toBe(403);
-
-  await bob.page.goto(`/watches/${hidden}`);
-  await expect(bob.page.getByRole("heading", { name: "Page not found" })).toBeVisible();
-  await bob.page.goto("/watches");
-  await bob.page.getByRole("button", { name: "Shared with me" }).click();
-  await expect(bob.page.getByRole("list", { name: "Watches" })).toContainText(`Bob renamed ${t}`);
-  await expect(bob.page.getByRole("list", { name: "Watches" })).not.toContainText(`Private ${t}`);
+  const path = `/api/v1/watches/${id}`;
+  const calls: [string, string, unknown?][] = [
+    ["GET", path],
+    ["PATCH", path, { name: "x" }],
+    ["DELETE", path],
+    ["POST", `${path}/run`],
+    ["POST", `${path}/pause`],
+    ["POST", `${path}/resume`],
+    ["GET", `${path}/states`],
+    ["GET", `${path}/events`],
+  ];
+  for (const [method, url, data] of calls) {
+    expect((await bobApi(method, url, data)).status(), `${method} ${url}`).toBe(404);
+  }
+  const listed = await (await bobApi("GET", `/api/v1/watches?q=${t}`)).json();
+  expect(listed.items).toEqual([]);
+  expect((await (await api(page))("GET", path)).status()).toBe(200);
 
   expect(bob.violations).toEqual([]);
   await bob.close();
@@ -283,40 +264,22 @@ test("credentials never return their secret", async ({ page }) => {
   for (const b of all) expect(b).not.toContain(secret);
 });
 
-// 001-AC22: the actor filter lists who acted, and bob sees alice's entries on the shared watch.
-test("audit shows the actor filter and shared-watch entries", async ({
-  page,
-  browser,
-  baseURL,
-}) => {
+// 001-AC22: the actor filter lists who acted and narrows the view with the target type.
+test("audit filters by actor and target type", async ({ page }) => {
   const t = tag();
   const id = await createWatch(page, `Audited ${t}`);
-  const call = await api(page);
-  expect(
-    (
-      await call("POST", `/api/v1/watches/${id}/shares`, {
-        email: "bob@example.test",
-        permission: "ro",
-      })
-    ).status(),
-  ).toBe(201);
 
   await page.goto("/audit");
   await expect(page.getByLabel("Actor").getByRole("option", { name: ALICE.name })).toHaveCount(1);
-
-  const bob = await bobPage(browser, baseURL);
-  await bob.page.goto("/audit");
-  await bob.page.getByLabel("Actor").selectOption({ label: ALICE.name });
-  await bob.page.getByLabel("Target type").selectOption("watch");
-  const table = bob.page.getByRole("table", { name: "Audit entries, newest first" });
+  await page.getByLabel("Actor").selectOption({ label: ALICE.name });
+  await page.getByLabel("Target type").selectOption("watch");
+  const table = page.getByRole("table", { name: "Audit entries, newest first" });
   const created = table
     .getByRole("row")
     .filter({ hasText: "watch.created" })
     .filter({ hasText: id.slice(0, 8) });
   await expect(created).toHaveCount(1);
   await expect(created).toContainText(ALICE.name);
-  expect(bob.violations).toEqual([]);
-  await bob.close();
 });
 
 // 001-AC24: each list view has distinct empty, loading and error states.

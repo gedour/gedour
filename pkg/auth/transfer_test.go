@@ -87,9 +87,9 @@ func (e *env) transfer(t *testing.T, token, csrf, watch, to string) (int, []byte
 	return e.send(t, http.MethodPost, "/api/v1/admin/watches/"+watch+"/transfer", token, csrf, map[string]string{"to_user_id": to})
 }
 
-// 006-AC10: the watch, its credential (renamed on a clash) and nothing of the old owner's move; the new
-// owner's share is dropped, the old owner's rules on it and other users' shares and rules stay.
-// 006-AC18: audited with before and after.
+// 006-AC10: the watch, its credential (renamed on a clash) and nothing of the old owner's move; the old
+// owner's rules on it and other users' rules stay. 006-AC18: audited with before and after.
+// 009-AC9: the user's watches and the transfer result name no share.
 func TestTransferWatch(t *testing.T) {
 	e := setup(t, false)
 	admin, token, csrf := e.signedIn(t, "admin", true)
@@ -100,31 +100,38 @@ func TestTransferWatch(t *testing.T) {
 	e.sealedCredential(t, bob, "gh", "x-secret-1")
 	e.sealedCredential(t, bob, "gh (transferred)", "x-secret-2")
 	w := e.watchOf(t, alice, "w", &cred)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'rw'), ($1, $3, 'ro')`, w, bob, carol)
 	aliceOnW := e.ruleOf(t, alice, "on w", &w)
 	ch := e.id(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook') RETURNING id::text`, alice)
 	e.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, aliceOnW, ch)
 	aliceAll := e.ruleOf(t, alice, "all", nil)
 	carolOnW := e.ruleOf(t, carol, "carol on w", &w)
+	// Created after w but listed first, by name; carol's own watch stays out of alice's list.
+	plain := e.watchOf(t, alice, "a plain", nil)
+	e.watchOf(t, carol, "carol's", nil)
 
 	var listed struct{ Items []AdminWatch }
-	resp := e.call(t, http.MethodGet, "/api/v1/admin/users/"+alice+"/watches", token, "")
-	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil || len(listed.Items) != 1 {
+	_, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+alice+"/watches", token, "", nil)
+	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Items) != 2 {
 		t.Fatalf("alice's watches: %v %+v", err, listed)
 	}
-	if got := listed.Items[0]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" || got.Shares != 2 {
-		t.Fatalf("listed %+v", got)
+	noShareKeys(t, raw)
+	if got := listed.Items[0]; got.ID != plain || got.CredentialName != nil {
+		t.Fatalf("listed first %+v", got)
+	}
+	if got := listed.Items[1]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" {
+		t.Fatalf("listed second %+v", got)
 	}
 
 	code, raw := e.transfer(t, token, csrf, w, bob)
 	if code != http.StatusOK {
 		t.Fatalf("transfer: %d %s", code, raw)
 	}
+	noShareKeys(t, raw)
 	var res TransferResult
 	if err := json.Unmarshal(raw, &res); err != nil {
 		t.Fatal(err)
 	}
-	want := TransferResult{OwnerID: bob, CredentialID: &cred, CredentialMoved: true, DroppedShare: true}
+	want := TransferResult{OwnerID: bob, CredentialID: &cred, CredentialMoved: true}
 	if res.CredentialName == nil || *res.CredentialName != "gh (transferred 2)" {
 		t.Fatalf("credential name %v", res.CredentialName)
 	}
@@ -138,8 +145,6 @@ func TestTransferWatch(t *testing.T) {
 	}{
 		{`SELECT count(*) FROM watches WHERE id = '` + w + `' AND owner_id = '` + bob + `' AND credential_id = '` + cred + `'`, 1},
 		{`SELECT count(*) FROM credentials WHERE id = '` + cred + `' AND owner_id = '` + bob + `' AND name = 'gh (transferred 2)'`, 1},
-		{`SELECT count(*) FROM watch_shares WHERE watch_id = '` + w + `' AND user_id = '` + bob + `'`, 0},
-		{`SELECT count(*) FROM watch_shares WHERE watch_id = '` + w + `' AND user_id = '` + carol + `'`, 1},
 		{`SELECT count(*) FROM rule_channels WHERE channel_id = '` + ch + `'`, 1},
 		{`SELECT count(*) FROM rules WHERE id IN ('` + aliceOnW + `', '` + aliceAll + `', '` + carolOnW + `')`, 3},
 	} {
@@ -157,9 +162,8 @@ func TestTransferWatch(t *testing.T) {
 		t.Fatalf("audit by %s: before %v after %v", actor, before, after)
 	}
 
-	// Back to alice: the name stays (no clash there), no share to drop.
-	if code, raw := e.transfer(t, token, csrf, w, alice); code != http.StatusOK || !strings.Contains(string(raw), `"credential_name":"gh (transferred 2)"`) ||
-		!strings.Contains(string(raw), `"dropped_share":false`) {
+	// Back to alice: the name stays (no clash there).
+	if code, raw := e.transfer(t, token, csrf, w, alice); code != http.StatusOK || !strings.Contains(string(raw), `"credential_name":"gh (transferred 2)"`) {
 		t.Fatalf("transfer back: %d %s", code, raw)
 	}
 }
@@ -195,6 +199,37 @@ func TestTransferWithoutCredential(t *testing.T) {
 	}
 }
 
+// 009-AC12: a watch rescued from a disabled account does not jump the queue with the due time it went stale on;
+// a future one (a rate-limit hold) or a leased one stays.
+func TestTransferKeepsQueueOrder(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	alice, _, _ := e.signedIn(t, "alice", false)
+	bob, _, _ := e.signedIn(t, "bob", false)
+	// expired: a crashed worker's lease, past its end, holds nothing.
+	for name, due := range map[string]string{"stale": "2000-01-01", "held": "2999-01-01", "leased": "2000-01-01", "expired": "2000-01-01"} {
+		w := e.watchOf(t, alice, name, nil)
+		if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET next_run_at = $2,
+			leased_until = CASE name WHEN 'leased' THEN now() + interval '1 hour' WHEN 'expired' THEN now() - interval '1 hour' END WHERE id = $1`, w, due); err != nil {
+			t.Fatal(err)
+		}
+		if code, raw := e.transfer(t, token, csrf, w, bob); code != http.StatusOK {
+			t.Fatalf("transfer %s: %d %s", name, code, raw)
+		}
+	}
+	var stale, held, leased int
+	if err := e.pool.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE name IN ('stale', 'expired') AND next_run_at BETWEEN now() - interval '1 minute' AND now()),
+		count(*) FILTER (WHERE name = 'held' AND next_run_at = '2999-01-01'),
+		count(*) FILTER (WHERE name = 'leased' AND next_run_at = '2000-01-01')
+		FROM watches WHERE owner_id = $1`, bob).Scan(&stale, &held, &leased); err != nil {
+		t.Fatal(err)
+	}
+	if stale != 2 || held != 1 || leased != 1 {
+		t.Fatalf("stale due times rescheduled: %d, future kept: %d, leased kept: %d; want 2, 1, 1", stale, held, leased)
+	}
+}
+
 func TestFreeName(t *testing.T) {
 	for _, tt := range []struct {
 		taken []string
@@ -220,7 +255,6 @@ func (e *env) snapshot(t *testing.T) string {
 	if err := e.pool.QueryRow(context.Background(), `SELECT concat_ws('|',
 		(SELECT string_agg(id || owner_id::text || coalesce(credential_id::text, '') || updated_at::text, ',' ORDER BY id) FROM watches),
 		(SELECT string_agg(id || owner_id::text || name || updated_at::text, ',' ORDER BY id) FROM credentials),
-		(SELECT string_agg(watch_id || user_id::text, ',' ORDER BY watch_id, user_id) FROM watch_shares),
 		(SELECT string_agg(id::text, ',' ORDER BY id) FROM rules),
 		(SELECT count(*) FROM audit_log))`).Scan(&s); err != nil {
 		t.Fatal(err)
@@ -239,7 +273,6 @@ func TestTransferSharedCredentialRefused(t *testing.T) {
 	w := e.watchOf(t, alice, "w", &cred)
 	e.watchOf(t, alice, "Zed", &cred)
 	e.watchOf(t, alice, "also", &cred)
-	e.exec(t, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob)
 	e.ruleOf(t, alice, "on w", &w)
 	snap := e.snapshot(t)
 	code, raw := e.transfer(t, token, csrf, w, bob)
@@ -501,47 +534,6 @@ func (e *env) begin(t *testing.T) pgx.Tx {
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 	return tx
-}
-
-// A share added to the transfer's target while the transfer holds both users and waits on the watch the
-// share holds: its insert's FK check takes KEY SHARE on the user, which the transfer's FOR SHARE allows.
-// No deadlock, and the transfer then drops the share.
-func TestTransferRacingAddShare(t *testing.T) {
-	e := setup(t, false)
-	_, token, csrf := e.signedIn(t, "admin", true)
-	alice, _, _ := e.signedIn(t, "alice", false)
-	bob, _, _ := e.signedIn(t, "bob", false)
-	w := e.watchOf(t, alice, "w", nil)
-	ctx := context.Background()
-	// addShare's statements: the watch row lock, then the insert (KEY SHARE on bob).
-	share := e.begin(t)
-	if _, err := share.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w); err != nil {
-		t.Fatal(err)
-	}
-	transfer := e.sendAsync(http.MethodPost, "/api/v1/admin/watches/"+w+"/transfer", token, csrf, map[string]string{"to_user_id": bob})
-	e.waitLockWaiters(t, 1)
-	added := make(chan error, 1)
-	go func() {
-		_, err := share.Exec(ctx, `INSERT INTO watch_shares (watch_id, user_id, permission) VALUES ($1, $2, 'ro')`, w, bob)
-		added <- err
-	}()
-	select {
-	case err := <-added:
-		if err != nil {
-			t.Fatalf("add share: %v", err)
-		}
-	case <-e.lockWaiters(2):
-		t.Fatal("add share waited on the transfer's user lock")
-	}
-	if err := share.Commit(ctx); err != nil {
-		t.Fatalf("add share commit: %v", err)
-	}
-	if code := <-transfer; code != http.StatusOK {
-		t.Fatalf("transfer: %d, want 200", code)
-	}
-	if n := e.count(t, `SELECT count(*) FROM watch_shares WHERE watch_id = $1`, w); n != 0 {
-		t.Fatalf("%d shares left on the transferred watch: the new owner's must be dropped", n)
-	}
 }
 
 // 006-AC11: an attach of the credential to another watch of the old owner, committed while the transfer

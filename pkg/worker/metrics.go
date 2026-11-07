@@ -28,7 +28,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}, []string{"kind", "type"}),
 		due: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gedour_watches_due",
-			Help: "Unpaused watches whose next run time has passed and that no run holds, as seen at the last poll.",
+			Help: "Unpaused watches of enabled accounts whose next run time has passed and that no run holds, as seen at the last poll.",
 		}),
 	}
 	reg.MustRegister(m.runs, m.duration, m.events, m.due)

@@ -335,7 +335,7 @@ function CreateDialog({ open, onClose }: { open: boolean; onClose: () => void })
 
 /** The one time a key is visible. */
 function Reveal({ apiKey, onDone }: { apiKey: ApiKeyCreated; onDone: () => void }) {
-  const snippet = `claude mcp add --transport http gedour ${new URL(document.baseURI).origin}/mcp --header "Authorization: Bearer ${apiKey.key}"`;
+  const snippet = `claude mcp add --scope user --transport http gedour ${new URL(document.baseURI).origin}/mcp --header "Authorization: Bearer ${apiKey.key}"`;
   return (
     <div className="flex flex-col gap-4" data-testid="api-key-reveal">
       <CopyField label="API key" value={apiKey.key} />

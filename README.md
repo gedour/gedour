@@ -204,10 +204,10 @@ protocol versions up to `2026-07-28`. A client authenticates with an API key on 
 HTTPS: the key is a bearer credential.
 
 ```sh
-claude mcp add --transport http gedour https://gedour.example.com/mcp --header "Authorization: Bearer <key>"
+claude mcp add --scope user --transport http gedour https://gedour.example.com/mcp --header "Authorization: Bearer <key>"
 ```
 
-Or in `.mcp.json`, with the key in an environment variable:
+Or per project, in `.mcp.json`, with the key in an environment variable:
 
 ```json
 {

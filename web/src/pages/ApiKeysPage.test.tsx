@@ -141,7 +141,7 @@ describe("ApiKeysPage", () => {
     });
     expect(within(box).getByLabelText("API key")).toHaveValue(KEY);
     expect(within(box).getByLabelText("Client setup")).toHaveValue(
-      `claude mcp add --transport http gedour ${window.location.origin}/mcp --header "Authorization: Bearer ${KEY}"`,
+      `claude mcp add --scope user --transport http gedour ${window.location.origin}/mcp --header "Authorization: Bearer ${KEY}"`,
     );
     await userEvent.click(within(box).getByRole("button", { name: "Copy API key" }));
     expect(writeText).toHaveBeenCalledWith(KEY);

@@ -48,6 +48,10 @@ jobs:
       - run: make go-coverage
       # The race detector allocates more, and the rule-set bound and the whole property test take minutes under it.
       - run: go test -v -count=1 -run 'TestWorstCaseTiming|TestRuleSetBound|TestCostModelProperty|TestParseNotesAllocations' ./pkg/filter ./pkg/collect
+      - name: Coverage summary
+        if: always() && hashFiles('coverage.out') != ''
+        continue-on-error: true
+        run: go tool cover -func=coverage.out | awk '/^total:/ { print "**Go coverage:** " $3 }' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -68,6 +72,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: make web-coverage
+      - name: Coverage summary
+        if: always() && hashFiles('web/coverage/coverage-summary.json') != ''
+        continue-on-error: true
+        run: |
+          node -e 'const t = require("./web/coverage/coverage-summary.json").total;
+            const k = ["statements", "branches", "functions", "lines"];
+            console.log("**Web coverage**\n\n| " + k.join(" | ") + " |\n|" + " --- |".repeat(k.length) + "\n| " + k.map((x) => t[x].pct + "%").join(" | ") + " |");' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

@@ -573,9 +573,9 @@ test("rules on release notes route the right releases", async ({ page }) => {
   for (const { id } of watches) await call("DELETE", `/api/v1/watches/${id}`);
 });
 
-// 008-AC5, 008-AC6, 008-AC14: both boxes on, the baseline is quiet; fixture B's new issue and new PR show in the
-// timeline, and a rule on the labels sends the issue, not the PR, to the inbox.
-test("a repository watch reports new issues and PRs", async ({ page }) => {
+// 008-AC5, 008-AC6, 008-AC14, 011-AC2, 011-AC3: all boxes on, the baseline is quiet; fixture B's new issue, PR and
+// discussion show in the timeline, a rule on the labels sends the issue, not the PR, and a rule on the type the discussion.
+test("a repository watch reports new issues, PRs and discussions", async ({ page }) => {
   const t = tag();
   await page.goto("/inbox");
   await setFixture(page, "a");
@@ -590,6 +590,7 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
       api_url: UPSTREAM,
       new_issues: true,
       new_prs: true,
+      new_discussions: true,
     },
   });
   expect(res.status()).toBe(201);
@@ -606,6 +607,13 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
   });
   expect(rule.status()).toBe(201);
   const ruleId = ((await rule.json()) as { id: string }).id;
+  const discRule = await call("POST", "/api/v1/rules", {
+    name: `Discussions ${t}`,
+    watch_id: id,
+    filter: 'event.type == "discussion.opened"',
+  });
+  expect(discRule.status()).toBe(201);
+  const discRuleId = ((await discRule.json()) as { id: string }).id;
 
   await setFixture(page, "b");
   await page.goto(`/watches/${id}`);
@@ -616,6 +624,7 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
     .click();
   await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
     [
+      /Discussion #9515 opened by alice-q/,
       /PR #9514 opened by dependabot\[bot\]/,
       /Issue #9513 opened by alice-q/,
       /v2\.105\.0 published/,
@@ -633,8 +642,11 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
       }[]
     )
       .filter((i) => i.watch.id === id)
-      .map((i) => `${i.event.type} ${i.event.payload.number}`);
-  await expect.poll(routed, { timeout: 15_000 }).toEqual(["issue.opened 9513"]);
+      .map((i) => `${i.event.type} ${i.event.payload.number}`)
+      .sort();
+  await expect
+    .poll(routed, { timeout: 15_000 })
+    .toEqual(["discussion.opened 9515", "issue.opened 9513"]);
   await page.goto("/inbox?state=all");
   await page.getByRole("button", { name: /Issue #9513 opened by alice-q/ }).click();
   const panel = page.getByRole("complementary", { name: "Issue #9513 opened by alice-q" });
@@ -643,12 +655,13 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
   await setFixture(page, "a");
   // Alice's inbox is back as it was for a retry or a rerun.
   await call("DELETE", `/api/v1/rules/${ruleId}`);
+  await call("DELETE", `/api/v1/rules/${discRuleId}`);
   await call("DELETE", `/api/v1/watches/${id}`);
 });
 
-// 008-AC13, 008-AC9: a pasted issue URL picks the GitHub issue kind; the baseline is quiet, then fixture B's
-// close (not planned), new label and new comment show in the timeline.
-test("an issue watch reports a close and a comment", async ({ page }) => {
+// 008-AC13, 008-AC9, 011-AC12: a pasted issue URL picks the GitHub issue kind, reactions box checked; the baseline
+// is quiet, then fixture B's close (not planned), new label, new comment and reactions show in the timeline.
+test("an issue watch reports a close, a comment and reactions", async ({ page }) => {
   const t = tag();
   await page.goto("/watches/new");
   await setFixture(page, "a");
@@ -658,6 +671,7 @@ test("an issue watch reports a close and a comment", async ({ page }) => {
   await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("cli/cli");
   await expect(page.getByLabel("Issue number")).toHaveValue("9400");
   await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByRole("checkbox", { name: "Report reactions" }).check();
   await page.getByLabel("Name").fill(`Issue ${t}`);
   await page.getByRole("button", { name: "Create watch" }).click();
   await expect(page.getByRole("heading", { level: 1, name: `Issue ${t}` })).toBeVisible();
@@ -678,6 +692,8 @@ test("an issue watch reports a close and a comment", async ({ page }) => {
     .click();
   await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
     [
+      /\+1 👍 on a comment of issue #9400/,
+      /\+2 ❤️ on issue #9400/,
       /Issue #9400 commented by maintainer/,
       /Issue #9400 labels: bug, wontfix/,
       /Issue #9400 closed \(not planned\)/,
@@ -686,6 +702,51 @@ test("an issue watch reports a close and a comment", async ({ page }) => {
   );
   await page.getByRole("tab", { name: "State" }).click();
   await expect(page.getByRole("tabpanel")).toContainText("closed (not planned)");
+
+  await setFixture(page, "a");
+  await call("DELETE", `/api/v1/watches/${id}`);
+});
+
+// 011-AC10, 011-AC7: a pasted discussion URL picks the GitHub discussion kind; the baseline is quiet, then
+// fixture B's close (resolved), chosen answer and reply show in the timeline.
+test("a discussion watch reports a close and a reply", async ({ page }) => {
+  const t = tag();
+  await page.goto("/watches/new");
+  await setFixture(page, "a");
+  await page.getByLabel("Paste a URL").fill("https://github.com/cli/cli/discussions/9507");
+  await expect(page.getByText("Recognized: GitHub discussion")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /GitHub discussion/ })).toBeChecked();
+  await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("cli/cli");
+  await expect(page.getByLabel("Discussion number")).toHaveValue("9507");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByLabel("Name").fill(`Discussion ${t}`);
+  await page.getByRole("button", { name: "Create watch" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: `Discussion ${t}` })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/").pop() as string;
+  const call = await api(page);
+  await expect
+    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+      timeout: 15_000,
+    })
+    .toBe("ok");
+
+  await setFixture(page, "b");
+  await page.reload();
+  await expect(page.getByText("No changes yet")).toBeVisible();
+  await page
+    .getByRole("region", { name: "Status" })
+    .getByRole("button", { name: "Run now" })
+    .click();
+  await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
+    [
+      /Discussion #9507 reply by maintainer/,
+      /Answer chosen on discussion #9507/,
+      /Discussion #9507 closed \(resolved\)/,
+    ],
+    { timeout: 15_000 },
+  );
+  await page.getByRole("tab", { name: "State" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText("closed (resolved)");
 
   await setFixture(page, "a");
   await call("DELETE", `/api/v1/watches/${id}`);

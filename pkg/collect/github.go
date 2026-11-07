@@ -3,8 +3,11 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,10 +30,11 @@ type Release struct {
 // ReleaseState is the normalized state of a release watch, newest first.
 type ReleaseState struct {
 	Releases []Release `json:"releases"`
-	// Numbers of the issues, and of the PRs, listed while their box is on. One list per box, so checking a box
+	// Numbers of the issues, PRs and discussions listed while their box is on. One list per box, so checking a box
 	// starts a baseline for its kind alone; nil (absent) is no list stored, and keeps a boxes-off state as before 008.
-	Issues *[]int `json:"issues,omitempty"`
-	PRs    *[]int `json:"prs,omitempty"`
+	Issues      *[]int `json:"issues,omitempty"`
+	PRs         *[]int `json:"prs,omitempty"`
+	Discussions *[]int `json:"discussions,omitempty"`
 	// Notes by tag: out of the JSON, so an edit of the notes alone changes neither the stored state nor its hash.
 	Notes map[string]string `json:"-"`
 }
@@ -79,24 +83,29 @@ func WithNotes(events []Event, notes map[string]string) {
 	}
 	for _, e := range events {
 		// An item's subject is its number, which a tag may equal.
-		if e.Type != "issue.opened" && e.Type != "pr.opened" {
+		if e.Type != "issue.opened" && e.Type != "pr.opened" && e.Type != "discussion.opened" {
 			e.Payload["body"], e.Payload["cves"] = parseNotes(notes[e.Subject])
 		}
 	}
 }
 
-// itemListed is Diff's placeholder for a new issue or PR number: the stored states hold numbers only.
-const itemListed = "item.listed"
+// itemListed and discussionListed are Diff's placeholders for a new issue or PR number and a new discussion
+// number: the stored states hold numbers only.
+const (
+	itemListed       = "item.listed"
+	discussionListed = "discussion.listed"
+)
 
-// WithItems turns Diff's placeholders into the run's issue.opened and pr.opened events, and drops those
-// whose box is off. Call it before WithNotes.
+// WithItems turns Diff's placeholders into the run's issue.opened, pr.opened and discussion.opened events, and
+// drops those whose box is off. Call it before WithNotes.
 func WithItems(events []Event, items map[int]Event) []Event {
 	out := events[:0]
 	for _, e := range events {
-		if e.Type == itemListed {
+		if e.Type == itemListed || e.Type == discussionListed {
 			n, _ := strconv.Atoi(e.Subject)
 			it, ok := items[n]
-			if !ok {
+			// An issue converted to a discussion keeps its number: the run's item must come from the placeholder's list.
+			if !ok || (it.Type == "discussion.opened") != (e.Type == discussionListed) {
 				continue
 			}
 			e = it
@@ -117,36 +126,163 @@ func githubHeaders(cred *Credential) http.Header {
 func collectGitHubRepo(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, cred *Credential) (ReleaseState, error) {
 	h := githubHeaders(cred)
 	items := cfg.NewIssues || cfg.NewPRs
+	boxed := items || cfg.NewDiscussions
 	// The first page is enough: the newest 50 cover any realistic gap between two runs.
 	u := fmt.Sprintf("%s/repos/%s/releases?per_page=50", cfg.APIURL, cfg.Repo)
-	// A 304 ends the whole run with no state: with a box on it would skip the issues list, so both are read in full.
-	r, err := f.get(ctx, u, h, !items)
+	// A 304 ends the whole run with no state: with a box on it would skip the other lists, so all are read in full.
+	r, err := f.get(ctx, u, h, !boxed)
 	if err != nil {
 		return ReleaseState{}, err
 	}
 	s, err := normalizeGitHubReleases(r.body, cfg.IncludePrereleases)
 	f.Notes = s.Notes
-	if err != nil || !items {
+	if err != nil || !boxed {
 		return s, err
 	}
-	// The list holds PRs too, so one call serves both boxes.
-	// ponytail: first page only; past 50 items opened between two runs, the oldest of them are never reported.
-	u = fmt.Sprintf("%s/repos/%s/issues?state=all&sort=created&direction=desc&per_page=50", cfg.APIURL, cfg.Repo)
-	if r, err = f.get(ctx, u, h, false); err != nil {
-		return ReleaseState{}, err
+	opened := map[int]Event{}
+	if items {
+		// The list holds PRs too, so one call serves both boxes.
+		// ponytail: first page only; past 50 items opened between two runs, the oldest of them are never reported.
+		u = fmt.Sprintf("%s/repos/%s/issues?state=all&sort=created&direction=desc&per_page=50", cfg.APIURL, cfg.Repo)
+		if r, err = f.get(ctx, u, h, false); err != nil {
+			return ReleaseState{}, err
+		}
+		issues, prs, listed, err := normalizeGitHubItems(r.body, cfg.NewIssues, cfg.NewPRs)
+		if err != nil {
+			return ReleaseState{}, err
+		}
+		if cfg.NewIssues {
+			s.Issues = &issues
+		}
+		if cfg.NewPRs {
+			s.PRs = &prs
+		}
+		maps.Copy(opened, listed)
 	}
-	issues, prs, opened, err := normalizeGitHubItems(r.body, cfg.NewIssues, cfg.NewPRs)
-	if err != nil {
-		return ReleaseState{}, err
-	}
-	if cfg.NewIssues {
-		s.Issues = &issues
-	}
-	if cfg.NewPRs {
-		s.PRs = &prs
+	if cfg.NewDiscussions {
+		nums, listed, err := githubDiscussions(ctx, f, cfg, h)
+		if err != nil {
+			return ReleaseState{}, err
+		}
+		s.Discussions = &nums
+		maps.Copy(opened, listed)
 	}
 	f.Items = opened
 	return s, nil
+}
+
+// minDiscussions is the window size below which the page before the last is read too.
+const minDiscussions = 50
+
+// githubDiscussions reads the newest discussions. The list is oldest first and ignores sort, so a per_page=1 probe
+// gives the total as its last page number; the window is the last per_page=100 page, and the page before it when
+// the last holds fewer than minDiscussions.
+// ponytail: a window of 50 at least; past that many opened between two runs, the oldest may go unreported.
+func githubDiscussions(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, h http.Header) ([]int, map[int]Event, error) {
+	base := fmt.Sprintf("%s/repos/%s/discussions", cfg.APIURL, cfg.Repo)
+	get := func(u string) (*response, error) {
+		r, err := f.get(ctx, u, h, false)
+		if he := (*HTTPError)(nil); errors.As(err, &he) && he.Status == http.StatusGone {
+			return nil, fmt.Errorf("discussions are disabled on %s: uncheck \"new discussions\" (%w)", cfg.Repo, err)
+		}
+		return r, err
+	}
+	r, err := get(base + "?per_page=1")
+	if err != nil {
+		return nil, nil, err
+	}
+	pages := [][]byte{r.body}
+	if link := r.header.Get("Link"); link != "" {
+		total := lastPageNumber(link)
+		if total < 1 {
+			return nil, nil, fmt.Errorf("discussions list: no last page number in Link %q", snippet([]byte(link)))
+		}
+		// Built from the config, not the Link: the probe only tells the count.
+		page := func(n int) ([]byte, error) {
+			r, err := get(fmt.Sprintf("%s?per_page=100&page=%d", base, n))
+			if err != nil {
+				return nil, err
+			}
+			return r.body, nil
+		}
+		last := (total + 99) / 100
+		b, err := page(last)
+		if err != nil {
+			return nil, nil, err
+		}
+		pages = [][]byte{b}
+		var short []json.RawMessage
+		if err := json.Unmarshal(b, &short); err != nil {
+			return nil, nil, fmt.Errorf("decode discussions: %w", err)
+		}
+		if len(short) < minDiscussions && last > 1 {
+			if b, err = page(last - 1); err != nil {
+				return nil, nil, err
+			}
+			pages = [][]byte{b, pages[0]}
+		}
+	}
+	nums, opened := []int{}, map[int]Event{}
+	for _, b := range pages {
+		if err := normalizeGitHubDiscussions(b, &nums, opened); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Newest first like the issues list, and the same pages always store the same state.
+	slices.Sort(nums)
+	slices.Reverse(nums)
+	return slices.Compact(nums), opened, nil
+}
+
+// lastPageNumber is the page query parameter of a Link header's rel="last" URL, 0 when absent or unreadable.
+func lastPageNumber(link string) int {
+	m := lastRe.FindStringSubmatch(link)
+	if m == nil {
+		return 0
+	}
+	u, err := url.Parse(m[1])
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(u.Query().Get("page"))
+	return n
+}
+
+// normalizeGitHubDiscussions appends a discussions page's numbers to nums and its opened events to opened, by number.
+func normalizeGitHubDiscussions(body []byte, nums *[]int, opened map[int]Event) error {
+	var raw []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Category struct {
+			Name string `json:"name"`
+		} `json:"category"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		HTMLURL   string     `json:"html_url"`
+		CreatedAt *time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("decode discussions: %w", err)
+	}
+	for _, d := range raw {
+		if d.Number <= 0 {
+			continue
+		}
+		*nums = append(*nums, d.Number)
+		labels := []string{}
+		for _, l := range d.Labels {
+			labels = append(labels, l.Name)
+		}
+		opened[d.Number] = Event{Type: "discussion.opened", Subject: strconv.Itoa(d.Number), OccurredAt: d.CreatedAt, Payload: map[string]any{
+			"number": d.Number, "title": d.Title, "author": d.User.Login, "category": d.Category.Name, "labels": labels,
+			"url": d.HTMLURL, "created_at": d.CreatedAt,
+		}}
+	}
+	return nil
 }
 
 // normalizeGitHubItems reads an issues list: the numbers of its issues and of its PRs, never nil, and the
@@ -266,12 +402,40 @@ func diffReleases(old, cur ReleaseState) []Event {
 			events = append(events, Event{Type: "release.promoted", Subject: r.Tag, OccurredAt: r.PublishedAt, Payload: payload})
 		}
 	}
-	added := append(newNumbers(old.Issues, cur.Issues), newNumbers(old.PRs, cur.PRs)...)
-	slices.Sort(added)
-	for _, n := range added {
-		events = append(events, Event{Type: itemListed, Subject: strconv.Itoa(n)})
+	var listed []Event
+	for _, n := range append(newNumbers(old.Issues, cur.Issues), newNumbers(old.PRs, cur.PRs)...) {
+		listed = append(listed, Event{Type: itemListed, Subject: strconv.Itoa(n)})
 	}
-	return events
+	for _, n := range newDiscussions(old.Discussions, cur.Discussions) {
+		listed = append(listed, Event{Type: discussionListed, Subject: strconv.Itoa(n)})
+	}
+	// Issues, PRs and discussions share one numbering: number order is opening order.
+	slices.SortFunc(listed, func(a, b Event) int {
+		x, _ := strconv.Atoi(a.Subject)
+		y, _ := strconv.Atoi(b.Subject)
+		return x - y
+	})
+	return append(events, listed...)
+}
+
+// newDiscussions lists the numbers of cur above old's highest, oldest first; no list in old is a baseline.
+// A converted issue keeps its lower number anywhere in the list, so only a number past every stored one is new.
+func newDiscussions(old, cur *[]int) []int {
+	if old == nil || cur == nil {
+		return nil
+	}
+	floor := 0
+	if len(*old) > 0 {
+		floor = slices.Max(*old)
+	}
+	var out []int
+	for _, n := range *cur {
+		if n > floor {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // newNumbers lists the numbers of cur missing from old, oldest first. No list in old is a baseline (a box just
@@ -309,6 +473,8 @@ type PRState struct {
 	CI             string `json:"ci"`              // success, failure, pending or none
 	HeadSHA        string `json:"head_sha"`
 	URL            string `json:"url"`
+	// Reactions are the PR body's counts, nil with the box off so a box-off state stays as before 011.
+	Reactions *Reactions `json:"reactions,omitempty"`
 	// Comments are the newest maxComments, oldest first. nil is a state stored before comments were
 	// collected: the diff then takes the current ones as its baseline instead of announcing them.
 	Comments []PRComment `json:"comments"`
@@ -321,6 +487,74 @@ type PRComment struct {
 	// URL identifies the comment: the three kinds number their ids apart.
 	URL     string `json:"url"`
 	Excerpt string `json:"excerpt"`
+	// ReplyTo is the parent comment's URL on a discussion reply; omitempty keeps issue and PR states as they were.
+	ReplyTo string `json:"reply_to,omitempty"`
+	// Reactions are nil with the box off, and on an entry standing for a review or for several inline comments.
+	Reactions *Reactions `json:"reactions,omitempty"`
+}
+
+// Reactions are the counts of GitHub's 8 reaction kinds; total_count and url are dropped.
+type Reactions struct {
+	PlusOne  int `json:"+1"`
+	MinusOne int `json:"-1"`
+	Laugh    int `json:"laugh"`
+	Hooray   int `json:"hooray"`
+	Confused int `json:"confused"`
+	Heart    int `json:"heart"`
+	Rocket   int `json:"rocket"`
+	Eyes     int `json:"eyes"`
+}
+
+// reactionKinds names the counts of Reactions.list, in GitHub's order.
+var reactionKinds = [...]string{"+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
+
+func (r *Reactions) list() [len(reactionKinds)]int {
+	return [...]int{r.PlusOne, r.MinusOne, r.Laugh, r.Hooray, r.Confused, r.Heart, r.Rocket, r.Eyes}
+}
+
+// itemReactions reads the reaction counts of an issue, PR (through its issue) or discussion body; nil when absent.
+func itemReactions(body []byte) (*Reactions, error) {
+	var raw struct {
+		Reactions *Reactions `json:"reactions"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode reactions: %w", err)
+	}
+	return raw.Reactions, nil
+}
+
+// reactedEvents emits typ once per target whose counts rose: the item, then each comment stored in both states.
+// No counts on either side (box just checked, a state from before 011, a folded entry) is a baseline.
+func reactedEvents(typ string, number int, title, url string, old, cur *Reactions, oldC, curC []PRComment) []Event {
+	var events []Event
+	rose := func(target, u string, o, c *Reactions) {
+		if o == nil || c == nil {
+			return
+		}
+		added := map[string]int{}
+		ol, cl := o.list(), c.list()
+		for i, k := range reactionKinds {
+			if cl[i] > ol[i] {
+				added[k] = cl[i] - ol[i]
+			}
+		}
+		if len(added) == 0 {
+			return
+		}
+		counts, _ := json.Marshal(c)
+		events = append(events, Event{Type: typ, Subject: u + ">" + string(counts), Payload: map[string]any{
+			"number": number, "title": title, "url": u, "target": target, "added": added, "counts": *c,
+		}})
+	}
+	rose("item", url, old, cur)
+	before := make(map[string]*Reactions, len(oldC))
+	for _, c := range oldC {
+		before[c.URL] = c.Reactions
+	}
+	for _, c := range curC {
+		rose("comment", c.URL, before[c.URL], c.Reactions)
+	}
+	return events
 }
 
 const (
@@ -366,8 +600,18 @@ func collectGitHubPR(ctx context.Context, f *Fetcher, cfg watch.GitHubPRConfig, 
 	if err != nil {
 		return PRState{}, err
 	}
-	if s.Comments, err = normalizeComments(bodies[0], bodies[3], issue); err != nil {
+	if s.Comments, err = normalizeComments(bodies[0], bodies[3], issue, cfg.Reactions); err != nil {
 		return PRState{}, err
+	}
+	if cfg.Reactions {
+		// 011-AC14: the pulls endpoint has no counts; the issues one answers for the PR's conversation item.
+		r, err := f.get(ctx, fmt.Sprintf("%s/issues/%d", base, cfg.Number), h, false)
+		if err != nil {
+			return PRState{}, err
+		}
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return PRState{}, err
+		}
 	}
 	return s, nil
 }
@@ -392,7 +636,8 @@ func lastPage(ctx context.Context, f *Fetcher, u string, h http.Header) ([]byte,
 // normalizeComments merges review bodies, inline comments and conversation comments into the newest
 // maxComments, oldest first. The result is never nil, so the next diff knows comments were collected.
 // One review is one comment: its inline comments fold into its body, or into the first of them.
-func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte) ([]PRComment, error) {
+// With reactions, an entry from one inline or conversation comment carries its counts.
+func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte, reactions bool) ([]PRComment, error) {
 	type item struct {
 		ID       int64 `json:"id"`
 		ReviewID int64 `json:"pull_request_review_id"`
@@ -403,6 +648,7 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 		HTMLURL     string     `json:"html_url"`
 		CreatedAt   *time.Time `json:"created_at"`
 		SubmittedAt *time.Time `json:"submitted_at"`
+		Reactions   *Reactions `json:"reactions"`
 	}
 	var reviews, inline, issue []item
 	for _, d := range []struct {
@@ -420,11 +666,16 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 		if at == nil || it.HTMLURL == "" || strings.TrimSpace(it.Body) == "" {
 			return false
 		}
-		out = append(out, PRComment{Author: it.User.Login, CreatedAt: *at, URL: it.HTMLURL, Excerpt: excerpt(it.Body)})
+		c := PRComment{Author: it.User.Login, CreatedAt: *at, URL: it.HTMLURL, Excerpt: excerpt(it.Body)}
+		if reactions {
+			c.Reactions = it.Reactions
+		}
+		out = append(out, c)
 		return true
 	}
 	carrier := map[int64]int{} // review id -> index in out of the comment that stands for the review
 	for _, r := range reviews {
+		r.Reactions = nil // review bodies have no counts
 		if add(r, r.SubmittedAt) {
 			carrier[r.ID] = len(out) - 1
 		}
@@ -447,6 +698,7 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 	}
 	for i, n := range more {
 		out[i].Excerpt += fmt.Sprintf(" (+%d inline)", n)
+		out[i].Reactions = nil // one comment's counts would stand for several
 	}
 	for _, c := range issue {
 		add(c, c.CreatedAt)
@@ -593,7 +845,8 @@ func diffPR(old, cur PRState) []Event {
 		{"review_changed", old.ReviewDecision, cur.ReviewDecision},
 		{"ci_changed", old.CI, cur.CI},
 	})
-	return append(events, commentEvents("pr.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	events = append(events, commentEvents("pr.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("pr.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
 }
 
 // commentEvents emits typ for each comment of cur missing from old.
@@ -601,9 +854,11 @@ func commentEvents(typ string, number int, title string, old, cur []PRComment) [
 	var events []Event
 	for _, c := range newComments(old, cur) {
 		at := c.CreatedAt
-		events = append(events, Event{Type: typ, Subject: c.URL, OccurredAt: &at, Payload: map[string]any{
-			"number": number, "title": title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt,
-		}})
+		p := map[string]any{"number": number, "title": title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt}
+		if c.ReplyTo != "" {
+			p["reply_to"] = c.ReplyTo
+		}
+		events = append(events, Event{Type: typ, Subject: c.URL, OccurredAt: &at, Payload: p})
 	}
 	return events
 }
@@ -661,7 +916,8 @@ type IssueState struct {
 	Labels      []string `json:"labels"` // names, sorted, never nil
 	URL         string   `json:"url"`
 	// Comments follow PRState.Comments: nil is a state stored before comments were collected.
-	Comments []PRComment `json:"comments"`
+	Comments  []PRComment `json:"comments"`
+	Reactions *Reactions  `json:"reactions,omitempty"` // like PRState.Reactions
 }
 
 func collectGitHubIssue(ctx context.Context, f *Fetcher, cfg watch.GitHubIssueConfig, cred *Credential) (IssueState, error) {
@@ -675,12 +931,17 @@ func collectGitHubIssue(ctx context.Context, f *Fetcher, cfg watch.GitHubIssueCo
 	if err != nil {
 		return IssueState{}, err
 	}
+	if cfg.Reactions {
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return IssueState{}, err
+		}
+	}
 	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
 	if err != nil {
 		return IssueState{}, err
 	}
 	// An issue has conversation comments only: no reviews, no inline comments.
-	if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), comments); err != nil {
+	if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), comments, cfg.Reactions); err != nil {
 		return IssueState{}, err
 	}
 	return s, nil
@@ -719,20 +980,151 @@ func diffIssue(old, cur IssueState) []Event {
 	base := func() map[string]any {
 		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
 	}
-	events := diffFacets("issue", base, []facet{
+	events := withStateReason("issue", base, old.State, old.StateReason, cur.State, cur.StateReason, diffFacets("issue", base, []facet{
 		{"state_changed", old.State, cur.State},
 		{"labels_changed", old.Labels, cur.Labels},
-	})
+	}))
+	events = append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("issue.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
+}
+
+// withStateReason adds cur's reason to the <prefix>.state_changed of events, and emits one for a reason change while closed.
+func withStateReason(prefix string, base func() map[string]any, oldState, oldReason, curState, curReason string, events []Event) []Event {
 	for _, e := range events {
-		if e.Type == "issue.state_changed" {
-			e.Payload["state_reason"] = cur.StateReason
+		if e.Type == prefix+".state_changed" {
+			e.Payload["state_reason"] = curReason
 		}
 	}
-	// A closed issue re-triaged (completed to duplicate...) keeps its state: only the reason tells, and names the subject.
-	if old.State == "closed" && cur.State == "closed" && old.StateReason != cur.StateReason {
+	// A closed item re-triaged (completed to duplicate...) keeps its state: only the reason tells, and names the subject.
+	if oldState == "closed" && curState == "closed" && oldReason != curReason {
 		p := base()
-		p["from"], p["to"], p["state_reason"] = "closed", "closed", cur.StateReason
-		events = append([]Event{{Type: "issue.state_changed", Subject: fmt.Sprintf("%q>%q", "closed:"+old.StateReason, "closed:"+cur.StateReason), Payload: p}}, events...)
+		p["from"], p["to"], p["state_reason"] = "closed", "closed", curReason
+		events = append([]Event{{Type: prefix + ".state_changed", Subject: fmt.Sprintf("%q>%q", "closed:"+oldReason, "closed:"+curReason), Payload: p}}, events...)
 	}
-	return append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return events
+}
+
+// DiscussionState is the normalized state of one GitHub discussion.
+type DiscussionState struct {
+	Number      int      `json:"number"`
+	State       string   `json:"state"`        // open or closed
+	StateReason string   `json:"state_reason"` // as GitHub reports it (resolved, outdated, duplicate, reopened), empty when null
+	Title       string   `json:"title"`
+	Category    string   `json:"category"` // shown only: a category change emits nothing
+	Labels      []string `json:"labels"`   // names, sorted, never nil
+	AnswerURL   string   `json:"answer_url"`
+	// AnswerChosenBy is stored because diffs only see states: answer_changed carries it.
+	AnswerChosenBy string `json:"answer_chosen_by"`
+	URL            string `json:"url"`
+	// Comments follow PRState.Comments, replies included with ReplyTo set.
+	Comments  []PRComment `json:"comments"`
+	Reactions *Reactions  `json:"reactions,omitempty"` // like PRState.Reactions
+}
+
+func collectGitHubDiscussion(ctx context.Context, f *Fetcher, cfg watch.GitHubDiscussionConfig, cred *Credential) (DiscussionState, error) {
+	h := githubHeaders(cred)
+	base := fmt.Sprintf("%s/repos/%s/discussions/%d", cfg.APIURL, cfg.Repo, cfg.Number)
+	r, err := f.get(ctx, base, h, false)
+	// 011-AC8: one numbering for issues, PRs and discussions; a 404 cannot tell those apart from a missing or private repository.
+	if he := (*HTTPError)(nil); errors.As(err, &he) && he.Status == http.StatusNotFound {
+		return DiscussionState{}, fmt.Errorf("#%d not found in %s: not a discussion (an issue or a PR? watch it with github_issue or github_pr), "+
+			"or the repository is missing or private without a token: %w", cfg.Number, cfg.Repo, err)
+	}
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	s, err := normalizeGitHubDiscussion(r.body)
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	if cfg.Reactions {
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return DiscussionState{}, err
+		}
+	}
+	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	if s.Comments, err = normalizeDiscussionComments(s.URL, comments, cfg.Reactions); err != nil {
+		return DiscussionState{}, err
+	}
+	return s, nil
+}
+
+func normalizeGitHubDiscussion(body []byte) (DiscussionState, error) {
+	var raw struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		StateReason string `json:"state_reason"`
+		Title       string `json:"title"`
+		Category    struct {
+			Name string `json:"name"`
+		} `json:"category"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		AnswerHTMLURL  string `json:"answer_html_url"`
+		AnswerChosenBy struct {
+			Login string `json:"login"`
+		} `json:"answer_chosen_by"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.State == "" {
+		return DiscussionState{}, fmt.Errorf("decode discussion: no state (%v)", err)
+	}
+	s := DiscussionState{Number: raw.Number, State: raw.State, StateReason: raw.StateReason, Title: raw.Title, Category: raw.Category.Name,
+		Labels: []string{}, AnswerURL: raw.AnswerHTMLURL, AnswerChosenBy: raw.AnswerChosenBy.Login, URL: raw.HTMLURL}
+	for _, l := range raw.Labels {
+		s.Labels = append(s.Labels, l.Name)
+	}
+	slices.Sort(s.Labels)
+	return s, nil
+}
+
+// normalizeDiscussionComments normalizes the flat comments list like issue comments, then points each reply at its parent.
+func normalizeDiscussionComments(discussionURL string, body []byte, reactions bool) ([]PRComment, error) {
+	var raw []struct {
+		HTMLURL  string `json:"html_url"`
+		ParentID *int64 `json:"parent_id"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode discussion comments: %w", err)
+	}
+	out, err := normalizeComments([]byte(`[]`), []byte(`[]`), body, reactions)
+	if err != nil {
+		return nil, err
+	}
+	parent := map[string]int64{}
+	for _, c := range raw {
+		if c.ParentID != nil {
+			parent[c.HTMLURL] = *c.ParentID
+		}
+	}
+	for i := range out {
+		if id, ok := parent[out[i].URL]; ok {
+			out[i].ReplyTo = fmt.Sprintf("%s#discussioncomment-%d", discussionURL, id)
+		}
+	}
+	return out, nil
+}
+
+// diffDiscussion emits discussion.state_changed (with the reason), answer_changed (with chosen_by) and labels_changed,
+// then one discussion.commented per new comment or reply.
+func diffDiscussion(old, cur DiscussionState) []Event {
+	base := func() map[string]any {
+		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
+	}
+	events := withStateReason("discussion", base, old.State, old.StateReason, cur.State, cur.StateReason, diffFacets("discussion", base, []facet{
+		{"state_changed", old.State, cur.State},
+		{"answer_changed", old.AnswerURL, cur.AnswerURL},
+		{"labels_changed", old.Labels, cur.Labels},
+	}))
+	for _, e := range events {
+		if e.Type == "discussion.answer_changed" {
+			e.Payload["chosen_by"] = cur.AnswerChosenBy
+		}
+	}
+	events = append(events, commentEvents("discussion.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("discussion.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
 }

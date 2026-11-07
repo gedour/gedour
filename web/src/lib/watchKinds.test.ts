@@ -13,12 +13,17 @@ import {
 describe("toConfig / fromConfig", () => {
   it("sends only the kind's fields, trimmed, numbers as numbers, blanks left out", () => {
     const values = { repo: " golang/go ", number: "12", api_url: "", project: "x/y", extra: "z" };
-    expect(toConfig("github_pr", values)).toEqual({ repo: "golang/go", number: 12 });
+    expect(toConfig("github_pr", values)).toEqual({
+      repo: "golang/go",
+      number: 12,
+      reactions: false,
+    });
     expect(toConfig("github_repo", values)).toEqual({
       repo: "golang/go",
       include_prereleases: false,
       new_issues: false,
       new_prs: false,
+      new_discussions: false,
     });
     expect(toConfig("oci_tags", { repository: "postgres", semver_only: true })).toEqual({
       repository: "postgres",
@@ -32,6 +37,7 @@ describe("toConfig / fromConfig", () => {
     expect(toConfig("github_repo", fromConfig(stored))).toEqual({
       ...stored,
       new_issues: false,
+      new_discussions: false,
     });
     expect(toConfig("github_repo", fromConfig({ repo: "a/b" }))).toMatchObject({
       new_issues: false,
@@ -56,8 +62,11 @@ describe("targetSummary", () => {
     ["github_repo", { repo: "golang/go", new_issues: false, new_prs: false }, "golang/go releases"],
     ["github_repo", { repo: "golang/go", new_issues: true }, "golang/go"],
     ["github_repo", { repo: "golang/go", new_prs: true }, "golang/go"],
+    // 011: the discussions box alone too.
+    ["github_repo", { repo: "golang/go", new_discussions: true }, "golang/go"],
     ["github_pr", { repo: "golang/go", number: 5 }, "golang/go #5"],
     ["github_issue", { repo: "cli/cli", number: 9400 }, "cli/cli #9400"],
+    ["github_discussion", { repo: "cli/cli", number: 9507 }, "cli/cli #9507"],
     ["gitlab_release", { project: "a/b" }, "a/b releases"],
     ["gitlab_mr", { project: "a/b", iid: 9 }, "a/b !9"],
     ["oci_tags", { registry: "docker.io", repository: "library/postgres" }, "postgres tags"],
@@ -71,7 +80,9 @@ describe("targetSummary", () => {
   it("labels kinds and credentials", () => {
     expect(kindInfo("gitlab_mr").credential).toBe("gitlab_token");
     expect(kindInfo("nope" as "oci_tags").kind).toBe("github_repo");
-    expect(kindInfo("github_repo").blurb).toBe("Releases, new issues and PRs of a repository");
+    expect(kindInfo("github_repo").blurb).toBe(
+      "Releases, new issues, PRs and discussions of a repository",
+    );
     expect(credentialLabel("registry_basic")).toBe("Registry login");
     expect(credentialLabel("x" as "github_token")).toBe("x");
   });

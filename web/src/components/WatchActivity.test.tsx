@@ -366,6 +366,66 @@ describe("StatePanel", () => {
     expect(panel).toHaveTextContent("bugwontfix");
   });
 
+  it("renders a discussion summary with its category and answer", async () => {
+    mockApi(
+      routes(watch({ kind: "github_discussion" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              number: 9507,
+              state: "closed",
+              state_reason: "resolved",
+              title: "Default repo?",
+              category: "Q&A",
+              labels: [],
+              answer_url: "https://github.com/cli/cli/discussions/9507#discussioncomment-1",
+              url: "https://github.com/cli/cli/discussions/9507",
+              comments: [],
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(await screen.findByRole("link", { name: "Default repo?" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "chosen" })).toHaveAttribute(
+      "href",
+      "https://github.com/cli/cli/discussions/9507#discussioncomment-1",
+    );
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveTextContent("closed (resolved)");
+    expect(panel).toHaveTextContent("Q&A");
+  });
+
+  // An upstream answer URL that is not http(s) never becomes a link.
+  it("renders a discussion answer with an odd scheme as text", async () => {
+    mockApi(
+      routes(watch({ kind: "github_discussion" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              number: 1,
+              state: "open",
+              state_reason: "",
+              title: "T",
+              category: "General",
+              labels: null,
+              answer_url: "javascript:alert(1)",
+              url: "https://x/1",
+              comments: [],
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(await screen.findByRole("link", { name: "T" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "chosen" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("chosen");
+  });
+
   // 001-AC12: the tag list is searchable and marks the highest semver.
   it("renders tags with search", async () => {
     const tags = Array.from({ length: 320 }, (_, i) => `1.${i}`);

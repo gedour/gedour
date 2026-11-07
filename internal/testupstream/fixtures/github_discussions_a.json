@@ -1,0 +1,114 @@
+[
+  {
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "category": {
+      "id": 103,
+      "node_id": "DIC_kwDOQA",
+      "repository_id": 212613049,
+      "emoji": ":bulb:",
+      "name": "Q&A",
+      "description": "Q&A discussions",
+      "created_at": "2020-05-01T10:00:00.000Z",
+      "updated_at": "2020-05-01T10:00:00.000Z",
+      "slug": "q-a",
+      "is_answerable": true
+    },
+    "answer_html_url": null,
+    "answer_chosen_at": null,
+    "answer_chosen_by": null,
+    "html_url": "https://github.com/cli/cli/discussions/9507",
+    "id": 7000009507,
+    "node_id": "D_kwDOA9507",
+    "number": 9507,
+    "title": "How do I set a default repo per directory?",
+    "user": {
+      "login": "kenji-w",
+      "id": 109507,
+      "type": "User"
+    },
+    "labels": [],
+    "state": "open",
+    "state_reason": null,
+    "locked": false,
+    "comments": 2,
+    "created_at": "2026-10-27T09:12:44Z",
+    "updated_at": "2026-10-27T09:12:44Z",
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "body": "Details are in the description.",
+    "reactions": {
+      "url": "https://api.github.com/repos/cli/cli/discussions/9507/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "timeline_url": "https://api.github.com/repos/cli/cli/discussions/9507/timeline"
+  },
+  {
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "category": {
+      "id": 113,
+      "node_id": "DIC_kwDOShow",
+      "repository_id": 212613049,
+      "emoji": ":bulb:",
+      "name": "Show and tell",
+      "description": "Show and tell discussions",
+      "created_at": "2020-05-01T10:00:00.000Z",
+      "updated_at": "2020-05-01T10:00:00.000Z",
+      "slug": "show-and-tell",
+      "is_answerable": false
+    },
+    "answer_html_url": null,
+    "answer_chosen_at": null,
+    "answer_chosen_by": null,
+    "html_url": "https://github.com/cli/cli/discussions/9510",
+    "id": 7000009510,
+    "node_id": "D_kwDOA9510",
+    "number": 9510,
+    "title": "Share your `gh` aliases",
+    "user": {
+      "login": "noor-a",
+      "id": 109510,
+      "type": "User"
+    },
+    "labels": [
+      {
+        "id": 457897705,
+        "node_id": "LA_community",
+        "url": "https://api.github.com/repos/cli/cli/labels/community",
+        "name": "community",
+        "color": "a2eeef",
+        "default": false,
+        "description": null
+      }
+    ],
+    "state": "open",
+    "state_reason": null,
+    "locked": false,
+    "comments": 5,
+    "created_at": "2026-10-30T19:03:17Z",
+    "updated_at": "2026-10-30T19:03:17Z",
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "body": "Details are in the description.",
+    "reactions": {
+      "url": "https://api.github.com/repos/cli/cli/discussions/9510/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "timeline_url": "https://api.github.com/repos/cli/cli/discussions/9510/timeline"
+  }
+]

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -311,4 +313,53 @@ func TestSanitizedStringsBounded(t *testing.T) {
 	}
 	delete(p, "body")
 	walk(p)
+}
+
+// Spec 011 README: every filter on payload.added evaluates without error on every event shape a rule on all
+// watches sees; the unguarded form the README warns about errors.
+func TestReadmeReactionExamples(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs := map[string]Env{
+		"heart rise": {Event: Event{Type: "issue.reacted", Payload: map[string]any{"added": map[string]any{"heart": 2}}}},
+		"+1 rise":    {Event: Event{Type: "pr.reacted", Payload: map[string]any{"added": map[string]any{"+1": 6}}}},
+		"no added":   sample,
+	}
+	want := map[string]map[string]bool{
+		`event.type == "issue.reacted" && "heart" in event.payload.added`: {"heart rise": true, "+1 rise": false, "no added": false},
+		`"+1" in event.payload.added && event.payload.added["+1"] >= 5`:   {"heart rise": false, "+1 rise": true, "no added": false},
+	}
+	found := 0
+	for _, m := range regexp.MustCompile("`([^`]*payload\\.added[^`]*)`").FindAllStringSubmatch(string(readme), -1) {
+		if !strings.Contains(m[1], " ") {
+			continue // a bare field name, not a filter
+		}
+		found++
+		cases, ok := want[m[1]]
+		if !ok {
+			t.Errorf("README filter %q has no expected results here", m[1])
+			continue
+		}
+		p, err := Compile(m[1])
+		if err != nil {
+			t.Fatalf("%s: %v", m[1], err)
+		}
+		for name, w := range cases {
+			if got, err := Match(p, envs[name]); err != nil || got != w {
+				t.Errorf("%s on %s = %v, %v; want %v", m[1], name, got, err, w)
+			}
+		}
+	}
+	if found != len(want) {
+		t.Errorf("found %d README filters on payload.added, want %d", found, len(want))
+	}
+	p, err := Compile(`event.payload.added["+1"] >= 5`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Match(p, envs["heart rise"]); err == nil {
+		t.Error("the unguarded form evaluated without error: the README warning is wrong")
+	}
 }

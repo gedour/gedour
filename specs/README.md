@@ -12,3 +12,4 @@
 | [008](008-github-issues-new-items.md) | GitHub repository watches: new issues and PRs, one-issue watches | shipped |
 | [009](009-remove-watch-sharing.md) | Remove watch sharing | shipped |
 | [010](010-web-push.md) | Web Push channel | shipped |
+| [011](011-github-discussions-reactions.md) | GitHub discussions and reactions | shipped |

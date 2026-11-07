@@ -185,6 +185,12 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	if time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("second box checked: next=%v", w.NextRunAt)
 	}
+	// 011-AC3: checking new_discussions makes the watch due too, and keeps the states.
+	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true, "new_prs": true, "new_discussions": true}}, http.StatusOK, &w)
+	if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 1 || time.Until(w.NextRunAt) > time.Minute {
+		t.Fatalf("discussions box checked: states=%d next=%v", s, w.NextRunAt)
+	}
 	// Unchecking changes nothing on the schedule.
 	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
 	a.exec(t, `INSERT INTO http_cache (watch_id, url, etag) VALUES ($1, 'https://api.github.com/x', '"e"')`, w.ID)
@@ -207,6 +213,24 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"schedule": "30m"}, http.StatusOK, &w)
 	if n := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); n != 1 || time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("schedule change: states=%d next=%v", n, w.NextRunAt)
+	}
+}
+
+// 011-AC13: toggling reactions keeps the states, and checking it does not make the watch due: the next run baselines it.
+func TestReactionsBoxKeepsSchedule(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w activityWatch
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &w)
+	base := "/api/v1/watches/" + w.ID
+	a.exec(t, `INSERT INTO watch_states (watch_id, state, state_hash) VALUES ($1, '{}', 'h')`, w.ID)
+	for _, on := range []bool{true, false} {
+		a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
+		w.Config = nil // decoding merges into a map
+		a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/go", "number": 1, "reactions": on}}, http.StatusOK, &w)
+		if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 1 || time.Until(w.NextRunAt) < 24*time.Hour || (w.Config["reactions"] == true) != on {
+			t.Fatalf("reactions %v: states=%d next=%v", on, s, w.NextRunAt)
+		}
 	}
 }
 

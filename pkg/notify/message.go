@@ -90,6 +90,25 @@ func transition(from, to string) string {
 	return to
 }
 
+// reactions maps GitHub's reaction kinds to their emoji, in GitHub's order.
+var reactions = [...][2]string{{"+1", "👍"}, {"-1", "👎"}, {"laugh", "😄"}, {"hooray", "🎉"}, {"confused", "😕"}, {"heart", "❤️"}, {"rocket", "🚀"}, {"eyes", "👀"}}
+
+// reacted reads a <kind>.reacted as "+2 ❤️ +1 🚀 on issue #12" or "+1 👍 on a comment of PR #7".
+func reacted(e Event) string {
+	added, _ := e.Payload["added"].(map[string]any)
+	var parts []string
+	for _, r := range reactions {
+		if n, _ := added[r[0]].(float64); n > 0 {
+			parts = append(parts, fmt.Sprintf("+%d %s", int(n), r[1]))
+		}
+	}
+	on := map[string]string{"issue.reacted": "issue #", "pr.reacted": "PR #", "discussion.reacted": "discussion #"}[e.Type] + str(e.Payload["number"])
+	if str(e.Payload["target"]) == "comment" {
+		on = "a comment of " + on
+	}
+	return strings.Join(parts, " ") + " on " + on
+}
+
 func plural(n int, word string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, word)
@@ -105,6 +124,12 @@ func summarize(e Event) string {
 	subject := pr
 	if strings.HasPrefix(e.Type, "mr.") {
 		subject = mr
+	}
+	discussion := "Discussion #" + str(p["number"])
+	// Issue and discussion events share the state and labels wording.
+	item := issue
+	if strings.HasPrefix(e.Type, "discussion.") {
+		item = discussion
 	}
 	switch e.Type {
 	case "release.published":
@@ -135,26 +160,40 @@ func summarize(e Event) string {
 		return pr + " commented by " + str(p["author"])
 	case "issue.opened":
 		return issue + " opened by " + str(p["author"])
-	case "issue.state_changed":
+	case "issue.state_changed", "discussion.state_changed":
 		t := transition(from, to)
 		if r := str(p["state_reason"]); t == "closed" && r != "" {
 			t += " (" + strings.ReplaceAll(r, "_", " ") + ")"
 		}
-		return issue + " " + t
-	case "issue.labels_changed":
+		return item + " " + t
+	case "issue.labels_changed", "discussion.labels_changed":
 		l, _ := p["to"].([]any)
 		names := make([]string, 0, len(l))
 		for _, n := range l {
 			names = append(names, str(n))
 		}
 		if len(names) == 0 {
-			return issue + " labels: none"
+			return item + " labels: none"
 		}
-		return issue + " labels: " + strings.Join(names, ", ")
+		return item + " labels: " + strings.Join(names, ", ")
 	case "issue.commented":
 		return issue + " commented by " + str(p["author"])
+	case "discussion.commented":
+		if str(p["reply_to"]) != "" {
+			return discussion + " reply by " + str(p["author"])
+		}
+		return discussion + " commented by " + str(p["author"])
+	case "discussion.answer_changed":
+		if to == "" {
+			return "Answer removed on discussion #" + str(p["number"])
+		}
+		return "Answer chosen on discussion #" + str(p["number"])
 	case "pr.opened":
 		return pr + " opened by " + str(p["author"])
+	case "discussion.opened":
+		return discussion + " opened by " + str(p["author"])
+	case "issue.reacted", "pr.reacted", "discussion.reacted":
+		return reacted(e)
 	case "mr.approval_changed":
 		a, _ := p["to"].(map[string]any)
 		n, _ := a["count"].(float64)
@@ -184,7 +223,7 @@ func Format(d Delivery) Message {
 	switch {
 	case d.Event.Type == TestEventType:
 		m.Detail = str(d.Event.Payload["message"])
-	case d.Event.Type == "pr.commented" || d.Event.Type == "issue.commented":
+	case d.Event.Type == "pr.commented" || d.Event.Type == "issue.commented" || d.Event.Type == "discussion.commented":
 		m.Detail = str(d.Event.Payload["excerpt"])
 	case str(d.Event.Payload["title"]) != "":
 		m.Detail = str(d.Event.Payload["title"])

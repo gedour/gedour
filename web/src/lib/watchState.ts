@@ -30,6 +30,10 @@ export interface IssueState {
   labels: string[] | null;
   url: string;
 }
+export interface DiscussionState extends IssueState {
+  category: string;
+  answer_url: string;
+}
 export interface MRState {
   iid: number;
   state: string;
@@ -60,7 +64,8 @@ export function stateLine(kind: WatchKind, state: unknown): string {
       const s = state as PRState;
       return `${s.state}${s.draft ? " (draft)" : ""} · review ${s.review_decision.replaceAll("_", " ")} · CI ${s.ci}`;
     }
-    case "github_issue": {
+    case "github_issue":
+    case "github_discussion": {
       const s = state as IssueState;
       const labels = s.labels ?? [];
       return `${issueStateText(s)}${labels.length ? ` · ${labels.join(", ")}` : ""}`;

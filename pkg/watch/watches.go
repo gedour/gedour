@@ -28,7 +28,7 @@ type Watch struct {
 type Spec struct {
 	ID           string         `json:"id" format:"uuid"`
 	Name         string         `json:"name"`
-	Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
+	Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,github_discussion,gitlab_release,gitlab_mr,oci_tags"`
 	Config       map[string]any `json:"config" doc:"Per-kind settings, normalized (defaults filled)"`
 	CredentialID *string        `json:"credential_id" format:"uuid" nullable:"true"`
 	Schedule     string         `json:"schedule" doc:"Go duration (1m to 168h) or 5-field cron expression"`
@@ -56,7 +56,7 @@ type idPath struct {
 }
 
 type listWatchesInput struct {
-	Kind  string `query:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
+	Kind  string `query:"kind" enum:"github_repo,github_pr,github_issue,github_discussion,gitlab_release,gitlab_mr,oci_tags" doc:"Only watches of this kind"`
 	Q     string `query:"q" maxLength:"200" doc:"Case-insensitive match on the name or the config"`
 	Limit int    `query:"limit" minimum:"1" maximum:"500" default:"500"`
 }
@@ -70,7 +70,7 @@ type listWatchesOutput struct {
 type createWatchInput struct {
 	Body struct {
 		Name         string         `json:"name" minLength:"1" maxLength:"200"`
-		Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
+		Kind         string         `json:"kind" enum:"github_repo,github_pr,github_issue,github_discussion,gitlab_release,gitlab_mr,oci_tags"`
 		Config       map[string]any `json:"config"`
 		CredentialID string         `json:"credential_id,omitempty" format:"uuid" doc:"Owned credential of the kind's family"`
 		Schedule     string         `json:"schedule,omitempty" doc:"Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise"`

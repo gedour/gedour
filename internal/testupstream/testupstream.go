@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,19 +95,24 @@ func New() *Server {
 	s := &Server{set: "a", hits: map[string]int{}, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}", s.static("github_discussion", "discussion"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}/comments", s.static("github_discussion", "comments"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/comments", s.static("github_pr", "review_comments"))
-	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}", s.static("github_issue", "issue"))
-	issueComments, prComments := s.static("github_issue", "comments"), s.static("github_pr", "issue_comments")
-	// GitHub serves a PR's conversation comments on the issues route too: the number picks the fixture.
-	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}/comments", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("n") == IssueNumber {
-			issueComments(w, r)
-			return
+	// GitHub serves a PR's conversation item and comments on the issues routes too: the number picks the fixture.
+	byNumber := func(issue, pr http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.PathValue("n") == IssueNumber {
+				issue(w, r)
+				return
+			}
+			pr(w, r)
 		}
-		prComments(w, r)
-	})
+	}
+	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}", byNumber(s.static("github_issue", "issue"), s.static("github_pr", "issue")))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/issues/{n}/comments", byNumber(s.static("github_issue", "comments"), s.static("github_pr", "issue_comments")))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}/check-runs", s.static("github_pr", "check_runs"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/commits/{sha}/status", s.static("github_pr", "status"))
 	s.mux.HandleFunc("GET /api/v4/projects/{p}/releases", s.static("gitlab_release", ""))
@@ -260,6 +266,26 @@ func (s *Server) static(kind, part string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	}
+}
+
+// discussions pages the fixture list like GitHub: per_page and page, with a Link rel="last" past one page.
+func (s *Server) discussions(w http.ResponseWriter, r *http.Request) {
+	var all []json.RawMessage
+	if err := json.Unmarshal(Fixture("github_discussions", s.current()), &all); err != nil {
+		panic(err)
+	}
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if per < 1 {
+		per = 30
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	page = max(page, 1)
+	if last := (len(all) + per - 1) / per; last > 1 {
+		w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?per_page=%d&page=%d>; rel="last"`, r.Host, r.URL.Path, per, last))
+	}
+	lo := min((page-1)*per, len(all))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(append([]json.RawMessage{}, all[lo:min(lo+per, len(all))]...))
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {

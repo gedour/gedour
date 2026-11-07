@@ -2,7 +2,7 @@
 
 # gedour
 
-Self-hosted watch service: follows upstream releases, issues, pull/merge requests and image tags, keeps their
+Self-hosted watch service: follows upstream releases, issues, discussions, pull/merge requests and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
 The name is Breton: *gedour* (pronounced like *get* + *door*, hard G, /ˈɡeː.dur/) means lookout,
@@ -288,18 +288,19 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   off `interval × 2^(failures-1)`, capped at 8 intervals. Rate limits (GitHub `X-RateLimit-*`, GitLab
   `RateLimit-Reset`, `Retry-After`) push the next run to the reset time, at most 1 h away, without
   counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged. A GitHub
-  repository watch with a new-items box on reads both of its lists in full: a 304 on one would skip the other.
+  repository watch with a new-items box on reads all its lists in full: a 304 on one would skip the others.
 - The first run stores a baseline and emits nothing. Each later change becomes typed events
-  (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `pr.state_changed`, `pr.draft_changed`,
+  (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `discussion.opened`, `pr.state_changed`, `pr.draft_changed`,
   `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `issue.state_changed`, `issue.labels_changed`,
-  `issue.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
+  `issue.commented`, `discussion.state_changed`, `discussion.answer_changed`, `discussion.labels_changed`,
+  `discussion.commented`, `issue.reacted`, `pr.reacted`, `discussion.reacted`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
   `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
   run is a new baseline. The last 50 states per watch are kept; events are kept.
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
   comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
 - A GitHub repository watch reports releases. Its boxes `new_issues` and `new_prs` (config, default `false`) add
-  `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 2 requests
-  instead of 1 (the 50 newest issues and PRs, one list for both boxes). A run reports at most those 50: more than
+  `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 1 more
+  request (the 50 newest issues and PRs, one list for both boxes). A run reports at most those 50: more than
   that opened between two runs are not reported. Payload: `number`, `title`, `author`,
   `labels` (names, `[]` without any), `url`, `created_at`. A box is not part of the target: toggling one keeps
   the release states, but it is a config change, so on a watch with a credential only its owner may toggle it,
@@ -307,13 +308,39 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   box is checked takes its kind as a baseline (an uncheck then a check with no run between keep the list going),
   and an item numbered at or below the oldest one stored for its kind is not new. Checking a box makes the watch
   due at once; items opened before that first run succeeds are in its baseline and are not reported. A paused
-  watch takes the baseline when it resumes. To follow an item once opened, add a `github_pr` or `github_issue` watch.
+  watch takes the baseline when it resumes. To follow an item once opened, add a `github_pr`, `github_issue` or `github_discussion` watch.
+- The box `new_discussions` (config, default `false`) adds `discussion.opened`, one per discussion opened after the
+  box is checked, with the same baseline and due-now rules (list `discussions` in the state); only a number above every stored one is new. An issue converted to a discussion keeps its number: it is skipped when that number is at or below the highest stored, and reported otherwise (a recent issue, or any conversion while the stored list is empty). Each run then
+  makes 2 to 3 more requests (1 with at most one discussion): a `per_page=1` probe whose `Link` last page number
+  is the total, then the last 100-item page of the list (oldest first) and the page before it when the last holds
+  fewer than 50. Only those pages are the window; a `Link` without a readable last page number fails the run. Payload: `number`, `title`,
+  `author`, `category`, `labels` (names), `url`, `created_at`. A repository with discussions disabled (HTTP 410)
+  fails the run with an error naming the box. These REST endpoints are undocumented by GitHub.
 - A `github_issue` watch (config `repo`, `number`, `api_url`, like `github_pr`) follows one issue: 2 GitHub
   requests per run (3 past 100 comments). Events, each with `number`, `title`, `url`: `issue.state_changed`
   (`from`, `to`: `open` or `closed`, plus `state_reason` as GitHub reports it, e.g. `completed`, `not_planned`,
   `reopened`, `""` when none; a closed issue whose reason changes emits it too, `from` and `to` both `closed`), `issue.labels_changed` (`from`, `to`: label names, sorted) and `issue.commented`
   (`author`, `excerpt`; `url` is the comment's). A number that is a pull request fails the run: watch it with
   `github_pr`.
+- A `github_discussion` watch (config `repo`, `number`, `api_url`, like `github_issue`) follows one discussion:
+  2 GitHub requests per run (3 past 100 comments), on the same undocumented REST endpoints. Events, each with
+  `number`, `title`, `url`: `discussion.state_changed` (`from`, `to`, `state_reason` as GitHub reports it, e.g.
+  `resolved`, `outdated`, `duplicate`, `reopened`, `""` when none; a reason change while closed emits it too),
+  `discussion.answer_changed` (`from`, `to`: answer comment URLs, `""` when none, plus `chosen_by`, `""` when
+  removed), `discussion.labels_changed` (`from`, `to`: label names, sorted) and `discussion.commented` (`author`,
+  `excerpt`, and `reply_to`, the parent comment's URL, on a reply; `url` is the comment's). The category is
+  stored and shown; its change emits nothing. Issues, PRs and discussions are numbered in one sequence: a number that is
+  not a discussion fails the run with an error pointing to `github_issue` and `github_pr`.
+- The box `reactions` (config, default `false`) of `github_issue`, `github_pr` and `github_discussion` follows the
+  counts of the 8 reaction kinds (`+1`, `-1`, `laugh`, `hooray`, `confused`, `heart`, `rocket`, `eyes`) on the
+  initial post and on each of the 20 newest comments stored; review bodies, and an entry standing for several
+  inline comments of one review, are not tracked. `github_issue` and `github_discussion` make no extra request;
+  `github_pr` makes 1 more per run (`/issues/{n}`, for the PR body's counts). Event `<kind>.reacted`
+  (`issue.reacted`, `pr.reacted`, `discussion.reacted`), one per target whose counts rose since the last run, every
+  kind that rose in one event. Payload: `number`, `title`, `url` (the item's or the comment's), `target` (`item` or
+  `comment`), `added` (kind to its rise, rises only) and `counts` (the 8 current counts). A drop emits nothing. The
+  first run after the box is checked, and a comment new in the run, are a baseline. Toggling the box is no
+  retarget, and checking it does not make the watch due. Who reacted is not reported.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
@@ -347,8 +374,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `event.payload.body matches "(?i)breaking.change"`. On an event without them, filters read `cves` as `[]` and
   `body` as `""`; the stored and delivered payload stays as it is. So `len(event.payload.cves) == 0` and
   `event.payload.body == ""` also match non-release events: a rule meant for releases adds a check on
-  `event.type` or targets a watch. New issues and PRs carry their label names in `payload.labels`:
-  `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
+  `event.type` or targets a watch. New issues, PRs and discussions carry their label names in `payload.labels`
+  (discussions add `payload.category`):
+  `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Reaction
+  events carry their rises in `payload.added`: `event.type == "issue.reacted" && "heart" in event.payload.added`,
+  `"+1" in event.payload.added && event.payload.added["+1"] >= 5` (the `in` check first: a missing kind fails the
+  rule). Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule of the watch's
   owner now, on that watch or on all watches, is evaluated; a match adds one inbox item and one delivery
@@ -642,6 +673,11 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   and delete version 17 from `goose_db_version`: a new-version pod starting before that would apply 17
   again. Shares come back as an empty table. Only a backup taken before the upgrade restores the deleted
   rules, inbox items and deliveries.
+- Discussions and reactions (migration 20). Rollback: deploy the older image first; its `github_discussion`
+  watches then fail every run and their detail page does not render. Delete those watches, run migration
+  20's `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 20 from
+  `goose_db_version`. Stored states keep the new keys, which the older image ignores; saving a watch from its
+  UI drops the `new_discussions` and `reactions` boxes.
 
 ## Endpoints
 

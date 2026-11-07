@@ -16,6 +16,7 @@ import { formatAbsolute } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import {
   stateLine,
+  type DiscussionState,
   type IssueState,
   issueStateText,
   type MRState,
@@ -304,6 +305,8 @@ export function StateView({ kind, state }: { kind: Watch["kind"]; state: unknown
       return <PRSummary state={state as PRState} />;
     case "github_issue":
       return <IssueSummary state={state as IssueState} />;
+    case "github_discussion":
+      return <IssueSummary state={state as DiscussionState} />;
     case "gitlab_mr":
       return <MRSummary state={state as MRState} />;
     case "oci_tags":
@@ -422,13 +425,32 @@ function PRSummary({ state }: { state: PRState }) {
   );
 }
 
-function IssueSummary({ state }: { state: IssueState }) {
+/** An issue, or a discussion with its category and chosen answer. */
+function IssueSummary({ state }: { state: IssueState & Partial<DiscussionState> }) {
   const labels = state.labels ?? [];
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-line p-4">
       <ChangeHeader title={state.title} url={state.url} prefix={`#${state.number}`} />
       <div className="flex flex-wrap gap-6">
         <Pill label="State" value={issueStateText(state)} />
+        {state.category !== undefined && <Pill label="Category" value={state.category} />}
+        {state.answer_url !== undefined && (
+          <span className="flex flex-col gap-1">
+            <span className="text-xs text-muted">Answer</span>
+            {/^https?:\/\//.test(state.answer_url) ? (
+              <a
+                href={state.answer_url}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-sm underline-offset-2 hover:underline"
+              >
+                chosen
+              </a>
+            ) : (
+              <span className="text-sm text-muted">{state.answer_url ? "chosen" : "none"}</span>
+            )}
+          </span>
+        )}
         <span className="flex flex-col gap-1">
           <span className="text-xs text-muted">Labels</span>
           <span className="flex flex-wrap gap-1">

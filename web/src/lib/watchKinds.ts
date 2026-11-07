@@ -3,6 +3,7 @@ import {
   Container,
   GitMerge,
   GitPullRequest,
+  MessagesSquare,
   Rocket,
   Tag,
   type LucideIcon,
@@ -24,7 +25,7 @@ export const KINDS: KindInfo[] = [
   {
     kind: "github_repo",
     label: "GitHub repository",
-    blurb: "Releases, new issues and PRs of a repository",
+    blurb: "Releases, new issues, PRs and discussions of a repository",
     icon: Rocket,
     credential: "github_token",
     defaultSchedule: "1h",
@@ -42,6 +43,14 @@ export const KINDS: KindInfo[] = [
     label: "GitHub issue",
     blurb: "State, labels and comments of one issue",
     icon: CircleDot,
+    credential: "github_token",
+    defaultSchedule: "1h",
+  },
+  {
+    kind: "github_discussion",
+    label: "GitHub discussion",
+    blurb: "State, answer, labels and comments of one discussion",
+    icon: MessagesSquare,
     credential: "github_token",
     defaultSchedule: "1h",
   },
@@ -123,25 +132,51 @@ const PROJECT: FieldSpec = {
   placeholder: "gitlab-org/gitlab",
 };
 
-const TWO_REQUESTS = "Each run then makes two requests: GitHub allows 60 an hour without a token.";
+const ITEM_REQUESTS =
+  "Each run then makes 1 more request: GitHub allows 60 an hour without a token.";
+const reactions = (hint: string): FieldSpec => ({
+  key: "reactions",
+  label: "Report reactions",
+  type: "checkbox",
+  hint,
+});
+const REACTIONS_FREE = reactions(
+  "No extra request: the counts come with the item and its comments.",
+);
+const DISCUSSION_REQUESTS =
+  "Each run then makes 2 to 3 more requests: GitHub allows 60 an hour without a token.";
 
 // Shared keys (repo, api_url, base_url, project) carry over when the kind changes in the form.
 export const FIELDS: Record<WatchKind, FieldSpec[]> = {
   github_repo: [
     REPO,
     { key: "include_prereleases", label: "Include pre-releases", type: "checkbox" },
-    { key: "new_issues", label: "Report new issues", type: "checkbox", hint: TWO_REQUESTS },
-    { key: "new_prs", label: "Report new pull requests", type: "checkbox", hint: TWO_REQUESTS },
+    { key: "new_issues", label: "Report new issues", type: "checkbox", hint: ITEM_REQUESTS },
+    { key: "new_prs", label: "Report new pull requests", type: "checkbox", hint: ITEM_REQUESTS },
+    {
+      key: "new_discussions",
+      label: "Report new discussions",
+      type: "checkbox",
+      hint: DISCUSSION_REQUESTS,
+    },
     GITHUB_API,
   ],
   github_pr: [
     REPO,
     { key: "number", label: "Pull request number", type: "number", placeholder: "123" },
+    reactions(ITEM_REQUESTS),
     GITHUB_API,
   ],
   github_issue: [
     REPO,
     { key: "number", label: "Issue number", type: "number", placeholder: "123" },
+    REACTIONS_FREE,
+    GITHUB_API,
+  ],
+  github_discussion: [
+    REPO,
+    { key: "number", label: "Discussion number", type: "number", placeholder: "123" },
+    REACTIONS_FREE,
     GITHUB_API,
   ],
   gitlab_release: [GITLAB_URL, PROJECT],
@@ -209,9 +244,12 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
   const c = w.config as Record<string, string | number | boolean | undefined>;
   switch (w.kind) {
     case "github_repo":
-      return c.new_issues === true || c.new_prs === true ? String(c.repo) : `${c.repo} releases`;
+      return c.new_issues === true || c.new_prs === true || c.new_discussions === true
+        ? String(c.repo)
+        : `${c.repo} releases`;
     case "github_pr":
     case "github_issue":
+    case "github_discussion":
       return `${c.repo} #${c.number}`;
     case "gitlab_release":
       return `${c.project} releases`;
@@ -230,6 +268,7 @@ const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
   github_repo: ["api_url", "https://api.github.com"],
   github_pr: ["api_url", "https://api.github.com"],
   github_issue: ["api_url", "https://api.github.com"],
+  github_discussion: ["api_url", "https://api.github.com"],
   gitlab_release: ["base_url", "https://gitlab.com"],
   gitlab_mr: ["base_url", "https://gitlab.com"],
   oci_tags: ["registry", "docker.io"],

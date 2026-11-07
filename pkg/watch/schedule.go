@@ -20,7 +20,7 @@ const (
 
 // DefaultScheduleFor returns the schedule a new watch of kind gets when none is given.
 func DefaultScheduleFor(kind string) string {
-	if kind == KindGitHubRepo || kind == KindGitHubPR || kind == KindGitHubIssue {
+	if kind == KindGitHubRepo || kind == KindGitHubPR || kind == KindGitHubIssue || kind == KindGitHubDiscussion {
 		return githubSchedule
 	}
 	return defaultSchedule

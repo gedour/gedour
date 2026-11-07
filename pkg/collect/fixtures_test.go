@@ -100,7 +100,7 @@ func TestGitHubPRFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 		if s.Comments, err = normalizeComments(testupstream.Part("github_pr", set, "reviews"),
-			testupstream.Part("github_pr", set, "review_comments"), testupstream.Part("github_pr", set, "issue_comments")); err != nil {
+			testupstream.Part("github_pr", set, "review_comments"), testupstream.Part("github_pr", set, "issue_comments"), false); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -174,7 +174,7 @@ func TestGitHubPRComments(t *testing.T) {
 	ib, _ := json.Marshal(issue)
 	reviews := `[{"user":{"login":"r"},"body":"","state":"APPROVED","html_url":"r0","submitted_at":"2026-11-05T11:00:00Z"},
 		{"user":{"login":"r"},"body":"late review","state":"COMMENTED","html_url":"r1","submitted_at":"2026-11-05T11:01:00Z"}]`
-	got, err := normalizeComments([]byte(reviews), []byte(`[]`), ib)
+	got, err := normalizeComments([]byte(reviews), []byte(`[]`), ib, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestGitHubPRComments(t *testing.T) {
 	reviews = `[{"id":1,"user":{"login":"r"},"body":"overall fine","state":"COMMENTED","html_url":"r1","submitted_at":"2026-11-05T11:01:00Z"},
 		{"id":2,"user":{"login":"q"},"body":"","state":"COMMENTED","html_url":"r2","submitted_at":"2026-11-05T12:05:00Z"},
 		{"id":3,"user":{"login":"s"},"body":"","state":"COMMENTED","html_url":"r3","submitted_at":"2026-11-05T12:05:00Z"}]`
-	got, err = normalizeComments([]byte(reviews), []byte(inline), []byte(`[]`))
+	got, err = normalizeComments([]byte(reviews), []byte(inline), []byte(`[]`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +199,10 @@ func TestGitHubPRComments(t *testing.T) {
 		folded = append(folded, c.URL+" "+c.Excerpt)
 	}
 	check(t, folded, []string{"r1 overall fine (+1 inline)", "c11 first (+2 inline)", "c14 a reply"})
-	if got, err := normalizeComments([]byte(`[]`), []byte(`[]`), []byte(`[]`)); err != nil || got == nil {
+	if got, err := normalizeComments([]byte(`[]`), []byte(`[]`), []byte(`[]`), false); err != nil || got == nil {
 		t.Fatalf("empty must be non-nil: %v %v", got, err)
 	}
-	if _, err := normalizeComments([]byte(`[]`), []byte(`{}`), []byte(`[]`)); err == nil {
+	if _, err := normalizeComments([]byte(`[]`), []byte(`{}`), []byte(`[]`), false); err == nil {
 		t.Fatal("bad review comments accepted")
 	}
 	long := strings.Repeat("é", maxExcerpt+10)
@@ -395,7 +395,7 @@ func TestGitHubIssueFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), testupstream.Part("github_issue", set, "comments")); err != nil {
+		if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), testupstream.Part("github_issue", set, "comments"), false); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -410,6 +410,10 @@ func TestGitHubIssueFixtures(t *testing.T) {
 	}
 	if b.StateReason != "not_planned" || !slices.Equal(b.Labels, []string{"bug", "wontfix"}) {
 		t.Fatalf("state B: %+v", b)
+	}
+	// 011: the discussion-only reply_to key stays out of stored issue (and PR) states.
+	if j, err := json.Marshal(b); err != nil || strings.Contains(string(j), "reply_to") {
+		t.Fatalf("issue state JSON %s, %v", j, err)
 	}
 	const base = `"number":9400,"title":"` + title + `"`
 	const url = `"url":"https://github.com/cli/cli/issues/9400"`
@@ -469,5 +473,90 @@ func TestDiffIssue(t *testing.T) {
 	}
 	if _, err := normalizeGitHubIssue([]byte(`{"message":"Not Found"}`)); err == nil {
 		t.Fatal("issue without state accepted")
+	}
+}
+
+// 011-AC7: github_discussion normalizes the discussion and its flat comments, a reply pointing at its parent;
+// a→b closes it as resolved, picks an answer and adds a reply.
+func TestGitHubDiscussionFixtures(t *testing.T) {
+	norm := func(set string) DiscussionState {
+		s, err := normalizeGitHubDiscussion(testupstream.Part("github_discussion", set, "discussion"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.Comments, err = normalizeDiscussionComments(s.URL, testupstream.Part("github_discussion", set, "comments"), false); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	a, b := norm("a"), norm("b")
+	const title = "How do I set a default repo per directory?"
+	const u = "https://github.com/cli/cli/discussions/9507"
+	want := DiscussionState{Number: 9507, State: "open", Title: title, Category: "Q&A", Labels: []string{}, URL: u,
+		Comments: []PRComment{
+			{Author: "maintainer", CreatedAt: time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC), URL: u + "#discussioncomment-4100001",
+				Excerpt: "Set `GH_REPO` in a direnv `.envrc` per directory."},
+			{Author: "kenji-w", CreatedAt: time.Date(2026, 10, 27, 11, 0, 0, 0, time.UTC), URL: u + "#discussioncomment-4100002",
+				Excerpt: "Does it work with `gh pr create`?", ReplyTo: u + "#discussioncomment-4100001"},
+		}}
+	if !reflect.DeepEqual(a, want) {
+		t.Fatalf("state A:\n got  %+v\n want %+v", a, want)
+	}
+	if b.StateReason != "resolved" || b.AnswerURL != u+"#discussioncomment-4100001" || b.AnswerChosenBy != "kenji-w" {
+		t.Fatalf("state B: %+v", b)
+	}
+	const base = `"number":9507,"title":"` + title + `"`
+	check(t, summary(t, diffDiscussion(a, b)), []string{
+		`discussion.state_changed "open">"closed" {"from":"open","number":9507,"state_reason":"resolved","title":"` + title + `","to":"closed","url":"` + u + `"}`,
+		`discussion.answer_changed "">"` + u + `#discussioncomment-4100001" {"chosen_by":"kenji-w","from":"",` + base + `,"to":"` + u + `#discussioncomment-4100001","url":"` + u + `"}`,
+		`discussion.commented ` + u + `#discussioncomment-4100003 {"author":"maintainer","excerpt":"Yes: every ` + "`gh`" + ` command reads ` + "`GH_REPO`" + `.",` +
+			`"number":9507,"reply_to":"` + u + `#discussioncomment-4100001","title":"` + title + `","url":"` + u + `#discussioncomment-4100003"}`,
+	})
+}
+
+// 011-AC7: each facet alone, the reopen, a reason change while closed, the answer chosen and removed, a reply, and the baselines.
+func TestDiffDiscussion(t *testing.T) {
+	at := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	c := func(n int) PRComment {
+		return PRComment{Author: "alice", CreatedAt: at.Add(time.Duration(n) * time.Minute), URL: fmt.Sprintf("u%d", n), Excerpt: "hi"}
+	}
+	reply := c(2)
+	reply.ReplyTo = "u1"
+	open := DiscussionState{Number: 12, State: "open", Title: "T", Category: "Q&A", Labels: []string{"bug"}, URL: "x", Comments: []PRComment{c(1)}}
+	with := func(f func(*DiscussionState)) DiscussionState {
+		s := open
+		s.Labels = slices.Clone(open.Labels)
+		s.Comments = slices.Clone(open.Comments)
+		f(&s)
+		return s
+	}
+	closed := with(func(s *DiscussionState) { s.State, s.StateReason = "closed", "resolved" })
+	answered := with(func(s *DiscussionState) { s.AnswerURL, s.AnswerChosenBy = "x#discussioncomment-1", "bob" })
+	for _, tt := range []struct {
+		name     string
+		old, cur DiscussionState
+		want     []string
+	}{
+		{"unchanged", open, open, []string{}},
+		{"closed resolved", open, closed, []string{`discussion.state_changed "open">"closed" {"from":"open","number":12,"state_reason":"resolved","title":"T","to":"closed","url":"x"}`}},
+		{"reopened", closed, with(func(s *DiscussionState) { s.StateReason = "reopened" }),
+			[]string{`discussion.state_changed "closed">"open" {"from":"closed","number":12,"state_reason":"reopened","title":"T","to":"open","url":"x"}`}},
+		{"reason change while closed", closed, with(func(s *DiscussionState) { s.State, s.StateReason = "closed", "outdated" }),
+			[]string{`discussion.state_changed "closed:resolved">"closed:outdated" {"from":"closed","number":12,"state_reason":"outdated","title":"T","to":"closed","url":"x"}`}},
+		{"answer chosen", open, answered,
+			[]string{`discussion.answer_changed "">"x#discussioncomment-1" {"chosen_by":"bob","from":"","number":12,"title":"T","to":"x#discussioncomment-1","url":"x"}`}},
+		{"answer removed", answered, open,
+			[]string{`discussion.answer_changed "x#discussioncomment-1">"" {"chosen_by":"","from":"x#discussioncomment-1","number":12,"title":"T","to":"","url":"x"}`}},
+		{"label added", open, with(func(s *DiscussionState) { s.Labels = []string{"bug", "triage"} }),
+			[]string{`discussion.labels_changed ["bug"]>["bug","triage"] {"from":["bug"],"number":12,"title":"T","to":["bug","triage"],"url":"x"}`}},
+		{"category change is no event", open, with(func(s *DiscussionState) { s.Category = "Ideas" }), []string{}},
+		{"comment and reply", open, with(func(s *DiscussionState) { s.Comments = []PRComment{c(1), reply, c(3)} }), []string{
+			`discussion.commented u2 {"author":"alice","excerpt":"hi","number":12,"reply_to":"u1","title":"T","url":"u2"}`,
+			`discussion.commented u3 {"author":"alice","excerpt":"hi","number":12,"title":"T","url":"u3"}`}},
+		{"no comments stored is a baseline", with(func(s *DiscussionState) { s.Comments = nil }), with(func(s *DiscussionState) { s.Comments = []PRComment{c(1), reply} }), []string{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			check(t, summary(t, diffDiscussion(tt.old, tt.cur)), tt.want)
+		})
 	}
 }

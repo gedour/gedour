@@ -129,6 +129,16 @@ func assertFilters(t *testing.T, pool *pgxpool.Pool, want map[string]string) {
 // 008 phase 3: github_issue joins the kind CHECK on a phase 2 DB; the down refuses to run while a
 // github_issue watch exists rather than delete it, then runs once none is left.
 func TestGitHubIssueKindMigration(t *testing.T) {
+	testKindCheckMigration(t, "github_issue", "github_pr", 15)
+}
+
+// 011 phase 2: github_discussion joins the kind CHECK on a phase 1 DB, with the same refusing down.
+func TestGitHubDiscussionKindMigration(t *testing.T) {
+	testKindCheckMigration(t, "github_discussion", "github_issue", 19)
+}
+
+// testKindCheckMigration checks the migration after version before adds kind to the CHECK, keeping a watch of other.
+func testKindCheckMigration(t *testing.T, kind, other string, before int64) {
 	ctx := context.Background()
 	pool, err := db.Connect(ctx, testpg.NewDB(t))
 	if err != nil {
@@ -141,8 +151,8 @@ func TestGitHubIssueKindMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.UpTo(ctx, 15); err != nil {
-		t.Fatalf("up to 15: %v", err)
+	if _, err := provider.UpTo(ctx, before); err != nil {
+		t.Fatalf("up to %d: %v", before, err)
 	}
 	insert := func(name, kind string) error {
 		_, err := pool.Exec(ctx, `INSERT INTO watches (owner_id, name, kind, config) SELECT id, $1, $2, '{"repo":"a/b","number":1}' FROM users`, name, kind)
@@ -151,38 +161,38 @@ func TestGitHubIssueKindMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := insert("pr", "github_pr"); err != nil {
+	if err := insert("other", other); err != nil {
 		t.Fatal(err)
 	}
-	if insert("early", "github_issue") == nil {
-		t.Fatal("github_issue accepted before the up")
+	if insert("early", kind) == nil {
+		t.Fatalf("%s accepted before the up", kind)
 	}
 	if _, err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := insert("issue", "github_issue"); err != nil {
-		t.Fatalf("github_issue refused after the up: %v", err)
+	if err := insert("new", kind); err != nil {
+		t.Fatalf("%s refused after the up: %v", kind, err)
 	}
-	if _, err := provider.DownTo(ctx, 15); err == nil {
-		t.Fatal("down ran with a github_issue watch left")
+	if _, err := provider.DownTo(ctx, before); err == nil {
+		t.Fatalf("down ran with a %s watch left", kind)
 	}
 	var n int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE kind IN ('github_issue', 'github_pr')`).Scan(&n); err != nil || n != 2 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE kind IN ($1, $2)`, kind, other).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("watches after the refused down: %d, %v", n, err)
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM watches WHERE kind = 'github_issue'`); err != nil {
+	if _, err := pool.Exec(ctx, `DELETE FROM watches WHERE kind = $1`, kind); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.DownTo(ctx, 15); err != nil {
+	if _, err := provider.DownTo(ctx, before); err != nil {
 		t.Fatalf("down: %v", err)
 	}
-	if insert("late", "github_issue") == nil {
-		t.Fatal("github_issue accepted after the down")
+	if insert("late", kind) == nil {
+		t.Fatalf("%s accepted after the down", kind)
 	}
 	if _, err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
-	if err := insert("issue", "github_issue"); err != nil {
-		t.Fatalf("github_issue refused after the second up: %v", err)
+	if err := insert("new", kind); err != nil {
+		t.Fatalf("%s refused after the second up: %v", kind, err)
 	}
 }

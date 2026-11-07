@@ -57,6 +57,11 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 		{"github_issue", map[string]any{"repo": "cli/cli", "number": 9400, "api_url": srv.URL},
 			[]string{`issue.state_changed "open">"closed"`, `issue.labels_changed ["bug"]>["bug","wontfix"]`,
 				"issue.commented https://github.com/cli/cli/issues/9400#issuecomment-3600002"}},
+		// 011-AC7: fixture b closes the discussion as resolved, picks an answer and adds a reply.
+		{"github_discussion", map[string]any{"repo": "cli/cli", "number": 9507, "api_url": srv.URL},
+			[]string{`discussion.state_changed "open">"closed"`,
+				`discussion.answer_changed "">"https://github.com/cli/cli/discussions/9507#discussioncomment-4100001"`,
+				"discussion.commented https://github.com/cli/cli/discussions/9507#discussioncomment-4100003"}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner"},
 			[]string{"release.published v19.3.5", "release.published v19.3.6", "release.published v19.3.7", "release.published v19.3.8", "release.published v19.4.0"}},
 		{"gitlab_mr", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner", "iid": 7764},
@@ -563,6 +568,59 @@ func TestGitHubIssueCallFails(t *testing.T) {
 			defer srv.Close()
 			raw, err := Collectors()["github_issue"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 7, "api_url": srv.URL}), nil)
 			if err == nil || raw != nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("state %s, err %v; want %q", raw, err, tt.want)
+			}
+		})
+	}
+}
+
+// 011-AC8: a number the discussions route does not know (an issue, a PR) fails naming github_issue and github_pr.
+func TestGitHubDiscussionNotFound(t *testing.T) {
+	comments := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/comments") {
+			comments++
+		}
+		http.Error(w, `{"message":"Not Found","status":"404"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+	_, err := Collectors()["github_discussion"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "o/r", "number": 12, "api_url": srv.URL}), nil)
+	if err == nil || !strings.Contains(err.Error(), "#12 not found in o/r: not a discussion") ||
+		!strings.Contains(err.Error(), "or the repository is missing or private without a token") || !strings.Contains(err.Error(), "github_issue") ||
+		!strings.Contains(err.Error(), "github_pr") || comments != 0 {
+		t.Fatalf("err %v, comment calls %d", err, comments)
+	}
+}
+
+// 011-AC7: a failing discussion or comments call, or an unreadable answer, fails the run with no state.
+func TestGitHubDiscussionCallFails(t *testing.T) {
+	const discussion = `{"number":7,"state":"open","labels":[],"html_url":"https://github.com/a/b/discussions/7"}`
+	for _, tt := range []struct {
+		name, discussion, comments string
+		status                     int // of the failing call
+		want                       string
+	}{
+		{"discussion 500", "", `[]`, http.StatusInternalServerError, "/discussions/7: HTTP 500"},
+		{"discussion without state", `{"message":"x"}`, `[]`, 0, "decode discussion: no state"},
+		{"comments 500", discussion, "", http.StatusInternalServerError, "/discussions/7/comments?per_page=100: HTTP 500"},
+		{"comments 404 is no wrong-kind hint", discussion, "", http.StatusNotFound, "/discussions/7/comments?per_page=100: HTTP 404"},
+		{"comments not a list", discussion, `{"message":"x"}`, 0, "decode discussion comments"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := tt.discussion
+				if strings.HasSuffix(r.URL.Path, "/comments") {
+					body = tt.comments
+				}
+				if body == "" {
+					http.Error(w, `{"message":"boom"}`, tt.status)
+					return
+				}
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			raw, err := Collectors()["github_discussion"].Collect(t.Context(), fetcher(t), cfgJSON(t, map[string]any{"repo": "a/b", "number": 7, "api_url": srv.URL}), nil)
+			if err == nil || raw != nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), "github_issue") {
 				t.Fatalf("state %s, err %v; want %q", raw, err, tt.want)
 			}
 		})

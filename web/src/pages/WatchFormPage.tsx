@@ -212,7 +212,7 @@ export function WatchForm({ initial }: { initial?: Watch }) {
                 ) : recognized === null ? (
                   "Not recognized: pick a kind and fill the fields below."
                 ) : (
-                  "A GitHub or GitLab repository, release, PR or MR page, a Docker Hub page or an image like ghcr.io/org/app"
+                  "A GitHub or GitLab repository, release, issue, discussion, PR or MR page, a Docker Hub page or an image like ghcr.io/org/app"
                 )
               }
             >

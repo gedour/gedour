@@ -55,7 +55,18 @@ test("main views fit 375 px", async ({ page }) => {
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
     // 008-AC15: the default kind's form shows the new-items boxes and their hint.
-    if (path === "/watches/new") await expect(page.getByText(/two requests/)).toBeVisible();
+    // 011-AC17: and the discussions box with its own hint.
+    if (path === "/watches/new") {
+      await expect(page.getByText(/1 more request:/)).toBeVisible();
+      await expect(page.getByText(/2 to 3 more requests/)).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      // 011-AC17: the github_discussion form fits too.
+      await page
+        .getByRole("radio", { name: /GitHub discussion/ })
+        .locator("..")
+        .click();
+      await expect(page.getByLabel("Discussion number")).toBeVisible();
+    }
     await expectNoHorizontalScroll(page);
   }
   await page.goto("/auth/signed-out");

@@ -298,3 +298,23 @@ func TestMigrateUnreachable(t *testing.T) {
 		t.Fatal("want error when PostgreSQL is unreachable")
 	}
 }
+
+// Two branches can each add the next number under different names: git merges both, and goose then refuses to start.
+func TestMigrationVersionsUnique(t *testing.T) {
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]string{}
+	for _, e := range entries {
+		v, err := goose.NumericComponent(e.Name())
+		if err != nil {
+			t.Errorf("%s: %v", e.Name(), err)
+			continue
+		}
+		if prev, ok := seen[v]; ok {
+			t.Errorf("migration version %d used by %s and %s", v, prev, e.Name())
+		}
+		seen[v] = e.Name()
+	}
+}

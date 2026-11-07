@@ -673,9 +673,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   and delete version 17 from `goose_db_version`: a new-version pod starting before that would apply 17
   again. Shares come back as an empty table. Only a backup taken before the upgrade restores the deleted
   rules, inbox items and deliveries.
-- Discussions and reactions (migration 18). Rollback: deploy the older image first; its `github_discussion`
+- Discussions and reactions (migration 20). Rollback: deploy the older image first; its `github_discussion`
   watches then fail every run and their detail page does not render. Delete those watches, run migration
-  18's `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 18 from
+  20's `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 20 from
   `goose_db_version`. Stored states keep the new keys, which the older image ignores; saving a watch from its
   UI drops the `new_discussions` and `reactions` boxes.
 

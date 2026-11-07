@@ -134,7 +134,7 @@ func TestGitHubIssueKindMigration(t *testing.T) {
 
 // 011 phase 2: github_discussion joins the kind CHECK on a phase 1 DB, with the same refusing down.
 func TestGitHubDiscussionKindMigration(t *testing.T) {
-	testKindCheckMigration(t, "github_discussion", "github_issue", 17)
+	testKindCheckMigration(t, "github_discussion", "github_issue", 19)
 }
 
 // testKindCheckMigration checks the migration after version before adds kind to the CHECK, keeping a watch of other.

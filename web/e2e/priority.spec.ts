@@ -20,6 +20,8 @@ test("a high rule on a fixture release shows the badge and the filter", async ({
   await page.getByRole("button", { name: "High priority", exact: true }).click();
   await expect(page).toHaveURL(/\?priority=high$/);
   await expect(row(/promoted to release/)).toHaveCount(0);
+  // Waits out a refetch: bob's inbox changes under parallel specs (read marks from push.spec.ts too).
+  await expect(page.getByRole("list", { name: /^Inbox, / }).getByRole("listitem")).toHaveCount(2);
   const titles = await page
     .getByRole("list", { name: /^Inbox, / })
     .getByRole("listitem")

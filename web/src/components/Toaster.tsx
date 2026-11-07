@@ -1,10 +1,28 @@
-import { CircleAlert, CircleCheck, X } from "lucide-react";
+import { CircleAlert, CircleCheck, TriangleAlert, X } from "lucide-react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 
 import { ToastContext, type Toast, type ToastTone } from "@/hooks/toast";
 import { cn } from "@/lib/utils";
 
 const TTL_MS = 5000;
+
+const TONES = {
+  success: {
+    icon: CircleCheck,
+    border: "border-emerald-600/40",
+    text: "text-emerald-700 dark:text-emerald-300",
+  },
+  warning: {
+    icon: TriangleAlert,
+    border: "border-amber-500/50",
+    text: "text-amber-700 dark:text-amber-300",
+  },
+  error: {
+    icon: CircleAlert,
+    border: "border-rose-500/50",
+    text: "text-rose-700 dark:text-rose-300",
+  },
+} as const;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -27,24 +45,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         className="pointer-events-none fixed inset-x-3 bottom-3 z-50 flex flex-col items-end gap-2 sm:left-auto sm:w-96"
       >
         {toasts.map((t) => {
-          const Icon = t.tone === "error" ? CircleAlert : CircleCheck;
+          const Icon = TONES[t.tone].icon;
           return (
             <div
               key={t.id}
               className={cn(
                 "pointer-events-auto flex w-full items-start gap-2.5 rounded-lg border bg-surface px-3.5 py-3 text-sm shadow-lg shadow-black/10",
-                t.tone === "error" ? "border-rose-500/50" : "border-emerald-600/40",
+                TONES[t.tone].border,
               )}
             >
-              <Icon
-                aria-hidden
-                className={cn(
-                  "mt-0.5 size-4 shrink-0",
-                  t.tone === "error"
-                    ? "text-rose-700 dark:text-rose-300"
-                    : "text-emerald-700 dark:text-emerald-300",
-                )}
-              />
+              <Icon aria-hidden className={cn("mt-0.5 size-4 shrink-0", TONES[t.tone].text)} />
               <p className="flex-1">{t.message}</p>
               <button
                 type="button"

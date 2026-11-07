@@ -107,3 +107,25 @@ export async function enterFilter(
     await expect(page.getByText("Valid filter")).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 10_000 });
 }
+
+/** The fake push service's subscription keys (testupstream.PushP256DH, PushAuth): it decrypts what they get. */
+export const PUSH_KEYS = {
+  p256dh: "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+  auth: "BTBZMqHH6r4Tts7J_aSIgg",
+};
+
+/** Registers a push device for the page's user, at the fake push service; returns its name. */
+export async function addDevice(page: Page, label: string) {
+  const id = `${label.replace(/\W/g, "")}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+  const name = `${label} device ${id}`;
+  const res = await (
+    await api(page)
+  )("POST", "/api/v1/push/devices", {
+    endpoint: `${UPSTREAM}/push/${id}`,
+    keys: PUSH_KEYS,
+    name,
+    user_agent: "Mozilla/5.0 (X11; Linux x86_64) e2e",
+  });
+  expect(res.status()).toBe(201);
+  return name;
+}

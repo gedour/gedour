@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
+import { addDevice, api, enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, hasTouch: true });
 
@@ -171,6 +171,26 @@ test("the Nextcloud Talk form fits 375 px", async ({ page }) => {
   expect(width.scroll).toBeLessThanOrEqual(width.client);
   await expectNoHorizontalScroll(page);
   await shot(page, "talk-form");
+});
+
+// 010-AC15: the device list and the Web Push form, devices picked, fit 375 px and work by touch.
+test("the Web Push devices and form fit 375 px", async ({ page }) => {
+  const device = await addDevice(page, "Mobile with a rather long device name");
+  await page.goto("/channels");
+  await expect(page.getByRole("list", { name: "Push devices" })).toContainText(device);
+  await expectNoHorizontalScroll(page);
+  await page.getByRole("button", { name: "New channel" }).first().tap();
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  await dialog.getByText("Web Push", { exact: true }).tap();
+  await dialog.getByLabel(/Pick devices/).tap();
+  const box = dialog.getByRole("checkbox", { name: device });
+  await box.scrollIntoViewIfNeeded();
+  await box.tap();
+  await expect(box).toBeChecked();
+  const width = await dialog.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(width.scroll).toBeLessThanOrEqual(width.client);
+  await expectNoHorizontalScroll(page);
+  await shot(page, "web-push-form");
 });
 
 test.describe("without a session", () => {

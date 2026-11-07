@@ -45,12 +45,14 @@ type Query struct {
 // visible is the one visibility rule (001-AC22): entries the viewer made or someone made acting as them (006-AC16), or on a watch,
 // credential, channel, rule or delivery (via its channel) they own now. watch_share entries (target "<watch>:<user>", history from
 // before 009) go to the watch owner (009-AC2). Losing a watch hides its history.
+// push_device entries go to the owners they name: a device is deleted when gone, and a move names both (010-AC16).
 const visible = `(a.actor_user_id = @viewer OR a.on_behalf_of = @viewer
 	OR (a.target_type = 'watch' AND a.target_id IN (SELECT id::text FROM watches WHERE owner_id = @viewer))
 	OR (a.target_type = 'watch_share' AND split_part(a.target_id, ':', 1) IN (SELECT id::text FROM watches WHERE owner_id = @viewer))
 	OR (a.target_type = 'credential' AND a.target_id IN (SELECT id::text FROM credentials WHERE owner_id = @viewer))
 	OR (a.target_type = 'channel' AND a.target_id IN (SELECT id::text FROM channels WHERE owner_id = @viewer))
 	OR (a.target_type = 'rule' AND a.target_id IN (SELECT id::text FROM rules WHERE owner_id = @viewer))
+	OR (a.target_type = 'push_device' AND @viewer::text IN (a.before->>'owner_id', a.after->>'owner_id'))
 	OR (a.target_type = 'delivery' AND a.target_id IN (SELECT d.id::text FROM deliveries d JOIN channels c ON c.id = d.channel_id
 		WHERE c.owner_id = @viewer)))`
 

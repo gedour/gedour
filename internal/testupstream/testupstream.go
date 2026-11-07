@@ -1,13 +1,15 @@
 // Package testupstream is a fake GitHub, GitLab and OCI registry serving recorded fixtures, for the
 // collector tests and the e2e run. Fixture set "a" is the first observation, "b" the changed one.
-// For the e2e channels it also stands in for the Telegram Bot API, a Nextcloud Talk server and webhook
-// receivers.
+// For the e2e channels it also stands in for the Telegram Bot API, a Nextcloud Talk server, webhook
+// receivers and a Web Push service.
 package testupstream
 
 import (
+	"crypto/ecdh"
 	"crypto/hmac"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,7 +17,10 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
+
+	"github.com/gedour/gedour/pkg/notify/webpush"
 )
 
 //go:embed fixtures/*.json
@@ -74,7 +79,8 @@ type Server struct {
 // Received is one request a fake channel endpoint got.
 type Received struct {
 	// Endpoint is "telegram", the webhook's name (POST /_hooks/{name}), "talk-<token>" for a Talk message
-	// accepted, "talk-<token>-rejected" for one refused.
+	// accepted, "talk-<token>-rejected" for one refused, "push-<id>" for a Web Push message accepted (Body
+	// is the decrypted payload), "push-<id>-rejected" for one refused.
 	Endpoint string            `json:"endpoint"`
 	Header   map[string]string `json:"header"`
 	Body     string            `json:"body"`
@@ -117,6 +123,7 @@ func New() *Server {
 		return "telegram"
 	}))
 	s.mux.HandleFunc("POST /ocs/v2.php/apps/spreed/api/v1/bot/{token}/message", s.talk)
+	s.mux.HandleFunc("POST /push/{id}", s.push)
 	// Names starting with "fail" answer 500, to drive retries.
 	s.mux.HandleFunc("POST /_hooks/{name}", s.receive(func(r *http.Request) string { return r.PathValue("name") }))
 	s.mux.HandleFunc("GET /_received", func(w http.ResponseWriter, _ *http.Request) {
@@ -300,4 +307,75 @@ func (s *Server) tags(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Link", fmt.Sprintf(`</v2/%s/tags/list?last=%s&n=1000>; rel="next"`, repo, last))
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": pages[page]})
+}
+
+// The fake push service's subscription keys, from the RFC 8291 section 5 example: a device registered
+// with PushP256DH and PushAuth gets its pushes decrypted and recorded.
+const (
+	PushPrivateKey = "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94" //nolint:gosec // test fixture
+	PushP256DH     = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
+	PushAuth       = "BTBZMqHH6r4Tts7J_aSIgg" //nolint:gosec // test fixture
+)
+
+var pushKey = func() *ecdh.PrivateKey {
+	raw, err := base64.RawURLEncoding.DecodeString(PushPrivateKey)
+	if err != nil {
+		panic(err)
+	}
+	k, err := ecdh.P256().NewPrivateKey(raw)
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
+
+// PushSubscription is a subscription to the fake push service at endpoint (<base>/push/<id>).
+func PushSubscription(endpoint string) webpush.Subscription {
+	auth, _ := base64.RawURLEncoding.DecodeString(PushAuth)
+	return webpush.Subscription{Endpoint: endpoint, P256DH: pushKey.PublicKey().Bytes(), Auth: auth}
+}
+
+// pushStatus answers like a push service (RFC 8030, RFC 8292): ids starting with gone answer 410, fail
+// 500 (push holds hang ones until the sender gives up); a VAPID token that does not verify for this
+// origin is 403, a body that does not decrypt 400.
+func pushStatus(r *http.Request, id string, body []byte) (int, []byte) {
+	switch {
+	case strings.HasPrefix(id, "gone"):
+		return http.StatusGone, nil
+	case strings.HasPrefix(id, "fail"):
+		return http.StatusInternalServerError, nil
+	case r.Header.Get("Content-Encoding") != "aes128gcm" || r.Header.Get("TTL") == "":
+		return http.StatusBadRequest, nil
+	}
+	token, key, err := webpush.ParseAuthorization(r.Header.Get("Authorization"))
+	origin := "http://" + r.Host
+	if r.TLS != nil {
+		origin = "https://" + r.Host
+	}
+	if err != nil || webpush.VerifyJWT(token, key, origin, time.Now()) != nil {
+		return http.StatusForbidden, nil
+	}
+	plain, err := webpush.Decrypt(body, pushKey, PushSubscription("").Auth)
+	if err != nil {
+		return http.StatusBadRequest, nil
+	}
+	return http.StatusCreated, plain
+}
+
+func (s *Server) push(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if strings.HasPrefix(id, "hang") {
+		// The server notices the client leave only once the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	code, plain := pushStatus(r, id, body)
+	name := "push-" + id
+	if code != http.StatusCreated {
+		name += "-rejected"
+	}
+	s.record(name, r, plain)
+	w.WriteHeader(code)
 }

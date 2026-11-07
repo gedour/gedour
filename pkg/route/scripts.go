@@ -331,7 +331,7 @@ func (s *Service) createScript(ctx context.Context, in *createScriptInput) (*scr
 	}
 	var out Script
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := underCap(ctx, tx, me, "scripts", MaxScripts); err != nil {
+		if err := underCap(ctx, tx, me, "scripts", "scripts", MaxScripts); err != nil {
 			return err
 		}
 		var id string

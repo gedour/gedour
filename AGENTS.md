@@ -30,9 +30,12 @@
   (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got. Its Talk endpoint checks
   the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
-  runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005); the a11y, 375 px and keyboard specs run
-  as bob, and only the keyboard spec touches the rc promotion item.
+  runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005). The a11y, 375 px, keyboard,
+  priority, push, api-keys and mcp specs run as bob (channels and watches in part). Specs open (mark read) the newest
+  or a high item, only the keyboard spec touches the rc promotion item; a11y, 375 px and keyboard add push devices for bob.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
+- Notifications need `test.use({ channel: "chromium" })`: the default headless shell reports them denied
+  even when granted (`push.spec.ts`, which also stubs `PushManager.subscribe` to point at the fake push service).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
   `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook and Nextcloud Talk targets).
 - Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project signs alice and
@@ -52,7 +55,7 @@
   needs `make openapi`: `TestOpenAPIDrift` (Go) and `pnpm check:api` (web) fail on a stale file. Huma ignores
   embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
-  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/` and `/.well-known/`.
+  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/`, `/.well-known/` and `/sw.js` (`web/public/sw.js`, 404 when missing).
 - `/metrics` and `/livez` (liveness, ignores PG) live only on the metrics listener; `/healthz` is on both.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite

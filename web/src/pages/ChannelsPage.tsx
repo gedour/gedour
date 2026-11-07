@@ -1,5 +1,15 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Pencil, Plus, RotateCw, Send, Trash2, TriangleAlert } from "lucide-react";
+import {
+  BellPlus,
+  Check,
+  Copy,
+  Pencil,
+  Plus,
+  RotateCw,
+  Send,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
@@ -16,6 +26,7 @@ import {
   updateChannel,
 } from "@/api/client";
 import { ChannelIcon, DeliveryBadge } from "@/components/ChannelBits";
+import { PushDevicesSection } from "@/components/PushDevices";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { Timestamp } from "@/components/Timestamp";
@@ -23,9 +34,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { Field, inputClass } from "@/components/ui/field";
 import { useToast } from "@/hooks/toast";
+import { DEVICES_KEY, useAddBrowser, usePushDevices, usePushUnavailable } from "@/hooks/usePush";
 import { CHANNEL_KINDS, channelKind, channelTarget } from "@/lib/channels";
 import { summarizeEvent } from "@/lib/events";
 import { fieldErrors, problemText, unplaced } from "@/lib/problems";
+import { defaultDeviceName, pushBlocked } from "@/lib/push";
 import { formatRelative } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
@@ -108,6 +121,7 @@ export function ChannelsPage({ item }: { item: NavItem }) {
           </ul>
         )}
       </section>
+      <PushDevicesSection />
       <DeliveriesSection channels={query.data ?? []} />
       <ChannelDialog editing={editing} onClose={() => setEditing(null)} />
       <DeleteDialog channel={deleting} onClose={() => setDeleting(null)} />
@@ -132,9 +146,15 @@ function ChannelCard({
   const test = useMutation({
     mutationFn: () => testChannel(c.id),
     onSuccess: (r) => {
-      if (r.ok) toast(script ? `Test run of ${c.name} done` : `Test message sent to ${c.name}`);
+      // 010: ok with an error is a Web Push test some devices refused.
+      if (r.ok && r.error)
+        toast(`Test message sent to ${c.name}, but some devices refused it: ${r.error}`, "warning");
+      else if (r.ok)
+        toast(script ? `Test run of ${c.name} done` : `Test message sent to ${c.name}`);
       else toast(`Test to ${c.name} failed: ${r.error ?? "unknown error"}`, "error");
       void client.invalidateQueries({ queryKey: ["audit"] });
+      // A push stamps its devices' last push.
+      if (c.type === "web_push") void client.invalidateQueries({ queryKey: DEVICES_KEY });
     },
     onError: (err) => toast(problemText(err), "error"),
   });
@@ -285,6 +305,31 @@ function ChannelForm({
   const [conversation, setConversation] = useState(String(cfg.conversation ?? ""));
   const [silent, setSilent] = useState(cfg.silent === true);
   const [scriptId, setScriptId] = useState(String(cfg.script_id ?? ""));
+  const [picked, setPicked] = useState<string[] | null>(
+    Array.isArray(cfg.devices) ? cfg.devices.map(String) : null,
+  );
+  const push = usePushDevices();
+  const tick = (id: string) => setPicked((p) => (p && !p.includes(id) ? [...p, id] : p));
+  // Known before the endpoint check catches up: a pick right after the registration still ticks it.
+  const [added, setAdded] = useState<string | null>(null);
+  const browser = useAddBrowser((d) => {
+    setAdded(d.id);
+    tick(d.id);
+  });
+  const here = push.thisId ?? added;
+  const pushOff = usePushUnavailable();
+  // 010-AC17: picking Web Push is the gesture that asks for permission, when this browser is not a device yet.
+  const pick = (k: ChannelKind) => {
+    setType(k);
+    if (
+      k === "web_push" &&
+      push.thisId === null &&
+      added === null &&
+      !browser.busy &&
+      pushBlocked() === null
+    )
+      browser.add(defaultDeviceName());
+  };
   const scripts = useQuery({ queryKey: ["scripts"], queryFn: listScripts });
   const [secret, setSecret] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -298,6 +343,7 @@ function ChannelForm({
     if (type === "nextcloud_talk") return { url, conversation, silent };
     if (type === "email") return { to: splitRecipients(to) };
     if (type === "script") return { script_id: scriptId };
+    if (type === "web_push") return { devices: picked ?? "all", silent };
     return { url };
   };
   const save = useMutation({
@@ -333,21 +379,34 @@ function ChannelForm({
   if (signing)
     return <SigningSecret name={signing.name} secret={signing.secret} onDone={onClose} />;
 
+  const deviceError =
+    errors.devices ?? Object.entries(errors).find(([k]) => k.startsWith("devices["))?.[1];
   const secretHint = channel
     ? "Write-only. Leave empty to keep the current one."
     : type === "webhook"
       ? "Write-only. Leave empty to have a strong one generated and shown once."
       : "Write-only: gedour never shows it again.";
-  const shown = ["name", "type", "secret", "chat_id", "url", "conversation", "to", "script_id"];
+  const shown = [
+    "name",
+    "type",
+    "secret",
+    "chat_id",
+    "url",
+    "conversation",
+    "to",
+    "script_id",
+    "devices",
+  ];
   return (
     <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
-      {unplaced(errors, [...shown, ...Object.keys(errors).filter((k) => k.startsWith("to["))]).map(
-        (m) => (
-          <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
-            {m}
-          </p>
-        ),
-      )}
+      {unplaced(errors, [
+        ...shown,
+        ...Object.keys(errors).filter((k) => k.startsWith("to[") || k.startsWith("devices[")),
+      ]).map((m) => (
+        <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+          {m}
+        </p>
+      ))}
       {!channel && (
         <fieldset className="flex flex-col gap-1.5">
           <legend className="mb-1.5 text-sm font-medium">Type</legend>
@@ -370,7 +429,7 @@ function ChannelForm({
                     value={k.type}
                     checked={type === k.type}
                     disabled={off}
-                    onChange={() => setType(k.type)}
+                    onChange={() => pick(k.type)}
                     className="sr-only"
                   />
                   <k.icon aria-hidden className="size-5" />
@@ -535,7 +594,80 @@ function ChannelForm({
           }
         </Field>
       )}
-      {type !== "email" && type !== "script" && (
+      {type === "web_push" && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1.5 text-sm font-medium">Devices</legend>
+          {[
+            { all: true, label: "All my devices", hint: "Devices added later included." },
+            { all: false, label: "Pick devices", hint: "Only the ones ticked below." },
+          ].map((o) => (
+            <label key={o.label} className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="push-devices"
+                checked={(picked === null) === o.all}
+                onChange={() => setPicked(o.all ? null : here ? [here] : [])}
+                className="mt-0.5 accent-beacon"
+              />
+              <span>
+                {o.label} <span className="text-xs text-muted">{o.hint}</span>
+              </span>
+            </label>
+          ))}
+          {picked !== null &&
+            (push.devices.data?.length ? (
+              <ul aria-label="Devices to notify" className="flex flex-col gap-1.5 pl-6">
+                {push.devices.data.map((d) => (
+                  <li key={d.id}>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(d.id)}
+                        onChange={(e) =>
+                          setPicked(
+                            e.target.checked ? [...picked, d.id] : picked.filter((x) => x !== d.id),
+                          )
+                        }
+                        className="accent-beacon"
+                      />
+                      <span className="min-w-0 wrap-anywhere">{d.name}</span>
+                      {d.id === here && <span className="text-xs text-muted">(this browser)</span>}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="pl-6 text-sm text-muted">
+                No device yet: add this browser, or add others from the Channels page in their own
+                browser.
+              </p>
+            ))}
+          {deviceError && <p className="text-sm text-rose-700 dark:text-rose-300">{deviceError}</p>}
+          {pushOff ? (
+            <p className="text-sm text-muted">{pushOff}</p>
+          ) : (
+            push.thisId === null &&
+            here === null && (
+              <Button
+                type="button"
+                variant="outline"
+                className="self-start"
+                disabled={browser.busy}
+                onClick={() => browser.add(defaultDeviceName())}
+              >
+                <BellPlus aria-hidden />
+                {browser.busy ? "Adding…" : "Add this browser"}
+              </Button>
+            )
+          )}
+          {browser.error && (
+            <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+              {browser.error}
+            </p>
+          )}
+        </fieldset>
+      )}
+      {type !== "email" && type !== "script" && type !== "web_push" && (
         <Field
           label={
             type === "telegram"
@@ -560,10 +692,12 @@ function ChannelForm({
           )}
         </Field>
       )}
-      {(type === "telegram" || type === "nextcloud_talk") && (
+      {(type === "telegram" || type === "nextcloud_talk" || type === "web_push") && (
         <Field
           label="Silent"
-          hint={type === "telegram" ? "Notifies without sound." : "Posts without a notification."}
+          hint={
+            type === "nextcloud_talk" ? "Posts without a notification." : "Notifies without sound."
+          }
         >
           {(p) => (
             <button

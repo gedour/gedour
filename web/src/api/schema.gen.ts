@@ -520,6 +520,59 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/push/devices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The caller's push devices; endpoints and keys are never returned */
+    get: operations["list-push-devices"];
+    put?: never;
+    /** Register a browser's push subscription; a known endpoint updates its device */
+    post: operations["register-push-device"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/push/devices/{id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Remove a push device; channels that listed it stop sending to it */
+    delete: operations["delete-push-device"];
+    options?: never;
+    head?: never;
+    /** Rename one of the caller's push devices */
+    patch: operations["rename-push-device"];
+    trace?: never;
+  };
+  "/api/v1/push/key": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The VAPID public key browsers subscribe with; 503 while Web Push is off */
+    get: operations["get-push-key"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/rules": {
     parameters: {
       query?: never;
@@ -940,7 +993,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent */
       config: {
         [key: string]: unknown;
       };
@@ -959,7 +1012,7 @@ export interface components {
       last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
       name: string;
       /** @enum {string} */
-      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script" | "web_push";
       /** Format: date-time */
       updated_at: string;
     };
@@ -975,7 +1028,7 @@ export interface components {
       /** @description Why it is unavailable */
       hint?: string;
       /** @enum {string} */
-      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script" | "web_push";
     };
     ChannelTypesOutputBody: {
       items: components["schemas"]["ChannelType"][] | null;
@@ -1059,10 +1112,10 @@ export interface components {
         [key: string]: unknown;
       };
       name: string;
-      /** @description Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none */
+      /** @description Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script, web_push: none */
       secret?: string;
       /** @enum {string} */
-      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script" | "web_push";
     };
     CreateCredentialInputBody: {
       /** @enum {string} */
@@ -1111,7 +1164,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent */
       config: {
         [key: string]: unknown;
       };
@@ -1132,7 +1185,7 @@ export interface components {
       /** @description Webhook only, generated when none was given: shown in this response only */
       signing_secret?: string;
       /** @enum {string} */
-      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script";
+      type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script" | "web_push";
       /** Format: date-time */
       updated_at: string;
     };
@@ -1334,6 +1387,12 @@ export interface components {
       target_id: string;
       target_type: string;
     };
+    KeysStruct: {
+      /** @description base64url 16-byte auth secret; write-only */
+      auth: string;
+      /** @description base64url P-256 public key; write-only */
+      p256dh: string;
+    };
     Limits: {
       /**
        * Format: int64
@@ -1425,6 +1484,10 @@ export interface components {
       items: components["schemas"]["Item"][] | null;
       /** @description Absent on the last page */
       next_cursor?: string;
+    };
+    ListPushDevicesOutputBody: {
+      /** @description Sorted by name */
+      items: components["schemas"]["PushDevice"][] | null;
     };
     ListRulesOutputBody: {
       /** @description Sorted by name */
@@ -1519,6 +1582,26 @@ export interface components {
       /** @description Sorted by owner, then name */
       other_rules: components["schemas"]["OtherRule"][] | null;
     };
+    PushDevice: {
+      /** Format: date-time */
+      created_at: string;
+      /** @description Hex SHA-256 of the subscription endpoint; the endpoint itself is never returned */
+      endpoint_sha256: string;
+      /** Format: uuid */
+      id: string;
+      /**
+       * Format: date-time
+       * @description When a push service last accepted a message for it
+       */
+      last_push_at: string | null;
+      name: string;
+      /** @description The browser's user agent at registration */
+      user_agent: string;
+    };
+    PushKeyOutputBody: {
+      /** @description VAPID public key, base64url: the browser's applicationServerKey */
+      public_key: string;
+    };
     Ref: {
       /** @description Functions; date() takes at most 2 arguments */
       builtins: string[] | null;
@@ -1532,6 +1615,16 @@ export interface components {
       rules: string[] | null;
       /** @description The one-line form repeated in compile errors */
       summary: string;
+    };
+    RegisterPushDeviceInputBody: {
+      /** @description PushSubscription.endpoint; write-only */
+      endpoint: string;
+      keys: components["schemas"]["KeysStruct"];
+      name: string;
+      user_agent?: string;
+    };
+    RenamePushDeviceInputBody: {
+      name: string;
     };
     Rule: {
       /** @description Channels besides the inbox, which is always on */
@@ -1633,7 +1726,12 @@ export interface components {
       state: unknown;
     };
     TestResultBody: {
-      /** @description Why the test message was not sent; for a script, why the run failed */
+      /**
+       * Format: int64
+       * @description Web Push channels: how many devices accepted the test
+       */
+      accepted?: number;
+      /** @description Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it */
       error?: string;
       /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
       logs?: string[] | null;
@@ -2869,6 +2967,161 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MeOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "list-push-devices": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListPushDevicesOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "register-push-device": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RegisterPushDeviceInputBody"];
+      };
+    };
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PushDevice"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "delete-push-device": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description No Content */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "rename-push-device": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RenamePushDeviceInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PushDevice"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "get-push-key": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PushKeyOutputBody"];
         };
       };
       /** @description Error */

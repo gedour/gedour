@@ -426,6 +426,89 @@ describe("InboxPage", () => {
     expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.has("priority")).toBe(false);
   });
 
+  // 010-AC13: a notification's link opens its event's item and leaves the filter in the URL.
+  it("opens the item a notification links to", async () => {
+    const srv = inboxServer([inboxItem(2), inboxItem(1, { priority: "high" })]);
+    const { router, unmount } = renderApp("/inbox?priority=high&event=1");
+    expect(
+      await screen.findByRole("complementary", { name: "v1.0.0 published" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(srv.items()[1]?.read_at).not.toBeNull());
+    expect(router.state.location.search).toBe("?priority=high");
+    unmount();
+    const missing = renderApp("/inbox?event=99");
+    expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
+    await waitFor(() => expect(missing.router.state.location.search).toBe(""));
+    expect(screen.queryByRole("complementary", { name: /published/ })).not.toBeInTheDocument();
+    // The link was not dropped silently.
+    expect(
+      await screen.findByText(
+        "That event is not among the inbox items loaded here: it may be archived or older.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // 010-AC13: a cached list from an earlier visit lacks a newly pushed event: the link waits for the refetch.
+  it("resolves a link against the refetched list, not the cache", async () => {
+    let items = [inboxItem(1)];
+    mockApi({ "/api/v1/inbox": () => Response.json({ items }) });
+    const { router } = renderApp("/inbox");
+    expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+    await act(() => router.navigate("/channels"));
+    items = [inboxItem(2), inboxItem(1)];
+    await act(() => router.navigate("/inbox?event=2"));
+    expect(
+      await screen.findByRole("complementary", { name: "v2.0.0 published" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe(""));
+    expect(screen.queryByText(/not among the inbox items/)).not.toBeInTheDocument();
+  });
+
+  // 010-AC13: a failed refetch still resolves the link: a miss warns and leaves the URL.
+  it("drops a link when the inbox cannot be loaded", async () => {
+    let fail = false;
+    mockApi({
+      "/api/v1/inbox": () =>
+        fail ? new Response("", { status: 500 }) : Response.json({ items: [inboxItem(1)] }),
+    });
+    const { router } = renderApp("/inbox");
+    expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+    await act(() => router.navigate("/channels"));
+    fail = true;
+    await act(() => router.navigate("/inbox?event=7"));
+    await waitFor(() => expect(router.state.location.search).toBe(""));
+    expect(await screen.findByText(/not among the inbox items/)).toBeInTheDocument();
+  });
+
+  // 010-AC13: a link followed while an action is pending still marks its item read; the same link twice opens it twice.
+  it("marks a linked item read while another action is pending", async () => {
+    let release: (r: Response) => void = () => {};
+    const archive = vi.fn(() => new Promise<Response>((r) => (release = r)));
+    const fn = mockApi({
+      "/api/v1/inbox": { items: [inboxItem(2), inboxItem(1)] },
+      "/api/v1/inbox/archive": archive,
+      "/api/v1/inbox/read": () => Response.json({ updated: 1, unread: 1 }),
+    });
+    const { router } = renderApp("/inbox");
+    expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
+    await userEvent.keyboard("e");
+    await waitFor(() => expect(archive).toHaveBeenCalled());
+    await act(() => router.navigate("/inbox?event=1"));
+    expect(
+      await screen.findByRole("complementary", { name: "v1.0.0 published" }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/inbox/read", "POST")?.body).toEqual({ ids: [1] }),
+    );
+    await waitFor(() => expect(router.state.location.search).toBe(""));
+    release(Response.json({ updated: 1, unread: 1 }));
+    await userEvent.click(screen.getByRole("button", { name: "Close details" }));
+    await act(() => router.navigate("/inbox?event=1"));
+    expect(
+      await screen.findByRole("complementary", { name: "v1.0.0 published" }),
+    ).toBeInTheDocument();
+  });
+
   // 005-AC5: Load more stays within the filter, and the order is the server's, newest first.
   it("paginates within the filter", async () => {
     const fn = mockApi({

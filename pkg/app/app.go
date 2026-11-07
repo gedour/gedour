@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/netip"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/notify/webpush"
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
@@ -62,6 +64,13 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	}
 	sender, err := newSender(cfg, guard, build)
 	if err != nil {
+		return err
+	}
+	// A key that no longer opens fails only Web Push sends (no VAPID key), as a channel secret fails only its deliveries.
+	switch sender.VAPID, err = webpush.LoadOrCreate(ctx, pool, box); {
+	case errors.Is(err, webpush.ErrKeyUnreadable):
+		log.Error("vapid_key_unreadable", zap.Error(err))
+	case err != nil:
 		return err
 	}
 	// The sandbox is this binary re-executed: os.Executable is /app in the image, bin/gedour locally.
@@ -167,12 +176,23 @@ func waitForDB(ctx context.Context, pool *pgxpool.Pool, log *zap.Logger) bool {
 	}
 }
 
+// vapidContact is the VAPID subject when no https public URL is set: some push services refuse a push without one.
+const vapidContact = "https://github.com/gedour/gedour"
+
 // newSender builds the channel sender; webhooks, Telegram and Nextcloud Talk go through the guard and follow no redirect.
 func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo) (*notify.Sender, error) {
 	s := &notify.Sender{
 		Client:      guard.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: cfg.AllowHTTPHosts, NoRedirects: true}),
 		UserAgent:   "gedour/" + build.Version,
 		TelegramURL: cfg.TelegramAPIURL,
+		HTTPHosts:   cfg.AllowHTTPHosts,
+	}
+	// RFC 8292 section 2.1: the contact is mailto: or https:; a worker usually has no public URL.
+	s.VAPIDSubject = vapidContact
+	if urls := cfg.PublicURLs(); len(urls) > 0 {
+		if u, err := url.Parse(urls[0]); err == nil && u.Scheme == "https" {
+			s.VAPIDSubject = urls[0]
+		}
 	}
 	if !cfg.SMTP() {
 		return s, nil
@@ -212,7 +232,7 @@ func newServer(addr string, h http.Handler) *http.Server {
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      config.HTTPWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 	}
 }

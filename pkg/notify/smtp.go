@@ -164,7 +164,8 @@ func BuildMail(from *mail.Address, to []string, msg Message, now time.Time) ([]b
 	}
 	page := "<p><strong>" + html.EscapeString(msg.Title) + "</strong></p>"
 	if msg.Detail != "" {
-		page += "<p>" + html.EscapeString(msg.Detail) + "</p>"
+		// A digest's Detail holds one line per event.
+		page += "<p>" + strings.ReplaceAll(html.EscapeString(msg.Detail), "\r\n", "<br>") + "</p>"
 	}
 	if msg.URL != "" {
 		page += `<p><a href="` + html.EscapeString(msg.URL) + `">Open upstream</a></p>`

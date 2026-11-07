@@ -118,6 +118,8 @@ type Sender struct {
 	VAPIDSubject string
 	// HTTPHosts may receive a push over plain http; other push endpoints need https.
 	HTTPHosts []string
+	// PublicURL is the first GEDOUR_PUBLIC_URL, for the inbox link of a cut digest; empty: no link.
+	PublicURL string
 }
 
 func (s *Sender) now() time.Time {
@@ -136,13 +138,13 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("telegram config: %w", err)
 		}
-		return s.telegram(ctx, c, ch.Secret, msg)
+		return s.telegram(ctx, c, ch.Secret, TelegramText(msg))
 	case TypeNextcloudTalk:
 		var c NextcloudTalkConfig
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("nextcloud talk config: %w", err)
 		}
-		return s.talk(ctx, c, ch.Secret, d.ID, msg)
+		return s.talk(ctx, c, ch.Secret, d.ID, TalkText(msg))
 	case TypeEmail:
 		var c EmailConfig
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
@@ -262,9 +264,9 @@ func TelegramText(msg Message) string {
 	return "<b>" + html.EscapeString(string(r[:min(len(r), 600)])) + "</b>"
 }
 
-func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token string, msg Message) error {
+func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token, text string) error {
 	body, err := json.Marshal(map[string]any{
-		"chat_id": c.ChatID, "text": TelegramText(msg), "parse_mode": "HTML", "disable_web_page_preview": true,
+		"chat_id": c.ChatID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": true,
 		"disable_notification": c.Silent,
 	})
 	if err != nil {
@@ -345,8 +347,7 @@ func TalkSignature(secret, random, message string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (s *Sender) talk(ctx context.Context, c NextcloudTalkConfig, secret string, deliveryID int64, msg Message) error {
-	text := TalkText(msg)
+func (s *Sender) talk(ctx context.Context, c NextcloudTalkConfig, secret string, deliveryID int64, text string) error {
 	reference := sha256.Sum256([]byte(strconv.FormatInt(deliveryID, 10)))
 	body, err := json.Marshal(map[string]any{"message": text, "referenceId": hex.EncodeToString(reference[:]), "silent": c.Silent})
 	if err != nil {

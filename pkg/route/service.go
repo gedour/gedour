@@ -115,7 +115,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		}),
 		deliveries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gedour_deliveries_total",
-			Help: "Delivery attempts by channel type and outcome (sent, failed: retry scheduled, dead: no retry left).",
+			Help: "Delivery attempts by channel type and outcome (sent, failed: retry scheduled, dead: no retry left, skipped: read before its digest).",
 		}, []string{"channel_type", "status"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "gedour_delivery_duration_seconds",

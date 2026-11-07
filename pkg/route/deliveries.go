@@ -31,7 +31,7 @@ type RuleRef struct {
 // Delivery is one event sent (or being sent) to one channel.
 type Delivery struct {
 	ID            int64       `json:"id"`
-	Status        string      `json:"status" enum:"pending,sent,failed,dead" doc:"failed: a retry is scheduled; dead: no retry left"`
+	Status        string      `json:"status" enum:"pending,sent,failed,dead,skipped" doc:"failed: a retry is scheduled; dead: no retry left; skipped: a digest left it out, last_error says why"`
 	Attempts      int         `json:"attempts"`
 	NextAttemptAt *time.Time  `json:"next_attempt_at" nullable:"true" doc:"Set while pending or failed"`
 	LastError     *string     `json:"last_error" nullable:"true"`
@@ -50,7 +50,7 @@ type deliveryOutput struct {
 
 type listDeliveriesInput struct {
 	ChannelID string `query:"channel_id" format:"uuid" doc:"Only deliveries to this channel"`
-	Status    string `query:"status" enum:"pending,sent,failed,dead"`
+	Status    string `query:"status" enum:"pending,sent,failed,dead,skipped"`
 	Cursor    string `query:"cursor" doc:"next_cursor of the previous page"`
 	Limit     int    `query:"limit" minimum:"1" maximum:"100" default:"50"`
 }
@@ -160,7 +160,8 @@ func (s *Service) listDeliveries(ctx context.Context, in *listDeliveriesInput) (
 	return out, nil
 }
 
-// retryDelivery makes a failed or dead delivery due now; attempts are kept, so a dead one gets one more.
+// retryDelivery makes a failed or dead delivery due now, sent alone: in a digest the batch's attempt count would
+// count against it. Attempts are kept, so a dead one gets one more.
 func (s *Service) retryDelivery(ctx context.Context, in *deliveryPath) (*deliveryOutput, error) {
 	me, err := s.me(ctx)
 	if err != nil {
@@ -184,7 +185,7 @@ func (s *Service) retryDelivery(ctx context.Context, in *deliveryPath) (*deliver
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE deliveries SET status = 'pending', next_attempt_at = now() WHERE id = $1`, in.ID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE deliveries SET status = 'pending', next_attempt_at = now(), digest = false WHERE id = $1`, in.ID); err != nil {
 			return err
 		}
 		if after, err = ownDelivery(ctx, tx, me, in.ID); err != nil {

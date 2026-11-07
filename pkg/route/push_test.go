@@ -371,7 +371,7 @@ func TestPushDatabaseDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A device id that is gone already is skipped, not an error.
-	if err := recordPushes(context.Background(), p.pool, 0, nil, []pushTarget{{id: "6f1c1a43-6d5b-4c3a-9b8f-0e1f2a3b4c5d"}}); err != nil {
+	if err := recordPushes(context.Background(), p.pool, nil, nil, []pushTarget{{id: "6f1c1a43-6d5b-4c3a-9b8f-0e1f2a3b4c5d"}}); err != nil {
 		t.Fatal(err)
 	}
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
@@ -397,7 +397,7 @@ func TestPushDatabaseDown(t *testing.T) {
 	if _, err := pushSend(ctx, p.pool, p.box, pushSender(t), ch, notify.TestDelivery(time.Now())); err == nil || !strings.Contains(err.Error(), "load devices") {
 		t.Errorf("send: %v", err)
 	}
-	if err := recordPushes(ctx, p.pool, 1, []string{dev}, nil); err == nil || !strings.Contains(err.Error(), "record pushes") {
+	if err := recordPushes(ctx, p.pool, []int64{1}, []string{dev}, nil); err == nil || !strings.Contains(err.Error(), "record pushes") {
 		t.Errorf("record: %v", err)
 	}
 }
@@ -437,13 +437,13 @@ func TestPushGoneReRegistered(t *testing.T) {
 	dev := p.device(t, alice, "gone1", false)
 	var nonce []byte
 	p.scalar(t, &nonce, `SELECT nonce FROM push_devices WHERE id = $1`, dev)
-	if err := recordPushes(context.Background(), p.pool, 0, nil, []pushTarget{{id: dev, nonce: []byte("stale-nonce")}}); err != nil {
+	if err := recordPushes(context.Background(), p.pool, nil, nil, []pushTarget{{id: dev, nonce: []byte("stale-nonce")}}); err != nil {
 		t.Fatal(err)
 	}
 	if p.count(t, `SELECT count(*) FROM push_devices WHERE id = $1`, dev) != 1 || p.count(t, `SELECT count(*) FROM audit_log WHERE action = 'push_device.gone'`) != 0 {
 		t.Fatal("a device registered again was removed")
 	}
-	if err := recordPushes(context.Background(), p.pool, 0, nil, []pushTarget{{id: dev, nonce: nonce}}); err != nil {
+	if err := recordPushes(context.Background(), p.pool, nil, nil, []pushTarget{{id: dev, nonce: nonce}}); err != nil {
 		t.Fatal(err)
 	}
 	if p.count(t, `SELECT count(*) FROM push_devices WHERE id = $1`, dev) != 0 {
@@ -592,5 +592,27 @@ func TestPushMoveEntryOwnContext(t *testing.T) {
 			AND request_id = $3 AND (on_behalf_of IS NOT NULL OR api_key_id IS NOT NULL)`, dev, bob, "req-"+tt.name); n != 1 {
 			t.Errorf("%s: %d new-owner entries carrying the context", tt.name, n)
 		}
+	}
+}
+
+// 012-AC11, 012-AC12: "Send test" on a Web Push digest channel pushes the sample digest, tagged per channel.
+func TestPushTestSendDigest(t *testing.T) {
+	p := newPushEnv(t)
+	alice := p.user(t, "alice")
+	p.device(t, alice, "ok", false)
+	ch := p.channel(t, alice, false)
+	if _, err := p.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"delivery": "digest", "at": ["07:00"], "tz": "UTC"}' WHERE id = $1`, ch); err != nil {
+		t.Fatal(err)
+	}
+	s := New(p.pool, zap.NewNop(), p.box, pushSender(t), nil, nil, nil, p.m)
+	s.viewer = func(context.Context) (string, bool) { return alice, true }
+	res, err := s.testChannel(context.Background(), &idPath{ID: ch})
+	if err != nil || !res.Body.OK || deref2(res.Body.Accepted) != 1 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	var m notify.PushMessage
+	if got := p.up.Received(); len(got) != 1 || json.Unmarshal([]byte(got[0].Body), &m) != nil ||
+		m.Title != "2 unread events" || m.Tag != "gedour-digest-"+ch || m.URL != "/inbox" {
+		t.Fatalf("pushed %+v", m)
 	}
 }

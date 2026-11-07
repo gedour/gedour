@@ -479,15 +479,30 @@ type pushTarget struct {
 // skips the devices that accepted it before and records the new ones; a test (d.ID 0) keeps no ledger. A
 // gone device is removed and audited, never a failure (010-AC7, 010-AC8, 010-AC9).
 func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *notify.Sender, ch notify.Channel, d notify.Delivery) (int, error) {
+	var ids []int64
+	if d.ID != 0 {
+		ids = []int64{d.ID}
+	}
+	return pushFanOut(ctx, pool, box, sender, ch, ids, func(silent bool) ([]byte, string) {
+		return notify.PushPayload(d, silent), notify.PushUrgency(silent, d.Rule)
+	})
+}
+
+// pushFanOut sends one message for the deliveries ids (none for a test). A device is done once it accepted
+// every one of them: a digest records its acceptance against each, and a retry joined by a new delivery
+// reaches every device again (012-AC12).
+func pushFanOut(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *notify.Sender, ch notify.Channel, ids []int64,
+	message func(silent bool) ([]byte, string)) (int, error) {
 	var c notify.WebPushConfig
 	if err := json.Unmarshal(ch.Config, &c); err != nil {
 		return 0, fmt.Errorf("web push config: %w", err)
 	}
 	rows, err := pool.Query(ctx, `SELECT p.id::text, p.sealed, p.nonce,
-			EXISTS (SELECT 1 FROM delivery_push_sent s WHERE s.delivery_id = $3 AND s.device_id = p.id)
+			COALESCE(cardinality($3::bigint[]), 0) > 0 AND NOT EXISTS (SELECT 1 FROM unnest($3::bigint[]) x (id)
+				WHERE NOT EXISTS (SELECT 1 FROM delivery_push_sent s WHERE s.delivery_id = x.id AND s.device_id = p.id))
 		FROM push_devices p JOIN channels c ON c.owner_id = p.owner_id
 		WHERE c.id = $1 AND ($2 OR p.id IN (SELECT device_id FROM channel_push_devices WHERE channel_id = $1))
-		ORDER BY p.created_at, p.id`, ch.ID, c.Devices == notify.AllDevices, d.ID)
+		ORDER BY p.created_at, p.id`, ch.ID, c.Devices == notify.AllDevices, ids)
 	if err != nil {
 		return 0, fmt.Errorf("load devices: %w", err)
 	}
@@ -503,7 +518,7 @@ func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *
 		return 0, errNoDevice
 	}
 	pending := slices.DeleteFunc(slices.Clone(targets), func(t pushTarget) bool { return t.alreadySent })
-	payload, urgency := notify.PushPayload(d, c.Silent), notify.PushUrgency(c.Silent, d.Rule)
+	payload, urgency := message(c.Silent)
 	results := make([]error, len(pending))
 	sem := make(chan struct{}, pushParallel)
 	var wg sync.WaitGroup
@@ -538,7 +553,7 @@ func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *
 	// Recorded even when the drain cut the sends: what was accepted must not go out again.
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if err := recordPushes(rctx, pool, d.ID, accepted, gone); err != nil {
+	if err := recordPushes(rctx, pool, ids, accepted, gone); err != nil {
 		return len(accepted), err
 	}
 	done := len(accepted) + len(targets) - len(pending)
@@ -557,8 +572,8 @@ func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *
 	return len(accepted), nil
 }
 
-// recordPushes stamps the accepted devices, adds them to the delivery's ledger, and removes the gone ones.
-func recordPushes(ctx context.Context, pool *pgxpool.Pool, deliveryID int64, accepted []string, gone []pushTarget) error {
+// recordPushes stamps the accepted devices, adds them to the deliveries' ledger, and removes the gone ones.
+func recordPushes(ctx context.Context, pool *pgxpool.Pool, deliveryIDs []int64, accepted []string, gone []pushTarget) error {
 	if len(accepted) == 0 && len(gone) == 0 {
 		return nil
 	}
@@ -566,9 +581,9 @@ func recordPushes(ctx context.Context, pool *pgxpool.Pool, deliveryID int64, acc
 		if _, err := tx.Exec(ctx, `UPDATE push_devices SET last_push_at = now() WHERE id = ANY($1::uuid[])`, accepted); err != nil {
 			return err
 		}
-		if deliveryID != 0 {
+		if len(deliveryIDs) > 0 {
 			if _, err := tx.Exec(ctx, `INSERT INTO delivery_push_sent (delivery_id, device_id)
-				SELECT $1, id FROM push_devices WHERE id = ANY($2::uuid[]) ON CONFLICT DO NOTHING`, deliveryID, accepted); err != nil {
+				SELECT x, id FROM push_devices, unnest($1::bigint[]) x WHERE id = ANY($2::uuid[]) ON CONFLICT DO NOTHING`, deliveryIDs, accepted); err != nil {
 				return err
 			}
 		}

@@ -12,6 +12,7 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -62,11 +63,11 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery (\"immediate\", the default, or \"digest\"), at (digest: 1 to 24 local times \"HH:MM\"), tz (digest: IANA time zone, default UTC)"`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
-	LastDeliveryStatus *string        `json:"last_delivery_status" enum:"pending,sent,failed,dead" nullable:"true" doc:"Status of the newest delivery"`
+	LastDeliveryStatus *string        `json:"last_delivery_status" enum:"pending,sent,failed,dead,skipped" nullable:"true" doc:"Status of the newest delivery"`
 	LastDeliveryAt     *time.Time     `json:"last_delivery_at" nullable:"true"`
 }
 
@@ -246,12 +247,12 @@ const (
 // validateConfig normalizes a channel config; it returns field errors, never a server error.
 func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any, []error) {
 	var norm any
-	var errs []error
+	raw, sched, errs := splitDelivery(typ, raw)
 	switch typ {
 	case notify.TypeTelegram:
 		var c notify.TelegramConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		if c.ChatID = strings.TrimSpace(c.ChatID); !chatIDRe.MatchString(c.ChatID) {
 			errs = append(errs, configError("chat_id", "a numeric chat id (e.g. -1001234567890) or @channelname", c.ChatID))
@@ -260,7 +261,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeNextcloudTalk:
 		var c notify.NextcloudTalkConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		c.URL = strings.TrimRight(strings.TrimSpace(c.URL), "/")
 		if msg := s.checkTalkURL(c.URL); msg != "" {
@@ -273,7 +274,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeEmail:
 		var c notify.EmailConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		var to []string
 		for i, a := range c.To {
@@ -296,7 +297,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeWebhook:
 		var c notify.WebhookConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		c.URL = strings.TrimSpace(c.URL)
 		if msg := s.checkTargetURL(c.URL, "https://hooks.example.com/gedour"); msg != "" {
@@ -306,7 +307,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	case notify.TypeScript:
 		var c ScriptConfig
 		if err := decodeConfig(raw, &c); err != nil {
-			return nil, []error{err}
+			return nil, append(errs, err)
 		}
 		// Canonical form: the in-use check matches config->>'script_id' as text.
 		if id, err := uuid.Parse(c.ScriptID); err != nil {
@@ -316,8 +317,9 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 		}
 		norm = c
 	case notify.TypeWebPush:
-		norm, errs = validatePushConfig(raw)
-		if norm == nil {
+		var perrs []error
+		norm, perrs = validatePushConfig(raw)
+		if errs = append(errs, perrs...); norm == nil {
 			return nil, errs
 		}
 	default:
@@ -326,6 +328,9 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	b, _ := json.Marshal(norm)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
+	if sched != nil {
+		out["delivery"], out["at"], out["tz"] = deliveryDigest, sched.At, sched.TZ
+	}
 	return out, errs
 }
 
@@ -606,6 +611,11 @@ func (s *Service) updateChannel(ctx context.Context, in *updateChannelInput) (*c
 				return err
 			}
 		}
+		if old, now := scheduleOf(before.Config), scheduleOf(next.Config); b.Config != nil && !reflect.DeepEqual(old, now) {
+			if err := reschedule(ctx, tx, in.ID, now); err != nil {
+				return err
+			}
+		}
 		if sec != "" {
 			ct, nonce := s.box.Seal([]byte(sec), []byte(in.ID))
 			if _, err := tx.Exec(ctx, `UPDATE channels SET secret_ciphertext = $2, secret_nonce = $3, key_version = $4, last4 = $5 WHERE id = $1`,
@@ -729,14 +739,26 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 	}
 	out := &testResult{}
 	var sendErr error
-	if ch.Type == notify.TypeWebPush {
+	// 012-AC11: a digest channel's test is a sample digest of two events; the config read under the audit row decides.
+	var cfg map[string]any
+	_ = json.Unmarshal(ch.Config, &cfg) // a stored config is always an object
+	digest, now := scheduleOf(cfg) != nil, time.Now()
+	switch {
+	case ch.Type == notify.TypeWebPush:
 		tctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
 		defer cancel()
 		var n int
-		n, sendErr = pushSend(tctx, s.pool, s.box, s.sender, ch, notify.TestDelivery(time.Now()))
+		n, sendErr = pushFanOut(tctx, s.pool, s.box, s.sender, ch, nil, func(silent bool) ([]byte, string) {
+			if digest {
+				return notify.PushDigestPayload(notify.SampleDigest(now), ch.ID, silent), notify.PushUrgency(silent, nil)
+			}
+			return notify.PushPayload(notify.TestDelivery(now), silent), notify.PushUrgency(silent, nil)
+		})
 		out.Body.Accepted = &n
-	} else {
-		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(time.Now()), true)
+	case digest:
+		sendErr = s.sender.SendDigest(ctx, ch, notify.SampleDigest(now))
+	default:
+		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(now), true)
 	}
 	if refusals, ok := partlySent(sendErr); ok {
 		// Some devices took it: the test worked, the error names the ones that refused.

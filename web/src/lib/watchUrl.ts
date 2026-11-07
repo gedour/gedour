@@ -60,6 +60,9 @@ function github(parts: string[]): Recognized | null {
   if (section === "issues" && number) {
     return { kind: "github_issue", config: { repo, number } };
   }
+  if (section === "discussions" && number) {
+    return { kind: "github_discussion", config: { repo, number } };
+  }
   return { kind: "github_repo", config: { repo } };
 }
 

@@ -61,6 +61,8 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
   const pr = `PR #${str(p.number)}`;
   const mr = `MR !${str(p.iid)}`;
   const issue = `Issue #${str(p.number)}`;
+  const discussion = `Discussion #${str(p.number)}`;
+  const item = e.type.startsWith("discussion.") ? discussion : issue;
   switch (e.type) {
     case "release.published":
       return {
@@ -107,23 +109,28 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
         text: `${issue} opened by ${str(p.author)}`,
         url,
       };
-    case "issue.state_changed": {
+    case "issue.state_changed":
+    case "discussion.state_changed": {
       const t = transition(from, to);
       const reason = str(p.state_reason).replaceAll("_", " ");
       return {
         badge: "State",
-        // Closed as completed is the happy ending; other reasons keep the closed tone.
-        tone: t === "closed" && p.state_reason === "completed" ? "good" : tone(t),
-        text: `${issue} ${t}${t === "closed" && reason ? ` (${reason})` : ""}`,
+        // Closed as completed (resolved for a discussion) is the happy ending; other reasons keep the closed tone.
+        tone:
+          t === "closed" && (p.state_reason === "completed" || p.state_reason === "resolved")
+            ? "good"
+            : tone(t),
+        text: `${item} ${t}${t === "closed" && reason ? ` (${reason})` : ""}`,
         url,
       };
     }
-    case "issue.labels_changed": {
+    case "issue.labels_changed":
+    case "discussion.labels_changed": {
       const labels = Array.isArray(p.to) ? p.to.map(str) : [];
       return {
         badge: "Labels",
         tone: "change",
-        text: `${issue} labels: ${labels.length ? labels.join(", ") : "none"}`,
+        text: `${item} labels: ${labels.length ? labels.join(", ") : "none"}`,
         url,
       };
     }
@@ -140,7 +147,21 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       return {
         badge: "New discussion",
         tone: "change",
-        text: `Discussion #${str(p.number)} opened by ${str(p.author)}`,
+        text: `${discussion} opened by ${str(p.author)}`,
+        url,
+      };
+    case "discussion.answer_changed":
+      return {
+        badge: "Answer",
+        tone: to ? "good" : "change",
+        text: `Answer ${to ? "chosen" : "removed"} on discussion #${str(p.number)}`,
+        url,
+      };
+    case "discussion.commented":
+      return {
+        badge: "Comment",
+        tone: "change",
+        text: `${discussion} ${p.reply_to ? "reply" : "commented"} by ${str(p.author)}`,
         url,
       };
     case "mr.approval_changed": {

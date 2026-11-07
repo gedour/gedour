@@ -485,6 +485,8 @@ type PRComment struct {
 	// URL identifies the comment: the three kinds number their ids apart.
 	URL     string `json:"url"`
 	Excerpt string `json:"excerpt"`
+	// ReplyTo is the parent comment's URL on a discussion reply; omitempty keeps issue and PR states as they were.
+	ReplyTo string `json:"reply_to,omitempty"`
 }
 
 const (
@@ -765,9 +767,11 @@ func commentEvents(typ string, number int, title string, old, cur []PRComment) [
 	var events []Event
 	for _, c := range newComments(old, cur) {
 		at := c.CreatedAt
-		events = append(events, Event{Type: typ, Subject: c.URL, OccurredAt: &at, Payload: map[string]any{
-			"number": number, "title": title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt,
-		}})
+		p := map[string]any{"number": number, "title": title, "url": c.URL, "author": c.Author, "excerpt": c.Excerpt}
+		if c.ReplyTo != "" {
+			p["reply_to"] = c.ReplyTo
+		}
+		events = append(events, Event{Type: typ, Subject: c.URL, OccurredAt: &at, Payload: p})
 	}
 	return events
 }
@@ -883,20 +887,143 @@ func diffIssue(old, cur IssueState) []Event {
 	base := func() map[string]any {
 		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
 	}
-	events := diffFacets("issue", base, []facet{
+	events := withStateReason("issue", base, old.State, old.StateReason, cur.State, cur.StateReason, diffFacets("issue", base, []facet{
 		{"state_changed", old.State, cur.State},
 		{"labels_changed", old.Labels, cur.Labels},
-	})
+	}))
+	return append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+}
+
+// withStateReason adds cur's reason to the <prefix>.state_changed of events, and emits one for a reason change while closed.
+func withStateReason(prefix string, base func() map[string]any, oldState, oldReason, curState, curReason string, events []Event) []Event {
 	for _, e := range events {
-		if e.Type == "issue.state_changed" {
-			e.Payload["state_reason"] = cur.StateReason
+		if e.Type == prefix+".state_changed" {
+			e.Payload["state_reason"] = curReason
 		}
 	}
-	// A closed issue re-triaged (completed to duplicate...) keeps its state: only the reason tells, and names the subject.
-	if old.State == "closed" && cur.State == "closed" && old.StateReason != cur.StateReason {
+	// A closed item re-triaged (completed to duplicate...) keeps its state: only the reason tells, and names the subject.
+	if oldState == "closed" && curState == "closed" && oldReason != curReason {
 		p := base()
-		p["from"], p["to"], p["state_reason"] = "closed", "closed", cur.StateReason
-		events = append([]Event{{Type: "issue.state_changed", Subject: fmt.Sprintf("%q>%q", "closed:"+old.StateReason, "closed:"+cur.StateReason), Payload: p}}, events...)
+		p["from"], p["to"], p["state_reason"] = "closed", "closed", curReason
+		events = append([]Event{{Type: prefix + ".state_changed", Subject: fmt.Sprintf("%q>%q", "closed:"+oldReason, "closed:"+curReason), Payload: p}}, events...)
 	}
-	return append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return events
+}
+
+// DiscussionState is the normalized state of one GitHub discussion.
+type DiscussionState struct {
+	Number      int      `json:"number"`
+	State       string   `json:"state"`        // open or closed
+	StateReason string   `json:"state_reason"` // as GitHub reports it (resolved, outdated, duplicate, reopened), empty when null
+	Title       string   `json:"title"`
+	Category    string   `json:"category"` // shown only: a category change emits nothing
+	Labels      []string `json:"labels"`   // names, sorted, never nil
+	AnswerURL   string   `json:"answer_url"`
+	// AnswerChosenBy is stored because diffs only see states: answer_changed carries it.
+	AnswerChosenBy string `json:"answer_chosen_by"`
+	URL            string `json:"url"`
+	// Comments follow PRState.Comments, replies included with ReplyTo set.
+	Comments []PRComment `json:"comments"`
+}
+
+func collectGitHubDiscussion(ctx context.Context, f *Fetcher, cfg watch.GitHubDiscussionConfig, cred *Credential) (DiscussionState, error) {
+	h := githubHeaders(cred)
+	base := fmt.Sprintf("%s/repos/%s/discussions/%d", cfg.APIURL, cfg.Repo, cfg.Number)
+	r, err := f.get(ctx, base, h, false)
+	// 011-AC8: one numbering for issues, PRs and discussions; a 404 cannot tell those apart from a missing or private repository.
+	if he := (*HTTPError)(nil); errors.As(err, &he) && he.Status == http.StatusNotFound {
+		return DiscussionState{}, fmt.Errorf("#%d not found in %s: not a discussion (an issue or a PR? watch it with github_issue or github_pr), "+
+			"or the repository is missing or private without a token: %w", cfg.Number, cfg.Repo, err)
+	}
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	s, err := normalizeGitHubDiscussion(r.body)
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
+	if err != nil {
+		return DiscussionState{}, err
+	}
+	if s.Comments, err = normalizeDiscussionComments(s.URL, comments); err != nil {
+		return DiscussionState{}, err
+	}
+	return s, nil
+}
+
+func normalizeGitHubDiscussion(body []byte) (DiscussionState, error) {
+	var raw struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		StateReason string `json:"state_reason"`
+		Title       string `json:"title"`
+		Category    struct {
+			Name string `json:"name"`
+		} `json:"category"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		AnswerHTMLURL  string `json:"answer_html_url"`
+		AnswerChosenBy struct {
+			Login string `json:"login"`
+		} `json:"answer_chosen_by"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || raw.State == "" {
+		return DiscussionState{}, fmt.Errorf("decode discussion: no state (%v)", err)
+	}
+	s := DiscussionState{Number: raw.Number, State: raw.State, StateReason: raw.StateReason, Title: raw.Title, Category: raw.Category.Name,
+		Labels: []string{}, AnswerURL: raw.AnswerHTMLURL, AnswerChosenBy: raw.AnswerChosenBy.Login, URL: raw.HTMLURL}
+	for _, l := range raw.Labels {
+		s.Labels = append(s.Labels, l.Name)
+	}
+	slices.Sort(s.Labels)
+	return s, nil
+}
+
+// normalizeDiscussionComments normalizes the flat comments list like issue comments, then points each reply at its parent.
+func normalizeDiscussionComments(discussionURL string, body []byte) ([]PRComment, error) {
+	var raw []struct {
+		HTMLURL  string `json:"html_url"`
+		ParentID *int64 `json:"parent_id"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode discussion comments: %w", err)
+	}
+	out, err := normalizeComments([]byte(`[]`), []byte(`[]`), body)
+	if err != nil {
+		return nil, err
+	}
+	parent := map[string]int64{}
+	for _, c := range raw {
+		if c.ParentID != nil {
+			parent[c.HTMLURL] = *c.ParentID
+		}
+	}
+	for i := range out {
+		if id, ok := parent[out[i].URL]; ok {
+			out[i].ReplyTo = fmt.Sprintf("%s#discussioncomment-%d", discussionURL, id)
+		}
+	}
+	return out, nil
+}
+
+// diffDiscussion emits discussion.state_changed (with the reason), answer_changed (with chosen_by) and labels_changed,
+// then one discussion.commented per new comment or reply.
+func diffDiscussion(old, cur DiscussionState) []Event {
+	base := func() map[string]any {
+		return map[string]any{"number": cur.Number, "title": cur.Title, "url": cur.URL}
+	}
+	events := withStateReason("discussion", base, old.State, old.StateReason, cur.State, cur.StateReason, diffFacets("discussion", base, []facet{
+		{"state_changed", old.State, cur.State},
+		{"answer_changed", old.AnswerURL, cur.AnswerURL},
+		{"labels_changed", old.Labels, cur.Labels},
+	}))
+	for _, e := range events {
+		if e.Type == "discussion.answer_changed" {
+			e.Payload["chosen_by"] = cur.AnswerChosenBy
+		}
+	}
+	return append(events, commentEvents("discussion.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
 }

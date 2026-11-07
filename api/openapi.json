@@ -824,6 +824,7 @@
               "github_repo",
               "github_pr",
               "github_issue",
+              "github_discussion",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2175,6 +2176,7 @@
               "github_repo",
               "github_pr",
               "github_issue",
+              "github_discussion",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2527,6 +2529,7 @@
               "github_repo",
               "github_pr",
               "github_issue",
+              "github_discussion",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -2615,6 +2618,7 @@
               "github_repo",
               "github_pr",
               "github_issue",
+              "github_discussion",
               "gitlab_release",
               "gitlab_mr",
               "oci_tags"
@@ -4731,6 +4735,7 @@
                 "github_repo",
                 "github_pr",
                 "github_issue",
+                "github_discussion",
                 "gitlab_release",
                 "gitlab_mr",
                 "oci_tags"

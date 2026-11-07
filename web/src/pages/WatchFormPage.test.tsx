@@ -102,6 +102,35 @@ describe("WatchFormPage (new)", () => {
     });
   });
 
+  // 011-AC10: a discussion URL picks the GitHub discussion card and fills its fields.
+  it("picks GitHub discussion from a pasted discussion URL", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    expect(
+      screen.getByText(/repository, release, issue, discussion, PR or MR page/),
+    ).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByLabelText(/Paste a URL/),
+      "https://github.com/o/r/discussions/12",
+    );
+    expect(kindCard("GitHub discussion")).toBeChecked();
+    expect(
+      screen.getByText(/State, answer, labels and comments of one discussion/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Repository")).toHaveValue("o/r");
+    expect(screen.getByLabelText("Discussion number")).toHaveValue(12);
+    expect(screen.getByLabelText("Name")).toHaveValue("o/r #12");
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toMatchObject({
+      kind: "github_discussion",
+      config: { repo: "o/r", number: 12 },
+    });
+  });
+
   it("keeps compatible fields when the kind changes", async () => {
     mockApi({ "/api/v1/credentials": { items: [] } });
     renderApp("/watches/new");

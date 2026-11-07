@@ -213,6 +213,10 @@ func TestWatchValidation(t *testing.T) {
 	}{
 		{"bad repo", http.MethodPost, "/api/v1/watches", newWatch("x", "github_repo", map[string]any{"repo": "nope"}), []string{"body.config.repo"}},
 		{"bad regex", http.MethodPost, "/api/v1/watches", newWatch("x", "oci_tags", map[string]any{"repository": "a/b", "tag_regex": "(["}), []string{"body.config.tag_regex"}},
+		// 011-AC9: github_discussion refuses a bad repo and a non-positive number, field by field.
+		{"discussion bad repo", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b/c", "number": 1}), []string{"body.config.repo"}},
+		{"discussion zero number", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b", "number": 0}), []string{"body.config.number"}},
+		{"discussion negative number", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b", "number": -1}), []string{"body.config.number"}},
 		{"bad cron", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "61 * * * *"}, []string{"body.schedule"}},
 		{"blank name and short interval", http.MethodPost, "/api/v1/watches", map[string]any{"name": "  ", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "10s"}, []string{"body.schedule", "body.name"}},
 		{"unknown kind", http.MethodPost, "/api/v1/watches", newWatch("x", "rss", map[string]any{}), []string{"body.kind"}},

@@ -1104,7 +1104,13 @@ export interface components {
       credential_id?: string;
       /** @enum {string} */
       kind:
-        "github_repo" | "github_pr" | "github_issue" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+        | "github_repo"
+        | "github_pr"
+        | "github_issue"
+        | "github_discussion"
+        | "gitlab_release"
+        | "gitlab_mr"
+        | "oci_tags";
       name: string;
       paused?: boolean;
       /** @description Go duration (1m to 168h) or 5-field cron expression; default 1h for GitHub kinds, 15m otherwise */
@@ -1584,7 +1590,13 @@ export interface components {
     SampleWatch: {
       /** @enum {string} */
       kind?:
-        "github_repo" | "github_pr" | "github_issue" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+        | "github_repo"
+        | "github_pr"
+        | "github_issue"
+        | "github_discussion"
+        | "gitlab_release"
+        | "gitlab_mr"
+        | "oci_tags";
       name: string;
     };
     Script: {
@@ -1707,7 +1719,13 @@ export interface components {
       id: string;
       /** @enum {string} */
       kind:
-        "github_repo" | "github_pr" | "github_issue" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+        | "github_repo"
+        | "github_pr"
+        | "github_issue"
+        | "github_discussion"
+        | "gitlab_release"
+        | "gitlab_mr"
+        | "oci_tags";
       /** @description Error or rate-limit message of the last run, up to 1 KiB */
       last_error: string | null;
       /**
@@ -1739,7 +1757,13 @@ export interface components {
       id: string;
       /** @enum {string} */
       kind:
-        "github_repo" | "github_pr" | "github_issue" | "gitlab_release" | "gitlab_mr" | "oci_tags";
+        | "github_repo"
+        | "github_pr"
+        | "github_issue"
+        | "github_discussion"
+        | "gitlab_release"
+        | "gitlab_mr"
+        | "oci_tags";
       name: string;
     };
   };
@@ -3334,6 +3358,7 @@ export interface operations {
           | "github_repo"
           | "github_pr"
           | "github_issue"
+          | "github_discussion"
           | "gitlab_release"
           | "gitlab_mr"
           | "oci_tags";

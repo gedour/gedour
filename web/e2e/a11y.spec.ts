@@ -96,8 +96,20 @@ for (const theme of ["light", "dark"] as const) {
           await expect(page.getByText(/2 to 3 more requests/)).toBeVisible();
         }
         found[path] = await violations(page);
+        // 011-AC17: the github_discussion form too.
+        if (path === "/watches/new") {
+          await page
+            .getByRole("radio", { name: /GitHub discussion/ })
+            .locator("..")
+            .click();
+          await expect(page.getByLabel("Discussion number")).toBeVisible();
+          found[`${path} github_discussion`] = await violations(page);
+        }
       }
-      expect(found).toEqual(Object.fromEntries(views.map(([p]) => [p, []])));
+      expect(found).toEqual({
+        ...Object.fromEntries(views.map(([p]) => [p, []])),
+        "/watches/new github_discussion": [],
+      });
     });
 
     test("dialogs and the inbox panel have no serious axe violation", async ({ page }) => {

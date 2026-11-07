@@ -59,6 +59,13 @@ test("main views fit 375 px", async ({ page }) => {
     if (path === "/watches/new") {
       await expect(page.getByText(/1 more request:/)).toBeVisible();
       await expect(page.getByText(/2 to 3 more requests/)).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      // 011-AC17: the github_discussion form fits too.
+      await page
+        .getByRole("radio", { name: /GitHub discussion/ })
+        .locator("..")
+        .click();
+      await expect(page.getByLabel("Discussion number")).toBeVisible();
     }
     await expectNoHorizontalScroll(page);
   }

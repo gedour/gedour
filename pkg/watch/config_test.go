@@ -95,6 +95,14 @@ func TestConfigValidation(t *testing.T) {
 		{"github issue no repo", KindGitHubIssue, `{"number":1}`, "", []string{"body.config.repo"}},
 		{"github issue http api", KindGitHubIssue, `{"repo":"a/b","number":1,"api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
 		{"github issue unknown field", KindGitHubIssue, `{"repo":"a/b","number":1,"new_issues":true}`, "", []string{"body.config.new_issues"}},
+		// 011-AC9: github_discussion checks repo, number and api_url like github_issue.
+		{"github discussion", KindGitHubDiscussion, `{"repo":"cli/cli","number":9507}`,
+			`{"api_url":"https://api.github.com","number":9507,"repo":"cli/cli"}`, nil},
+		{"github discussion zero", KindGitHubDiscussion, `{"repo":"cli/cli","number":0}`, "", []string{"body.config.number"}},
+		{"github discussion negative", KindGitHubDiscussion, `{"repo":"cli/cli","number":-3}`, "", []string{"body.config.number"}},
+		{"github discussion missing number and bad repo", KindGitHubDiscussion, `{"repo":"a/b/c"}`, "", []string{"body.config.repo", "body.config.number"}},
+		{"github discussion no repo", KindGitHubDiscussion, `{"number":1}`, "", []string{"body.config.repo"}},
+		{"github discussion http api", KindGitHubDiscussion, `{"repo":"a/b","number":1,"api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
 		{"gitlab release defaults", KindGitLabRelease, `{"project":"gitlab-org/gitlab"}`,
 			`{"base_url":"https://gitlab.com","project":"gitlab-org/gitlab"}`, nil},
 		{"gitlab nested self-hosted", KindGitLabRelease, `{"project":"/grp/sub/proj/","base_url":"https://git.example"}`,
@@ -171,7 +179,7 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("last4(%q) = %q", in, got)
 		}
 	}
-	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken, KindGitHubIssue: CredGitHubToken,
+	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken, KindGitHubIssue: CredGitHubToken, KindGitHubDiscussion: CredGitHubToken,
 		KindGitLabRelease: CredGitLabToken, KindGitLabMR: CredGitLabToken, KindOCITags: CredRegistryBasic} {
 		if CredentialKindFor(kind) != want {
 			t.Errorf("%s: %s", kind, CredentialKindFor(kind))

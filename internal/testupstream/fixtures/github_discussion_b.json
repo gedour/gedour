@@ -1,0 +1,149 @@
+{
+  "discussion": {
+    "repository_url": "https://api.github.com/repos/cli/cli",
+    "category": {
+      "id": 103,
+      "node_id": "DIC_kwDOQA",
+      "repository_id": 212613049,
+      "emoji": ":bulb:",
+      "name": "Q&A",
+      "description": "Q&A discussions",
+      "created_at": "2020-05-01T10:00:00.000Z",
+      "updated_at": "2020-05-01T10:00:00.000Z",
+      "slug": "q-a",
+      "is_answerable": true
+    },
+    "answer_html_url": "https://github.com/cli/cli/discussions/9507#discussioncomment-4100001",
+    "answer_chosen_at": "2026-11-02T15:00:00Z",
+    "answer_chosen_by": {
+      "login": "kenji-w",
+      "id": 109507,
+      "type": "User"
+    },
+    "html_url": "https://github.com/cli/cli/discussions/9507",
+    "id": 7000009507,
+    "node_id": "D_kwDOA9507",
+    "number": 9507,
+    "title": "How do I set a default repo per directory?",
+    "user": {
+      "login": "kenji-w",
+      "id": 109507,
+      "type": "User"
+    },
+    "labels": [],
+    "state": "closed",
+    "state_reason": "resolved",
+    "locked": false,
+    "comments": 3,
+    "created_at": "2026-10-27T09:12:44Z",
+    "updated_at": "2026-11-02T15:00:00Z",
+    "author_association": "CONTRIBUTOR",
+    "active_lock_reason": null,
+    "body": "Details are in the description.",
+    "reactions": {
+      "url": "https://api.github.com/repos/cli/cli/discussions/9507/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "timeline_url": "https://api.github.com/repos/cli/cli/discussions/9507/timeline"
+  },
+  "comments": [
+    {
+      "id": 4100001,
+      "node_id": "DC_kwDO4100001",
+      "html_url": "https://github.com/cli/cli/discussions/9507#discussioncomment-4100001",
+      "parent_id": null,
+      "child_comment_count": 2,
+      "repository_url": "cli/cli",
+      "discussion_id": 7000009507,
+      "author_association": "MEMBER",
+      "user": {
+        "login": "maintainer",
+        "id": 4100001,
+        "type": "User"
+      },
+      "created_at": "2026-10-27T10:00:00Z",
+      "updated_at": "2026-10-27T10:00:00Z",
+      "body": "Set `GH_REPO` in a direnv `.envrc` per directory.",
+      "reactions": {
+        "url": "https://api.github.com/repos/cli/cli/discussions/9507/comments/4100001/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      }
+    },
+    {
+      "id": 4100002,
+      "node_id": "DC_kwDO4100002",
+      "html_url": "https://github.com/cli/cli/discussions/9507#discussioncomment-4100002",
+      "parent_id": 4100001,
+      "child_comment_count": 0,
+      "repository_url": "cli/cli",
+      "discussion_id": 7000009507,
+      "author_association": "MEMBER",
+      "user": {
+        "login": "kenji-w",
+        "id": 4100002,
+        "type": "User"
+      },
+      "created_at": "2026-10-27T11:00:00Z",
+      "updated_at": "2026-10-27T11:00:00Z",
+      "body": "> Set `GH_REPO` in a direnv `.envrc` per directory.\n\nDoes it work with `gh pr create`?",
+      "reactions": {
+        "url": "https://api.github.com/repos/cli/cli/discussions/9507/comments/4100002/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      }
+    },
+    {
+      "id": 4100003,
+      "node_id": "DC_kwDO4100003",
+      "html_url": "https://github.com/cli/cli/discussions/9507#discussioncomment-4100003",
+      "parent_id": 4100001,
+      "child_comment_count": 0,
+      "repository_url": "cli/cli",
+      "discussion_id": 7000009507,
+      "author_association": "MEMBER",
+      "user": {
+        "login": "maintainer",
+        "id": 4100003,
+        "type": "User"
+      },
+      "created_at": "2026-11-02T14:30:00Z",
+      "updated_at": "2026-11-02T14:30:00Z",
+      "body": "Yes: every `gh` command reads `GH_REPO`.",
+      "reactions": {
+        "url": "https://api.github.com/repos/cli/cli/discussions/9507/comments/4100003/reactions",
+        "total_count": 0,
+        "+1": 0,
+        "-1": 0,
+        "laugh": 0,
+        "hooray": 0,
+        "confused": 0,
+        "heart": 0,
+        "rocket": 0,
+        "eyes": 0
+      }
+    }
+  ]
+}

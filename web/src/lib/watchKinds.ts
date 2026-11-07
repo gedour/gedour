@@ -3,6 +3,7 @@ import {
   Container,
   GitMerge,
   GitPullRequest,
+  MessagesSquare,
   Rocket,
   Tag,
   type LucideIcon,
@@ -42,6 +43,14 @@ export const KINDS: KindInfo[] = [
     label: "GitHub issue",
     blurb: "State, labels and comments of one issue",
     icon: CircleDot,
+    credential: "github_token",
+    defaultSchedule: "1h",
+  },
+  {
+    kind: "github_discussion",
+    label: "GitHub discussion",
+    blurb: "State, answer, labels and comments of one discussion",
+    icon: MessagesSquare,
     credential: "github_token",
     defaultSchedule: "1h",
   },
@@ -153,6 +162,11 @@ export const FIELDS: Record<WatchKind, FieldSpec[]> = {
     { key: "number", label: "Issue number", type: "number", placeholder: "123" },
     GITHUB_API,
   ],
+  github_discussion: [
+    REPO,
+    { key: "number", label: "Discussion number", type: "number", placeholder: "123" },
+    GITHUB_API,
+  ],
   gitlab_release: [GITLAB_URL, PROJECT],
   gitlab_mr: [
     GITLAB_URL,
@@ -223,6 +237,7 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
         : `${c.repo} releases`;
     case "github_pr":
     case "github_issue":
+    case "github_discussion":
       return `${c.repo} #${c.number}`;
     case "gitlab_release":
       return `${c.project} releases`;
@@ -241,6 +256,7 @@ const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
   github_repo: ["api_url", "https://api.github.com"],
   github_pr: ["api_url", "https://api.github.com"],
   github_issue: ["api_url", "https://api.github.com"],
+  github_discussion: ["api_url", "https://api.github.com"],
   gitlab_release: ["base_url", "https://gitlab.com"],
   gitlab_mr: ["base_url", "https://gitlab.com"],
   oci_tags: ["registry", "docker.io"],

@@ -90,6 +90,8 @@ func New() *Server {
 	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}", s.static("github_discussion", "discussion"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}/comments", s.static("github_discussion", "comments"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/comments", s.static("github_pr", "review_comments"))

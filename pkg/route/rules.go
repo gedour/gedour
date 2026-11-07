@@ -87,7 +87,7 @@ type previewInput struct {
 type WatchRef struct {
 	ID   string `json:"id" format:"uuid"`
 	Name string `json:"name"`
-	Kind string `json:"kind" enum:"github_repo,github_pr,github_issue,gitlab_release,gitlab_mr,oci_tags"`
+	Kind string `json:"kind" enum:"github_repo,github_pr,github_issue,github_discussion,gitlab_release,gitlab_mr,oci_tags"`
 }
 
 // PreviewItem is the outcome of a filter on one recent event.

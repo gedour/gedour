@@ -25,6 +25,15 @@ describe("recognize", () => {
     ["https://github.com/o/r/issues", "github_repo", { repo: "o/r" }],
     ["https://github.com/o/r/issues/0", "github_repo", { repo: "o/r" }],
     ["https://github.com/o/r/issues/new", "github_repo", { repo: "o/r" }],
+    // 011-AC10: a discussion URL picks github_discussion; the list or a category falls back to the repo.
+    ["https://github.com/o/r/discussions/12", "github_discussion", { repo: "o/r", number: 12 }],
+    [
+      "github.com/cli/cli/discussions/9507#discussioncomment-4100001",
+      "github_discussion",
+      { repo: "cli/cli", number: 9507 },
+    ],
+    ["https://github.com/o/r/discussions", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/discussions/categories", "github_repo", { repo: "o/r" }],
     [
       "https://github.com/orgs/acme/packages/container/package/Api",
       "oci_tags",

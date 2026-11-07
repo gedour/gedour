@@ -19,12 +19,13 @@ import (
 
 // Watch kinds.
 const (
-	KindGitHubRepo    = "github_repo"
-	KindGitHubPR      = "github_pr"
-	KindGitHubIssue   = "github_issue"
-	KindGitLabRelease = "gitlab_release"
-	KindGitLabMR      = "gitlab_mr"
-	KindOCITags       = "oci_tags"
+	KindGitHubRepo       = "github_repo"
+	KindGitHubPR         = "github_pr"
+	KindGitHubIssue      = "github_issue"
+	KindGitHubDiscussion = "github_discussion"
+	KindGitLabRelease    = "gitlab_release"
+	KindGitLabMR         = "gitlab_mr"
+	KindOCITags          = "oci_tags"
 )
 
 // Credential kinds.
@@ -35,7 +36,7 @@ const (
 )
 
 // Kinds lists the watch kinds in display order.
-var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitLabRelease, KindGitLabMR, KindOCITags}
+var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion, KindGitLabRelease, KindGitLabMR, KindOCITags}
 
 // CredentialKinds lists the credential kinds.
 var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBasic}
@@ -43,7 +44,7 @@ var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBas
 // CredentialKindFor is the only credential kind a watch of this kind accepts.
 func CredentialKindFor(kind string) string {
 	switch kind {
-	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue:
+	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion:
 		return CredGitHubToken
 	case KindGitLabRelease, KindGitLabMR:
 		return CredGitLabToken
@@ -80,6 +81,9 @@ type GitHubPRConfig struct {
 // GitHubIssueConfig is the normalized config of a github_issue watch: an alias, so it validates exactly like github_pr's.
 type GitHubIssueConfig = GitHubPRConfig
 
+// GitHubDiscussionConfig is the normalized config of a github_discussion watch, validated like github_pr's.
+type GitHubDiscussionConfig = GitHubPRConfig
+
 // GitLabReleaseConfig is the normalized config of a gitlab_release watch.
 type GitLabReleaseConfig struct {
 	BaseURL string `json:"base_url"`
@@ -113,12 +117,13 @@ var (
 
 // defaultHosts need no watch of the owner's for a key to target them, with no path and on their own kind only: docker.io and ghcr.io redirect a chosen path to other hosts, and a GitHub or GitLab kind's path holds a key's repo or project.
 var defaultHosts = map[string][]string{
-	KindGitHubRepo:    {"api.github.com"},
-	KindGitHubPR:      {"api.github.com"},
-	KindGitHubIssue:   {"api.github.com"},
-	KindGitLabRelease: {"gitlab.com"},
-	KindGitLabMR:      {"gitlab.com"},
-	KindOCITags:       {dockerHub, "ghcr.io"},
+	KindGitHubRepo:       {"api.github.com"},
+	KindGitHubPR:         {"api.github.com"},
+	KindGitHubIssue:      {"api.github.com"},
+	KindGitHubDiscussion: {"api.github.com"},
+	KindGitLabRelease:    {"gitlab.com"},
+	KindGitLabMR:         {"gitlab.com"},
+	KindOCITags:          {dockerHub, "ghcr.io"},
 }
 
 func isDefaultHost(target string) bool {
@@ -254,6 +259,8 @@ func newConfig(kind string) any {
 		return &GitHubPRConfig{}
 	case KindGitHubIssue:
 		return &GitHubIssueConfig{}
+	case KindGitHubDiscussion:
+		return &GitHubDiscussionConfig{}
 	case KindGitLabRelease:
 		return &GitLabReleaseConfig{}
 	case KindGitLabMR:

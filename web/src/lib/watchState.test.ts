@@ -29,6 +29,11 @@ describe("stateLine", () => {
     ],
     ["github_issue", { state: "open", state_reason: "reopened", labels: null }, "open"],
     [
+      "github_discussion",
+      { state: "closed", state_reason: "resolved", labels: ["question"], category: "Q&A" },
+      "closed (resolved) · question",
+    ],
+    [
       "gitlab_mr",
       {
         state: "merged",

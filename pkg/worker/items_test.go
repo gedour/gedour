@@ -361,3 +361,28 @@ func TestIssueCommentsCallFails(t *testing.T) {
 	up.up.SetFixture("b")
 	run(2, true, "error", 1)
 }
+
+// 011-AC7: a github_discussion watch through the fake upstream: a quiet baseline, then fixture b's close,
+// chosen answer and reply.
+func TestDiscussionWatchFixtures(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.addWatch(t, "github_discussion", fmt.Sprintf(`{"repo":"cli/cli","number":9507,"api_url":%q}`, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	tick(t, w)
+	if r := e.row(t, id); *r.status != "ok" || len(e.events(t, id)) != 0 {
+		t.Fatalf("baseline: %s %v, events %v", *r.status, r.lastErr, e.events(t, id))
+	}
+	up.SetFixture("b")
+	e.clock.set(t0.Add(time.Hour))
+	tick(t, w)
+	got := strings.Join(e.events(t, id), ",")
+	if got != "discussion.state_changed 9507,discussion.answer_changed 9507,discussion.commented 9507" {
+		t.Fatalf("events %s", got)
+	}
+	if n := e.count(t, `SELECT count(*) FROM events WHERE watch_id = $1 AND payload->>'reply_to' = 'https://github.com/cli/cli/discussions/9507#discussioncomment-4100001'`, id); n != 1 {
+		t.Fatalf("replies: %d", n)
+	}
+}

@@ -40,6 +40,18 @@ func TestFormat(t *testing.T) {
 		// 011-AC16: discussion.opened, mirrored in web/src/lib/events.ts.
 		{ev("discussion.opened", map[string]any{"number": 12.0, "author": "alice", "title": "Ideas welcome", "category": "Ideas", "labels": []any{}, "url": "https://github.com/o/r/discussions/12"}),
 			"Discussion #12 opened by alice", "Ideas welcome", "https://github.com/o/r/discussions/12"},
+		// 011-AC16: the github_discussion events, mirrored in web/src/lib/events.ts.
+		{ev("discussion.state_changed", map[string]any{"number": 12.0, "title": "T", "from": "open", "to": "closed", "state_reason": "resolved"}), "Discussion #12 closed (resolved)", "T", ""},
+		{ev("discussion.state_changed", map[string]any{"number": 12.0, "from": "closed", "to": "closed", "state_reason": "outdated"}), "Discussion #12 closed (outdated)", "", ""},
+		{ev("discussion.state_changed", map[string]any{"number": 12.0, "from": "closed", "to": "open", "state_reason": "reopened"}), "Discussion #12 reopened", "", ""},
+		{ev("discussion.answer_changed", map[string]any{"number": 12.0, "from": "", "to": "https://github.com/o/r/discussions/12#discussioncomment-1", "chosen_by": "bob"}), "Answer chosen on discussion #12", "", ""},
+		{ev("discussion.answer_changed", map[string]any{"number": 12.0, "from": "https://github.com/o/r/discussions/12#discussioncomment-1", "to": "", "chosen_by": ""}), "Answer removed on discussion #12", "", ""},
+		{ev("discussion.labels_changed", map[string]any{"number": 12.0, "from": []any{}, "to": []any{"question"}}), "Discussion #12 labels: question", "", ""},
+		{ev("discussion.commented", map[string]any{"number": 12.0, "author": "alice", "title": "T", "excerpt": "Try this.", "url": "https://github.com/o/r/discussions/12#discussioncomment-1"}),
+			"Discussion #12 commented by alice", "Try this.", "https://github.com/o/r/discussions/12#discussioncomment-1"},
+		{ev("discussion.commented", map[string]any{"number": 12.0, "author": "bob", "title": "T", "excerpt": "Thanks!", "url": "https://github.com/o/r/discussions/12#discussioncomment-2",
+			"reply_to": "https://github.com/o/r/discussions/12#discussioncomment-1"}),
+			"Discussion #12 reply by bob", "Thanks!", "https://github.com/o/r/discussions/12#discussioncomment-2"},
 		// 008-AC12: the github_issue events, mirrored in web/src/lib/events.ts.
 		{ev("issue.state_changed", map[string]any{"number": 12.0, "title": "T", "from": "open", "to": "closed", "state_reason": "not_planned"}), "Issue #12 closed (not planned)", "T", ""},
 		{ev("issue.state_changed", map[string]any{"number": 12.0, "from": "open", "to": "closed", "state_reason": "completed"}), "Issue #12 closed (completed)", "", ""},

@@ -28,6 +28,8 @@ type Watch struct {
 type Rule struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Priority sets the Web Push urgency; out of JSON so webhook and script payloads keep their shape.
+	Priority string `json:"-"`
 }
 
 // Delivery is one message to send.

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Navigate, type RouteObject } from "react-router";
 
 import { AuthGate } from "@/components/AuthGate";
+import { RootLayout } from "@/components/RootLayout";
 import { RouteError } from "@/components/RouteError";
 import { NAV, type NavItem } from "@/nav";
 import { AdminUsersPage } from "@/pages/AdminUsersPage";
@@ -35,25 +36,30 @@ const PAGES: Record<string, (item: NavItem) => ReactNode> = {
 };
 
 export const routes: RouteObject[] = [
-  { path: "/auth/signed-out", element: <SignedOutPage /> },
   {
-    path: "/",
-    element: <AuthGate />,
+    element: <RootLayout />,
     children: [
-      { index: true, element: <Navigate to="/inbox" replace /> },
-      ...NAV.map((item) => ({
-        path: item.path,
-        element: PAGES[item.path]?.(item) ?? <PlaceholderPage item={item} />,
-      })),
-      { path: "/watches/new", element: <WatchFormPage /> },
-      { path: "/watches/:id", element: <WatchDetailPage /> },
-      { path: "/watches/:id/edit", element: <WatchFormPage /> },
-      { path: "/rules/new", element: <RuleFormPage /> },
-      { path: "/rules/:id", element: <RuleFormPage /> },
-      { path: "/scripts/new", element: <ScriptFormRoute />, errorElement: <RouteError /> },
-      { path: "/scripts/:id", element: <ScriptFormRoute />, errorElement: <RouteError /> },
-      { path: "/settings/credentials", element: <CredentialsPage /> },
-      { path: "*", element: <NotFound /> },
+      { path: "/auth/signed-out", element: <SignedOutPage /> },
+      {
+        path: "/",
+        element: <AuthGate />,
+        children: [
+          { index: true, element: <Navigate to="/inbox" replace /> },
+          ...NAV.map((item) => ({
+            path: item.path,
+            element: PAGES[item.path]?.(item) ?? <PlaceholderPage item={item} />,
+          })),
+          { path: "/watches/new", element: <WatchFormPage /> },
+          { path: "/watches/:id", element: <WatchDetailPage /> },
+          { path: "/watches/:id/edit", element: <WatchFormPage /> },
+          { path: "/rules/new", element: <RuleFormPage /> },
+          { path: "/rules/:id", element: <RuleFormPage /> },
+          { path: "/scripts/new", element: <ScriptFormRoute />, errorElement: <RouteError /> },
+          { path: "/scripts/:id", element: <ScriptFormRoute />, errorElement: <RouteError /> },
+          { path: "/settings/credentials", element: <CredentialsPage /> },
+          { path: "*", element: <NotFound /> },
+        ],
+      },
     ],
   },
 ];

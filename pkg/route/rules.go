@@ -298,7 +298,7 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 	enabled := b.Enabled == nil || *b.Enabled
 	var r Rule
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := underCap(ctx, tx, me, "rules", MaxRules); err != nil {
+		if err := underCap(ctx, tx, me, "rules", "rules", MaxRules); err != nil {
 			return err
 		}
 		var watchID *string

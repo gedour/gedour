@@ -1,4 +1,12 @@
-import { FileCode2, Mail, MessagesSquare, Send, Webhook, type LucideIcon } from "lucide-react";
+import {
+  BellRing,
+  FileCode2,
+  Mail,
+  MessagesSquare,
+  Send,
+  Webhook,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { Channel, ChannelKind } from "@/types/api";
 
@@ -8,6 +16,7 @@ export const CHANNEL_KINDS: { type: ChannelKind; label: string; icon: LucideIcon
   { type: "email", label: "Email", icon: Mail },
   { type: "webhook", label: "Webhook", icon: Webhook },
   { type: "script", label: "Script", icon: FileCode2 },
+  { type: "web_push", label: "Web Push", icon: BellRing },
 ];
 
 export function channelKind(type: ChannelKind) {
@@ -38,6 +47,10 @@ export function channelTarget(
       return `chat ${String(cfg.chat_id ?? "")}`;
     case "email":
       return Array.isArray(cfg.to) ? cfg.to.join(", ") : "";
+    case "web_push":
+      return Array.isArray(cfg.devices)
+        ? `${cfg.devices.length} device${cfg.devices.length === 1 ? "" : "s"}`
+        : "all devices";
     case "nextcloud_talk":
       return `conversation ${String(cfg.conversation ?? "")} on ${hostOf(cfg.url)}`;
     default:

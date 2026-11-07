@@ -15,6 +15,7 @@ func TestHandler(t *testing.T) {
 		"index.html":           {Data: []byte("<html>SPA</html>")},
 		"assets/app-abc123.js": {Data: []byte("console.log(1)")},
 		"favicon.svg":          {Data: []byte("<svg/>")},
+		"sw.js":                {Data: []byte("self.addEventListener")},
 	}
 	h := Handler(fsys)
 	tests := []struct {
@@ -33,6 +34,9 @@ func TestHandler(t *testing.T) {
 		{"/assets/missing.js", 404, "", "", ""},
 		{"/favicon.svg", 200, cacheNone, "<svg/>", "image/svg"},
 		{"/../../etc/passwd", 200, cacheNone, "SPA", "text/html"},
+		// 010-AC12: the service worker is JavaScript, never the SPA, and is re-checked on every load.
+		{"/sw.js", 200, cacheNone, "self.addEventListener", "javascript"},
+		{"/./sw.js", 200, cacheNone, "self.addEventListener", "javascript"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -51,6 +55,18 @@ func TestHandler(t *testing.T) {
 				t.Errorf("content-type %q lacks %q", rec.Header().Get("Content-Type"), tt.ctypeHas)
 			}
 		})
+	}
+}
+
+// 010-AC12: a build without sw.js answers 404, so the browser never registers index.html as a worker.
+func TestHandlerNoServiceWorker(t *testing.T) {
+	h := Handler(fstest.MapFS{"index.html": {Data: []byte("<html>SPA</html>")}})
+	for _, p := range []string{"/sw.js", "/sw.js/", "//sw.js"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "SPA") {
+			t.Errorf("%s: %d %q", p, rec.Code, rec.Body.String())
+		}
 	}
 }
 

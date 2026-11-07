@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, gate, SEED, test } from "./fixtures";
+import { addDevice, api, expect, gate, SEED, test } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, reducedMotion: "reduce" });
 
@@ -126,7 +126,10 @@ for (const theme of ["light", "dark"] as const) {
       await expect(page.locator("details[open] pre").first()).toBeVisible();
       expect(await violations(page)).toEqual([]);
 
+      const device = await addDevice(page, `a11y ${theme}`);
       await page.goto("/channels");
+      await expect(page.getByRole("list", { name: "Push devices" })).toContainText(device);
+      expect(await violations(page)).toEqual([]);
       await page.getByRole("button", { name: "New channel" }).first().click();
       const dialog = page.getByRole("dialog", { name: "New channel" });
       await expect(dialog).toBeVisible();
@@ -145,6 +148,28 @@ for (const theme of ["light", "dark"] as const) {
         await expect.poll(() => switchContrast(silent)).toBeGreaterThanOrEqual(3);
         await silent.click();
       }
+
+      // 010-AC15: the Web Push form, devices picked, and its Silent switch.
+      await dialog.getByText("Web Push", { exact: true }).click();
+      await dialog.getByLabel(/Pick devices/).check();
+      await expect(dialog.getByRole("list", { name: "Devices to notify" })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      const pushSilent = dialog.getByRole("switch", { name: "Silent" });
+      await pushSilent.click();
+      await expect(pushSilent).toBeChecked();
+      await expect.poll(() => switchContrast(pushSilent)).toBeGreaterThanOrEqual(3);
+      expect(await violations(page)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      // 010-AC15: the device list and its rename dialog.
+      await page.getByRole("button", { name: `Rename ${device}` }).click();
+      await expect(page.getByRole("dialog", { name: `Rename ${device}` })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: `Remove ${device}` }).click();
+      await expect(page.getByRole("dialog", { name: `Remove ${device}?` })).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.keyboard.press("Escape");
 
       // 007-AC32: the create form with the manage warning, the reveal and the revoke confirmation.
       const name = `a11y ${theme} ${Date.now().toString(36)}`;

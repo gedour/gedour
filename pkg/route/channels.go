@@ -36,9 +36,9 @@ const (
 	MaxRules    = 100
 )
 
-// underCap refuses a create past max rows of table for owner. The user row lock serializes that
-// user's creates, so two at once cannot both pass at max-1.
-func underCap(ctx context.Context, tx pgx.Tx, owner, table string, limit int) error {
+// underCap refuses a create past max rows of table for owner, naming them noun. The user row lock
+// serializes that user's creates, so two at once cannot both pass at max-1.
+func underCap(ctx context.Context, tx pgx.Tx, owner, table, noun string, limit int) error {
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, owner); err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func underCap(ctx context.Context, tx pgx.Tx, owner, table string, limit int) er
 		return err
 	}
 	if n >= limit {
-		return huma.Error409Conflict(fmt.Sprintf("you have %d %s, the most one user can have: delete one first", n, table))
+		return huma.Error409Conflict(fmt.Sprintf("you have %d %s, the most one user can have: delete one first", n, noun))
 	}
 	return nil
 }
@@ -61,8 +61,8 @@ const TestInterval = 10 * time.Second
 type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
-	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id"`
+	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent"`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -92,9 +92,9 @@ type listChannelsOutput struct {
 type createChannelInput struct {
 	Body struct {
 		Name   string         `json:"name" minLength:"1" maxLength:"200"`
-		Type   string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
+		Type   string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
 		Config map[string]any `json:"config"`
-		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none"`
+		Secret string         `json:"secret,omitempty" maxLength:"512" doc:"Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script, web_push: none"`
 	}
 }
 
@@ -115,7 +115,7 @@ type channelTypesOutput struct {
 
 // ChannelType tells the UI which channel types this instance can send to.
 type ChannelType struct {
-	Type      string `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script"`
+	Type      string `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
 	Available bool   `json:"available"`
 	Hint      string `json:"hint,omitempty" doc:"Why it is unavailable"`
 }
@@ -123,14 +123,22 @@ type ChannelType struct {
 type testResult struct {
 	Body struct {
 		OK    bool     `json:"ok"`
-		Error string   `json:"error,omitempty" doc:"Why the test message was not sent; for a script, why the run failed"`
+		Error string   `json:"error,omitempty" doc:"Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it"`
 		Logs  []string `json:"logs,omitempty" doc:"Script channels: the log lines of the run (a live run: its fetches were sent)"`
+		// Accepted is a pointer: 0 accepted is an answer for a web_push test, absent for the other types.
+		Accepted *int `json:"accepted,omitempty" doc:"Web Push channels: how many devices accepted the test"`
 	}
 }
 
 const emailUnavailable = "email needs an SMTP server: set GEDOUR_SMTP_ADDR and GEDOUR_SMTP_FROM"
 
-const channelSelect = `SELECT c.id::text, c.name, c.type, c.config, c.last4, c.created_at, c.updated_at, d.status, d.created_at
+// channelConfig fills a web_push channel's device list from channel_push_devices.
+const channelConfig = `CASE WHEN c.type = 'web_push' AND c.config->'devices' IS NULL
+		THEN c.config || jsonb_build_object('devices', COALESCE((SELECT jsonb_agg(p.device_id::text ORDER BY p.device_id)
+			FROM channel_push_devices p WHERE p.channel_id = c.id), '[]'::jsonb))
+		ELSE c.config END`
+
+const channelSelect = `SELECT c.id::text, c.name, c.type, ` + channelConfig + `, c.last4, c.created_at, c.updated_at, d.status, d.created_at
 	FROM channels c LEFT JOIN LATERAL (SELECT status, created_at FROM deliveries WHERE channel_id = c.id ORDER BY id DESC LIMIT 1) d ON true
 	WHERE c.owner_id = @owner`
 
@@ -307,6 +315,11 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 			c.ScriptID = id.String()
 		}
 		norm = c
+	case notify.TypeWebPush:
+		norm, errs = validatePushConfig(raw)
+		if norm == nil {
+			return nil, errs
+		}
 	default:
 		return nil, []error{&huma.ErrorDetail{Location: "body.type", Message: "unknown channel type", Value: typ}}
 	}
@@ -370,6 +383,10 @@ func checkSecret(typ, given string) (sec string, generated bool, errs []error) {
 		if given != "" {
 			return "", false, bad("script channels have no secret")
 		}
+	case notify.TypeWebPush:
+		if given != "" {
+			return "", false, bad("web push channels have no secret: each device has its own keys")
+		}
 	case notify.TypeWebhook:
 		if given == "" {
 			b := make([]byte, 32)
@@ -397,6 +414,9 @@ func (s *Service) registerChannels(api huma.API) {
 			ct := ChannelType{Type: t, Available: true}
 			if t == notify.TypeEmail && s.sender.Mailer == nil {
 				ct.Available, ct.Hint = false, emailUnavailable
+			}
+			if t == notify.TypeWebPush && s.sender.VAPID == nil {
+				ct.Available, ct.Hint = false, webPushUnavailable
 			}
 			out.Body.Items = append(out.Body.Items, ct)
 		}
@@ -475,6 +495,9 @@ func (s *Service) createChannel(ctx context.Context, in *createChannelInput) (*c
 	if b.Type == notify.TypeEmail && s.sender.Mailer == nil {
 		return nil, huma.Error400BadRequest(emailUnavailable, &huma.ErrorDetail{Location: "body.type", Message: emailUnavailable, Value: b.Type})
 	}
+	if b.Type == notify.TypeWebPush && s.sender.VAPID == nil {
+		return nil, huma.Error400BadRequest(webPushUnavailable, &huma.ErrorDetail{Location: "body.type", Message: webPushUnavailable, Value: b.Type})
+	}
 	name := strings.TrimSpace(b.Name)
 	cfg, errs := s.validateConfig(b.Type, b.Config)
 	if name == "" {
@@ -494,7 +517,7 @@ func (s *Service) createChannel(ctx context.Context, in *createChannelInput) (*c
 	}
 	out := &createChannelOutput{}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := underCap(ctx, tx, me, "channels", MaxChannels); err != nil {
+		if err := underCap(ctx, tx, me, "channels", "channels", MaxChannels); err != nil {
 			return err
 		}
 		if b.Type == notify.TypeScript {
@@ -503,12 +526,17 @@ func (s *Service) createChannel(ctx context.Context, in *createChannelInput) (*c
 			}
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO channels (id, owner_id, name, type, config, secret_ciphertext, secret_nonce, key_version, last4)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, me, name, b.Type, cfg, ct, nonce, keyVersion, last4(sec))
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, me, name, b.Type, storedConfig(b.Type, cfg), ct, nonce, keyVersion, last4(sec))
 		if isUniqueViolation(err) {
 			return nameError(name)
 		}
 		if err != nil {
 			return err
+		}
+		if b.Type == notify.TypeWebPush {
+			if err := setPushDevices(ctx, tx, me, id, cfg); err != nil {
+				return err
+			}
 		}
 		if out.Body.Channel, err = ownChannel(ctx, tx, me, id, false); err != nil {
 			return err
@@ -566,12 +594,17 @@ func (s *Service) updateChannel(ctx context.Context, in *updateChannelInput) (*c
 				return err
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE channels SET name = $2, config = $3, updated_at = now() WHERE id = $1`, in.ID, next.Name, next.Config)
+		_, err = tx.Exec(ctx, `UPDATE channels SET name = $2, config = $3, updated_at = now() WHERE id = $1`, in.ID, next.Name, storedConfig(before.Type, next.Config))
 		if isUniqueViolation(err) {
 			return nameError(next.Name)
 		}
 		if err != nil {
 			return err
+		}
+		if b.Config != nil && before.Type == notify.TypeWebPush {
+			if err := setPushDevices(ctx, tx, me, in.ID, next.Config); err != nil {
+				return err
+			}
 		}
 		if sec != "" {
 			ct, nonce := s.box.Seal([]byte(sec), []byte(in.ID))
@@ -695,9 +728,20 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 		return nil, s.fail("test-channel", err)
 	}
 	out := &testResult{}
-	logs, sendErr := send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(time.Now()), true)
-	out.Body.Logs = logs
-	if sendErr != nil {
+	var sendErr error
+	if ch.Type == notify.TypeWebPush {
+		tctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
+		defer cancel()
+		var n int
+		n, sendErr = pushSend(tctx, s.pool, s.box, s.sender, ch, notify.TestDelivery(time.Now()))
+		out.Body.Accepted = &n
+	} else {
+		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(time.Now()), true)
+	}
+	if refusals, ok := partlySent(sendErr); ok {
+		// Some devices took it: the test worked, the error names the ones that refused.
+		out.Body.Error, sendErr = truncate(refusals), nil
+	} else if sendErr != nil {
 		out.Body.Error = truncate(sendErr.Error())
 	}
 	out.Body.OK = sendErr == nil

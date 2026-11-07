@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/gedour/gedour/pkg/notify/webpush"
 )
 
 // Channel types.
@@ -26,12 +28,14 @@ const (
 	TypeNextcloudTalk = "nextcloud_talk"
 	TypeEmail         = "email"
 	TypeWebhook       = "webhook"
+	// TypeWebPush channels fan out to the owner's browsers (pkg/route), never through Send.
+	TypeWebPush = "web_push"
 	// TypeScript channels run a script in the sandbox (pkg/script), never through Send.
 	TypeScript = "script"
 )
 
 // Types lists the channel types in display order.
-var Types = []string{TypeTelegram, TypeNextcloudTalk, TypeEmail, TypeWebhook, TypeScript}
+var Types = []string{TypeTelegram, TypeNextcloudTalk, TypeEmail, TypeWebhook, TypeScript, TypeWebPush}
 
 // Webhook headers.
 const (
@@ -46,7 +50,7 @@ const (
 	TalkSignatureHeader = "X-Nextcloud-Talk-Bot-Signature"
 )
 
-// SendTimeout bounds one HTTP delivery (webhook, Telegram, Nextcloud Talk).
+// SendTimeout bounds one HTTP delivery (webhook, Telegram, Nextcloud Talk, Web Push).
 const SendTimeout = 10 * time.Second
 
 const (
@@ -64,6 +68,11 @@ var ErrPermanent = errors.New("permanent failure")
 type permanentError struct{ error }
 
 func (permanentError) Is(target error) bool { return target == ErrPermanent }
+
+func (e permanentError) Unwrap() error { return e.error }
+
+// Permanent marks err as a refusal a retry cannot fix, for senders outside this package.
+func Permanent(err error) error { return permanentError{err} }
 
 // TelegramConfig is the non-secret config of a telegram channel; the bot token is its secret.
 type TelegramConfig struct {
@@ -103,6 +112,12 @@ type Sender struct {
 	TelegramURL string
 	Mailer      *Mailer // nil: email is not configured
 	Now         func() time.Time
+	// VAPID signs Web Push requests; nil: Web Push is not available.
+	VAPID *webpush.Key
+	// VAPIDSubject is the JWT contact (a URL or mailto:), empty to omit it.
+	VAPIDSubject string
+	// HTTPHosts may receive a push over plain http; other push endpoints need https.
+	HTTPHosts []string
 }
 
 func (s *Sender) now() time.Time {
@@ -157,7 +172,9 @@ func (s *Sender) post(ctx context.Context, label, target string, body []byte, hd
 		return 0, nil, fmt.Errorf("%s: invalid URL", label)
 	}
 	req.Header = hdr
-	req.Header.Set("Content-Type", "application/json")
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("User-Agent", s.UserAgent)
 	resp, err := s.Client.Do(req)
 	if err != nil {

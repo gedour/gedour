@@ -73,6 +73,7 @@ export function mockApi(routes: Record<string, Route> = {}) {
     "/api/v1/channels": { items: [] },
     "/api/v1/channel-types": { items: CHANNEL_TYPES },
     "/api/v1/deliveries": { items: [] },
+    "/api/v1/push/devices": { items: [] },
     "/api/v1/filters/reference": FILTER_REFERENCE,
     ...routes,
   };

@@ -37,6 +37,8 @@ import type {
   EventsPage,
   Me,
   ProblemDetail,
+  PushDevice,
+  RegisterPushDeviceBody,
   StateSnapshot,
   TransferResult,
   UpdateWatchBody,
@@ -313,6 +315,20 @@ export const testChannel = (id: string) =>
     "POST",
     `${channelPath(id)}/test`,
   );
+
+const devicePath = (id: string) => `/api/v1/push/devices/${encodeURIComponent(id)}`;
+
+export async function getPushKey(): Promise<string> {
+  return (await getJSON<{ public_key: string }>("/api/v1/push/key")).public_key;
+}
+export async function listPushDevices(): Promise<PushDevice[]> {
+  return (await getJSON<{ items: PushDevice[] }>("/api/v1/push/devices")).items;
+}
+export const registerPushDevice = (body: RegisterPushDeviceBody) =>
+  sendJSON<PushDevice>("POST", "/api/v1/push/devices", body);
+export const renamePushDevice = (id: string, name: string) =>
+  sendJSON<PushDevice>("PATCH", devicePath(id), { name });
+export const deletePushDevice = (id: string) => sendJSON<undefined>("DELETE", devicePath(id));
 
 export function listDeliveries(filters: DeliveryFilters, cursor: string): Promise<DeliveriesPage> {
   const q = new URLSearchParams({ limit: "25" });

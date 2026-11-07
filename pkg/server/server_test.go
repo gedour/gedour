@@ -213,9 +213,10 @@ func TestSecurityHeaders(t *testing.T) {
 		"index.html":           {Data: []byte("<html><head><script>" + script + "</script><script type=module src=/assets/a.js></script></head></html>")},
 		"assets/app-a1.js":     {Data: []byte("1")},
 		"assets/font-b2.woff2": {Data: []byte("1")},
+		"sw.js":                {Data: []byte("1")},
 	}
 	h := newHandler(t, pingOK, ui)
-	for _, path := range []string{"/", "/inbox", "/assets/app-a1.js", "/assets/font-b2.woff2", "/api/v1/version", "/api/nope", "/healthz"} {
+	for _, path := range []string{"/", "/inbox", "/assets/app-a1.js", "/assets/font-b2.woff2", "/sw.js", "/api/v1/version", "/api/nope", "/healthz"} {
 		t.Run(path, func(t *testing.T) {
 			hd := get(t, h, path).Header()
 			for k, v := range map[string]string{
@@ -228,7 +229,8 @@ func TestSecurityHeaders(t *testing.T) {
 				}
 			}
 			csp := hd.Get("Content-Security-Policy")
-			for _, want := range []string{"default-src 'self'", "frame-ancestors 'none'", "script-src 'self' " + wantHash + ";"} {
+			// 010-AC12: worker-src lets the page register /sw.js and nothing from elsewhere.
+			for _, want := range []string{"default-src 'self'", "frame-ancestors 'none'", "script-src 'self' " + wantHash + ";", "; worker-src 'self';"} {
 				if !strings.Contains(csp, want) {
 					t.Errorf("CSP %q lacks %q", csp, want)
 				}

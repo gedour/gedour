@@ -71,6 +71,8 @@ type claimed struct {
 	channelID   string
 	ruleID      *string
 	attempts    int
+	// batch is a digest's deliveries, all under token; nil for a delivery sent alone.
+	batch []claimed
 }
 
 // Run delivers until ctx ends, claiming as slots free up. Then sends in flight get the drain time to
@@ -137,11 +139,34 @@ func (d *Deliverer) DeliverOnce(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// claim leases due deliveries on the database clock, as the watch scheduler does (001-AC15).
+// claim leases due deliveries on the database clock, as the watch scheduler does (001-AC15). A backlog of
+// single deliveries never holds a due digest back: one slot goes to whichever kind waited longest, more keep
+// one for digests.
 func (d *Deliverer) claim(ctx context.Context, n int) ([]claimed, error) {
+	if n == 1 {
+		if jobs, err := d.claimDigests(ctx, 1, true); err != nil || len(jobs) > 0 {
+			return jobs, err
+		}
+		return d.claimSingles(ctx, 1)
+	}
+	jobs, err := d.claimSingles(ctx, n-1)
+	if err != nil {
+		return nil, err
+	}
+	digests, err := d.claimDigests(ctx, n-len(jobs), false)
+	if err != nil && len(jobs) > 0 {
+		// The deliveries already leased still go out; the digests wait for the next poll.
+		d.log.Error("delivery_claim_failed", zap.Error(err))
+		return jobs, nil
+	}
+	return append(jobs, digests...), err
+}
+
+// claimSingles leases up to n due deliveries sent alone, oldest due first.
+func (d *Deliverer) claimSingles(ctx context.Context, n int) ([]claimed, error) {
 	rows, err := d.pool.Query(ctx, `UPDATE deliveries x SET claim_token = gen_random_uuid(), leased_until = now() + make_interval(secs => $1)
 		FROM (SELECT id FROM deliveries WHERE status IN ('pending', 'failed') AND next_attempt_at <= now()
-			AND (leased_until IS NULL OR leased_until <= now())
+			AND (leased_until IS NULL OR leased_until <= now()) AND NOT digest
 			ORDER BY next_attempt_at LIMIT $2 FOR UPDATE SKIP LOCKED) due
 		WHERE x.id = due.id
 		RETURNING x.id, x.event_id, x.claim_token::text, x.channel_id::text, x.rule_id::text, x.attempts`,
@@ -149,13 +174,58 @@ func (d *Deliverer) claim(ctx context.Context, n int) ([]claimed, error) {
 	if err != nil {
 		return nil, fmt.Errorf("claim deliveries: %w", err)
 	}
-	jobs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (claimed, error) {
-		var c claimed
-		err := r.Scan(&c.id, &c.eventID, &c.token, &c.channelID, &c.ruleID, &c.attempts)
-		return c, err
-	})
+	jobs, err := pgx.CollectRows(rows, scanClaimed)
 	if err != nil {
 		return nil, fmt.Errorf("claim deliveries: %w", err)
+	}
+	return jobs, nil
+}
+
+func scanClaimed(r pgx.CollectableRow) (claimed, error) {
+	var c claimed
+	err := r.Scan(&c.id, &c.eventID, &c.token, &c.channelID, &c.ruleID, &c.attempts)
+	return c, err
+}
+
+// claimDigests leases the due deliveries of up to n digest channels, one token per channel (012-AC3,
+// 012-AC10). Both locks skip what is held, so the claim never waits under its channel lock: a channel held by
+// another replica or an edit is passed over, and so is one with a due row held (a rule delete, a purge, a
+// manual retry), whole, so its digest never goes out in two parts.
+// Oldest digest first; with older, when set, only a digest due no later than every single delivery.
+func (d *Deliverer) claimDigests(ctx context.Context, n int, older bool) ([]claimed, error) {
+	rows, err := d.pool.Query(ctx, `WITH cand AS (SELECT channel_id, min(next_attempt_at) AS due_at FROM deliveries
+				WHERE status IN ('pending', 'failed') AND next_attempt_at <= now() AND (leased_until IS NULL OR leased_until <= now()) AND digest
+				GROUP BY channel_id),
+			ch AS (SELECT c.id, gen_random_uuid() AS token FROM channels c JOIN cand ON cand.channel_id = c.id
+				WHERE NOT $3 OR cand.due_at <= COALESCE((SELECT min(next_attempt_at) FROM deliveries WHERE status IN ('pending', 'failed')
+					AND next_attempt_at <= now() AND (leased_until IS NULL OR leased_until <= now()) AND NOT digest), 'infinity')
+				ORDER BY cand.due_at, c.id LIMIT $1 FOR NO KEY UPDATE OF c SKIP LOCKED),
+			due AS (SELECT o.id, o.channel_id, ch.token FROM deliveries o JOIN ch ON ch.id = o.channel_id
+				WHERE o.status IN ('pending', 'failed') AND o.next_attempt_at <= now() AND (o.leased_until IS NULL OR o.leased_until <= now()) AND o.digest
+				FOR UPDATE OF o SKIP LOCKED),
+			whole AS (SELECT ch.id FROM ch WHERE (SELECT count(*) FROM due WHERE due.channel_id = ch.id) =
+				(SELECT count(*) FROM deliveries a WHERE a.channel_id = ch.id AND a.status IN ('pending', 'failed') AND a.next_attempt_at <= now()
+					AND (a.leased_until IS NULL OR a.leased_until <= now()) AND a.digest))
+		UPDATE deliveries x SET claim_token = due.token, leased_until = now() + make_interval(secs => $2)
+		FROM due JOIN whole ON whole.id = due.channel_id WHERE x.id = due.id
+		RETURNING x.id, x.event_id, x.claim_token::text, x.channel_id::text, x.rule_id::text, x.attempts`, n, DeliveryLease.Seconds(), older)
+	if err != nil {
+		return nil, fmt.Errorf("claim digests: %w", err)
+	}
+	all, err := pgx.CollectRows(rows, scanClaimed)
+	if err != nil {
+		return nil, fmt.Errorf("claim digests: %w", err)
+	}
+	var jobs []claimed
+	at := map[string]int{}
+	for _, c := range all {
+		i, ok := at[c.token]
+		if !ok {
+			i = len(jobs)
+			at[c.token] = i
+			jobs = append(jobs, claimed{token: c.token, channelID: c.channelID})
+		}
+		jobs[i].batch = append(jobs[i].batch, c)
 	}
 	return jobs, nil
 }
@@ -197,6 +267,10 @@ func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify
 }
 
 func (d *Deliverer) deliver(stop context.Context, j claimed) {
+	if j.batch != nil {
+		d.deliverDigest(stop, j)
+		return
+	}
 	log := d.log.With(zap.Int64("delivery_id", j.id), zap.String("channel_id", j.channelID))
 	ctx, cancel := context.WithTimeout(stop, sendTimeout)
 	defer cancel()
@@ -227,10 +301,14 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 	if drained(err, stop) {
 		// Cut by the shutdown drain, not by the receiver: not an attempt. The next poll, on any
 		// replica, sends it again.
-		d.release(log, j)
+		d.release(log, []int64{j.id}, j.token)
 		return
 	}
-	status, ferr := d.finish(context.WithoutCancel(ctx), j, err, logs)
+	done, ferr := d.finish(context.WithoutCancel(ctx), []int64{j.id}, j.token, j.attempts, err, logs)
+	var status string
+	for st := range done {
+		status = st
+	}
 	switch {
 	case ferr != nil:
 		// The lease expires and another attempt runs: a send may repeat, never get lost.
@@ -257,9 +335,9 @@ func drained(sendErr error, stop context.Context) bool {
 	return sendErr != nil && !errors.Is(sendErr, errPartlySent) && stop.Err() != nil
 }
 
-// holdTalk sends the delivery back without an attempt while its channel is paused after a 401, or while
-// an earlier claim on the channel is in flight: concurrent sends would all fail before the first 401 is
-// recorded. Attempts stay put, so a pause alone never makes a delivery dead. A failed check holds too: it
+// holdTalk sends the delivery (for a digest, every delivery under its token, j.id being the lowest) back
+// without an attempt while its channel is paused after a 401, or while an earlier claim on the channel is
+// in flight: concurrent sends would all fail before the first 401 is recorded. Attempts stay put, so a pause alone never makes a delivery dead. A failed check holds too: it
 // says nothing about the channel, so it must not spend an attempt or risk a request. The channel's other
 // due rows go back too: one by one, a backlog would take every send slot and delay the other channels.
 func (d *Deliverer) holdTalk(ctx context.Context, log *zap.Logger, j claimed) bool {
@@ -288,11 +366,11 @@ func (d *Deliverer) holdTalk(ctx context.Context, log *zap.Logger, j claimed) bo
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = COALESCE($3, status), last_error = COALESCE($4, last_error),
-			next_attempt_at = now() + make_interval(secs => $5), claim_token = NULL, leased_until = NULL
-		WHERE channel_id = $6 AND status IN ('pending', 'failed') AND ((id = $1 AND claim_token = $2)
+	if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = COALESCE($2, status), last_error = COALESCE($3, last_error),
+			next_attempt_at = now() + make_interval(secs => $4), claim_token = NULL, leased_until = NULL
+		WHERE channel_id = $5 AND status IN ('pending', 'failed') AND (claim_token = $1
 			OR (next_attempt_at <= now() AND (leased_until IS NULL OR leased_until <= now())))`,
-		j.id, j.token, status, lastErr, delay.Seconds(), j.channelID); err != nil {
+		j.token, status, lastErr, delay.Seconds(), j.channelID); err != nil {
 		// The lease expires and the delivery is claimed again: nothing went out.
 		log.Error("delivery_hold_failed", zap.Error(err))
 	}
@@ -301,21 +379,21 @@ func (d *Deliverer) holdTalk(ctx context.Context, log *zap.Logger, j claimed) bo
 }
 
 // release hands the claim back untouched: attempts and next attempt stay as they were.
-func (d *Deliverer) release(log *zap.Logger, j claimed) {
+func (d *Deliverer) release(log *zap.Logger, ids []int64, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET claim_token = NULL, leased_until = NULL WHERE id = $1 AND claim_token = $2`,
-		j.id, j.token); err != nil {
+	if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET claim_token = NULL, leased_until = NULL WHERE id = ANY($1) AND claim_token = $2`,
+		ids, token); err != nil {
 		log.Error("delivery_release_failed", zap.Error(err))
 	}
 }
 
-// finish records the attempt, and a script's logs, if the claim is still ours; "" means another claim
-// took over.
-func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *string) (string, error) {
+// finish records an attempt of the deliveries ids, and a script's logs, if the claim is still theirs; it
+// returns how many ended in each status, none when another claim took over. A digest's rows share the outcome,
+// sent_at and retry time, from the batch's highest attempt; each dies on its own count (012-AC3, 012-AC7).
+func (d *Deliverer) finish(ctx context.Context, ids []int64, token string, attempts int, sendErr error, logs *string) (map[string]int, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	attempt := j.attempts + 1
 	status, lastErr, delay := "sent", (*string)(nil), time.Duration(0)
 	if refusals, ok := partlySent(sendErr); ok {
 		msg := truncate(refusals)
@@ -325,29 +403,34 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *
 		msg := truncate(sendErr.Error())
 		lastErr = &msg
 		status = "failed"
-		delay = retryDelay(attempt)
-		if attempt >= MaxAttempts || errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, errOwnerDisabled) || errors.Is(sendErr, notify.ErrPermanent) {
+		delay = retryDelay(attempts + 1)
+		if errors.Is(sendErr, errUnreadable) || errors.Is(sendErr, errOwnerDisabled) || errors.Is(sendErr, notify.ErrPermanent) {
 			status = "dead"
-			// A dead delivery's next_attempt_at is when it died: the Talk pause compares it to channel edits.
-			delay = 0
 		}
 	}
 	if logs != nil {
 		clean := strings.ReplaceAll(*logs, "\x00", "")
 		logs = &clean
 	}
-	tag, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = $3, attempts = $4,
-			last_error = CASE WHEN $3 = 'sent' AND last_error LIKE 'held:%' THEN NULL ELSE COALESCE($5, last_error) END,
-			logs = COALESCE($7, logs), sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
-			next_attempt_at = now() + make_interval(secs => $6), claim_token = NULL, leased_until = NULL
-		WHERE id = $1 AND claim_token = $2`, j.id, j.token, status, attempt, lastErr, delay.Seconds(), logs)
+	// A dead delivery's next_attempt_at is when it died: the Talk pause compares it to channel edits.
+	rows, err := d.pool.Query(ctx, `WITH f AS (UPDATE deliveries SET
+				status = CASE WHEN $3 = 'failed' AND attempts + 1 >= $7 THEN 'dead' ELSE $3 END, attempts = attempts + 1,
+				last_error = CASE WHEN $3 = 'sent' AND last_error LIKE 'held:%' THEN NULL ELSE COALESCE($4, last_error) END,
+				logs = COALESCE($6, logs), sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
+				next_attempt_at = now() + CASE WHEN $3 = 'failed' AND attempts + 1 < $7 THEN make_interval(secs => $5) ELSE interval '0' END,
+				claim_token = NULL, leased_until = NULL
+			WHERE id = ANY($1) AND claim_token = $2 RETURNING status)
+		SELECT status, count(*) FROM f GROUP BY status`, ids, token, status, lastErr, delay.Seconds(), logs, MaxAttempts)
 	if err != nil {
-		return "", fmt.Errorf("finish delivery: %w", err)
+		return nil, fmt.Errorf("finish delivery: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return "", nil
+	done := map[string]int{}
+	var st string
+	var n int
+	if _, err := pgx.ForEachRow(rows, []any{&st, &n}, func() error { done[st] = n; return nil }); err != nil {
+		return nil, fmt.Errorf("finish delivery: %w", err)
 	}
-	return status, nil
+	return done, nil
 }
 
 // truncate fits an error into last_error: NUL dropped (text columns refuse it), 1 KiB at most.

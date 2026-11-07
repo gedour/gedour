@@ -36,8 +36,8 @@ A digest with nothing left to list sends nothing.
 - Length cap per channel type (Telegram 4096, Talk 32000 characters); past it the message ends with
   "+N more" and a link to the gedour inbox (`GEDOUR_PUBLIC_URL`).
 - Telegram and Talk `silent` (spec 003) applies to digests.
-- A digest's deliveries share one outcome: sent together, or failed together with the existing backoff
-  and dead after `MaxAttempts`.
+- A digest's deliveries are sent together, or failed together with the existing backoff taken from the
+  batch's highest attempt; each delivery is dead after its own `MaxAttempts`.
 - Editing the schedule moves the waiting deliveries to the new next time; switching to `immediate` makes
   them due at once (each sent alone, still filtered on read).
 - "Send test" on a digest channel sends a sample digest of two events.
@@ -67,7 +67,8 @@ A digest with nothing left to list sends nothing.
 - [ ] **AC6** An event taken by a high priority rule on a digest channel is sent alone at once and is not
   listed in the next digest.
 - [ ] **AC7** A failed digest send retries with the existing backoff; an event read before the retry is
-  skipped in it; after `MaxAttempts` all remaining deliveries of the digest are `dead`.
+  skipped in it; each delivery is `dead` after its own `MaxAttempts`, so the deliveries that shared every
+  attempt die together.
 - [ ] **AC8** A digest longer than the channel type's cap is cut on a whole line and ends with "+N more"
   and the inbox link.
 - [ ] **AC9** Changing the schedule moves waiting deliveries to the new next time; switching to

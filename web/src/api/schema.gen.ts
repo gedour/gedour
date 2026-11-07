@@ -1009,7 +1009,7 @@ export interface components {
        * @description Status of the newest delivery
        * @enum {string|null}
        */
-      last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
+      last_delivery_status: "pending" | "sent" | "failed" | "dead" | "skipped" | null;
       name: string;
       /** @enum {string} */
       type: "telegram" | "nextcloud_talk" | "email" | "webhook" | "script" | "web_push";
@@ -1186,7 +1186,7 @@ export interface components {
        * @description Status of the newest delivery
        * @enum {string|null}
        */
-      last_delivery_status: "pending" | "sent" | "failed" | "dead" | null;
+      last_delivery_status: "pending" | "sent" | "failed" | "dead" | "skipped" | null;
       name: string;
       /** @description Webhook only, generated when none was given: shown in this response only */
       signing_secret?: string;
@@ -1237,10 +1237,10 @@ export interface components {
       /** Format: date-time */
       sent_at: string | null;
       /**
-       * @description failed: a retry is scheduled; dead: no retry left
+       * @description failed: a retry is scheduled; dead: no retry left; skipped: a digest left it out, last_error says why
        * @enum {string}
        */
-      status: "pending" | "sent" | "failed" | "dead";
+      status: "pending" | "sent" | "failed" | "dead" | "skipped";
       watch: components["schemas"]["WatchRef"];
     };
     DryRun: {
@@ -2686,7 +2686,7 @@ export interface operations {
       query?: {
         /** @description Only deliveries to this channel */
         channel_id?: string;
-        status?: "pending" | "sent" | "failed" | "dead";
+        status?: "pending" | "sent" | "failed" | "dead" | "skipped";
         /** @description next_cursor of the previous page */
         cursor?: string;
         limit?: number;

@@ -67,7 +67,7 @@ type Channel struct {
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
-	LastDeliveryStatus *string        `json:"last_delivery_status" enum:"pending,sent,failed,dead" nullable:"true" doc:"Status of the newest delivery"`
+	LastDeliveryStatus *string        `json:"last_delivery_status" enum:"pending,sent,failed,dead,skipped" nullable:"true" doc:"Status of the newest delivery"`
 	LastDeliveryAt     *time.Time     `json:"last_delivery_at" nullable:"true"`
 }
 
@@ -739,14 +739,26 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 	}
 	out := &testResult{}
 	var sendErr error
-	if ch.Type == notify.TypeWebPush {
+	// 012-AC11: a digest channel's test is a sample digest of two events; the config read under the audit row decides.
+	var cfg map[string]any
+	_ = json.Unmarshal(ch.Config, &cfg) // a stored config is always an object
+	digest, now := scheduleOf(cfg) != nil, time.Now()
+	switch {
+	case ch.Type == notify.TypeWebPush:
 		tctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
 		defer cancel()
 		var n int
-		n, sendErr = pushSend(tctx, s.pool, s.box, s.sender, ch, notify.TestDelivery(time.Now()))
+		n, sendErr = pushFanOut(tctx, s.pool, s.box, s.sender, ch, nil, func(silent bool) ([]byte, string) {
+			if digest {
+				return notify.PushDigestPayload(notify.SampleDigest(now), ch.ID, silent), notify.PushUrgency(silent, nil)
+			}
+			return notify.PushPayload(notify.TestDelivery(now), silent), notify.PushUrgency(silent, nil)
+		})
 		out.Body.Accepted = &n
-	} else {
-		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(time.Now()), true)
+	case digest:
+		sendErr = s.sender.SendDigest(ctx, ch, notify.SampleDigest(now))
+	default:
+		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(now), true)
 	}
 	if refusals, ok := partlySent(sendErr); ok {
 		// Some devices took it: the test worked, the error names the ones that refused.

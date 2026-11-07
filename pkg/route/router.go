@@ -265,13 +265,14 @@ func (r *Router) insertDeliveries(ctx context.Context, tx pgx.Tx, event int64, h
 }
 
 // digestDue maps the digest channels among the rules' channels to their next scheduled time on the database clock.
-// KEY SHARE on every channel (the delivery FK takes it anyway) waits out an edit in flight; a WHERE on the mode would skip one turning digest.
+// KEY SHARE on the digest channels waits out an edit in flight that leaves digest mode; one turning a channel into a digest is not waited
+// on and its delivery goes out at once. Immediate channels keep meeting the router through the delivery FK only.
 func (r *Router) digestDue(ctx context.Context, tx pgx.Tx, hits []matchRule) (map[string]time.Time, error) {
 	var ids []string
 	for _, rule := range hits {
 		ids = append(ids, rule.channels...)
 	}
-	rows, err := tx.Query(ctx, `SELECT id::text, config, now() FROM channels WHERE id = ANY($1::uuid[]) FOR KEY SHARE`, ids)
+	rows, err := tx.Query(ctx, `SELECT id::text, config, now() FROM channels WHERE id = ANY($1::uuid[]) AND config->>'delivery' = 'digest' FOR KEY SHARE`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("digest channels: %w", err)
 	}

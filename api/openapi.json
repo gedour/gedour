@@ -445,7 +445,8 @@
               "pending",
               "sent",
               "failed",
-              "dead"
+              "dead",
+              "skipped"
             ],
             "type": [
               "string",
@@ -887,7 +888,8 @@
               "pending",
               "sent",
               "failed",
-              "dead"
+              "dead",
+              "skipped"
             ],
             "type": [
               "string",
@@ -1039,12 +1041,13 @@
             ]
           },
           "status": {
-            "description": "failed: a retry is scheduled; dead: no retry left",
+            "description": "failed: a retry is scheduled; dead: no retry left; skipped: a digest left it out, last_error says why",
             "enum": [
               "pending",
               "sent",
               "failed",
-              "dead"
+              "dead",
+              "skipped"
             ],
             "type": "string"
           },
@@ -3869,7 +3872,8 @@
                 "pending",
                 "sent",
                 "failed",
-                "dead"
+                "dead",
+                "skipped"
               ],
               "type": "string"
             }

@@ -24,6 +24,10 @@ const STATUS: Record<DeliveryStatus, { label: string; className: string }> = {
     label: "Failed",
     className: "bg-rose-500/10 text-rose-800 ring-rose-600/25 dark:text-rose-300",
   },
+  skipped: {
+    label: "Skipped",
+    className: "bg-zinc-500/10 text-zinc-700 ring-zinc-600/25 dark:text-zinc-300",
+  },
 };
 
 export function DeliveryBadge({ status }: { status: DeliveryStatus }) {

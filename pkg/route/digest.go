@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/watch"
 )
 
 const (
@@ -192,4 +194,145 @@ func reschedule(ctx context.Context, tx pgx.Tx, channel string, s *schedule) err
 		return fmt.Errorf("reschedule digest: %w", err)
 	}
 	return nil
+}
+
+// Reasons a waiting digest delivery ends skipped (012-AC4).
+const (
+	skippedRead     = "not sent: read in the inbox before the digest"
+	skippedArchived = "not sent: archived in the inbox before the digest"
+)
+
+type digestRow struct {
+	nd                               notify.Delivery
+	readable, active, read, archived bool
+}
+
+// loadDigest reads the batch's events, oldest first, and ends the deliveries that must not go out: skipped
+// when the owner read or archived the item (no attempt spent), dead when the owner may no longer receive
+// it (012-AC4, 012-AC7). It returns the digest of the rest and their ids.
+func (d *Deliverer) loadDigest(ctx context.Context, log *zap.Logger, typ string, j claimed, attempts int) (notify.Digest, []int64, error) {
+	var dg notify.Digest
+	rows, err := d.pool.Query(ctx, `SELECT x.id, e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind,
+			`+watch.ReadableSQL("w", "c.owner_id")+`, `+activeOwner+`, i.read_at IS NOT NULL, i.archived_at IS NOT NULL
+		FROM deliveries x JOIN events e ON e.id = x.event_id JOIN watches w ON w.id = e.watch_id
+		JOIN channels c ON c.id = x.channel_id JOIN users u ON u.id = c.owner_id
+		LEFT JOIN inbox_items i ON i.user_id = c.owner_id AND i.event_id = e.id
+		WHERE x.claim_token = $1 ORDER BY e.observed_at, e.id`, j.token)
+	if err != nil {
+		return dg, nil, fmt.Errorf("load digest: %w", err)
+	}
+	all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (digestRow, error) {
+		var x digestRow
+		e := &x.nd.Event
+		err := r.Scan(&x.nd.ID, &e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &x.nd.Watch.ID, &x.nd.Watch.Name, &x.nd.Watch.Kind,
+			&x.readable, &x.active, &x.read, &x.archived)
+		return x, err
+	})
+	if err != nil {
+		return dg, nil, fmt.Errorf("load digest: %w", err)
+	}
+	var ids []int64
+	dead := map[error][]int64{}
+	skipped := map[string][]int64{}
+	for _, x := range all {
+		switch {
+		case !x.readable:
+			dead[errUnreadable] = append(dead[errUnreadable], x.nd.ID)
+		case !x.active:
+			dead[errOwnerDisabled] = append(dead[errOwnerDisabled], x.nd.ID)
+		case x.archived:
+			skipped[skippedArchived] = append(skipped[skippedArchived], x.nd.ID)
+		case x.read:
+			skipped[skippedRead] = append(skipped[skippedRead], x.nd.ID)
+		default:
+			dg.Deliveries = append(dg.Deliveries, x.nd)
+			ids = append(ids, x.nd.ID)
+		}
+	}
+	// A failed write leaves its rows leased: the next claim after the lease checks them again.
+	for cause, end := range dead {
+		if _, err := d.finish(ctx, end, j.token, attempts, cause, nil); err != nil {
+			log.Error("delivery_store_failed", zap.Error(err))
+			continue
+		}
+		d.metrics.deliveries.WithLabelValues(typ, "dead").Add(float64(len(end)))
+	}
+	for reason, end := range skipped {
+		if _, err := d.pool.Exec(ctx, `UPDATE deliveries SET status = 'skipped', last_error = $3, claim_token = NULL, leased_until = NULL
+			WHERE id = ANY($1) AND claim_token = $2`, end, j.token, reason); err != nil {
+			log.Error("delivery_store_failed", zap.Error(err))
+			continue
+		}
+		d.metrics.deliveries.WithLabelValues(typ, "skipped").Add(float64(len(end)))
+	}
+	if len(ids) > 0 {
+		dg.ID = slices.Min(ids)
+	}
+	return dg, ids, nil
+}
+
+// deliverDigest sends a claimed digest as one message; its deliveries share the outcome (012-AC3, 012-AC7).
+func (d *Deliverer) deliverDigest(stop context.Context, j claimed) {
+	log := d.log.With(zap.String("channel_id", j.channelID), zap.Int("deliveries", len(j.batch)))
+	ctx, cancel := context.WithTimeout(stop, sendTimeout)
+	defer cancel()
+	start := time.Now()
+	ids := make([]int64, len(j.batch))
+	attempts := 0
+	for i, c := range j.batch {
+		ids[i], attempts = c.id, max(attempts, c.attempts)
+	}
+	ch, err := loadChannel(ctx, d.pool, d.box, j.channelID)
+	var dg notify.Digest
+	if err == nil {
+		var left []int64
+		// On a load error every delivery of the batch takes the failed attempt.
+		if dg, left, err = d.loadDigest(ctx, log, ch.Type, j, attempts); err == nil {
+			if ids = left; len(ids) == 0 {
+				log.Debug("digest_empty")
+				return
+			}
+		}
+	}
+	if err == nil && ch.Type == notify.TypeNextcloudTalk {
+		// The lowest id leads: the batch's other rows share its lease and never count as an earlier claim.
+		j.id = dg.ID
+		if d.holdTalk(ctx, log, j) {
+			return
+		}
+	}
+	switch {
+	case err == nil && ch.Type == notify.TypeWebPush:
+		_, err = pushFanOut(ctx, d.pool, d.box, d.sender, ch, ids, func(silent bool) ([]byte, string) {
+			return notify.PushDigestPayload(dg, ch.ID, silent), notify.PushUrgency(silent, nil)
+		})
+	case err == nil:
+		err = d.sender.SendDigest(ctx, ch, dg)
+	}
+	typ := ch.Type
+	if typ == "" {
+		typ = "unknown"
+	}
+	d.metrics.duration.WithLabelValues(typ).Observe(time.Since(start).Seconds())
+	if drained(err, stop) {
+		d.release(log, ids, j.token)
+		return
+	}
+	done, ferr := d.finish(context.WithoutCancel(ctx), ids, j.token, attempts, err, nil)
+	switch {
+	case ferr != nil:
+		log.Error("delivery_store_failed", zap.Error(ferr))
+		return
+	case len(done) == 0:
+		log.Warn("delivery_discarded")
+		return
+	}
+	for st, n := range done {
+		d.metrics.deliveries.WithLabelValues(typ, st).Add(float64(n))
+	}
+	if done["failed"]+done["dead"] == 0 {
+		log.Debug("digest_sent", zap.Int("events", done["sent"]))
+		return
+	}
+	log.Info("digest_failed", zap.Int("failed", done["failed"]), zap.Int("dead", done["dead"]), zap.Int("attempt", attempts+1), zap.Error(err))
 }

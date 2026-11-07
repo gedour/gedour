@@ -121,6 +121,11 @@ func PushPayload(d Delivery, silent bool) []byte {
 		m.URL = "/inbox?event=" + strconv.FormatInt(d.Event.ID, 10)
 		m.Tag = "gedour-event-" + strconv.FormatInt(d.Event.ID, 10)
 	}
+	return fitPush(m)
+}
+
+// fitPush encodes m cut to one push record: body first, then title, on rune boundaries.
+func fitPush(m PushMessage) []byte {
 	for {
 		b := pushJSON(m)
 		over := len(b) - webpush.MaxPayload

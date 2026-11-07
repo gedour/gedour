@@ -190,6 +190,7 @@ func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo)
 	// RFC 8292 section 2.1: the contact is mailto: or https:; a worker usually has no public URL.
 	s.VAPIDSubject = vapidContact
 	if urls := cfg.PublicURLs(); len(urls) > 0 {
+		s.PublicURL = urls[0]
 		if u, err := url.Parse(urls[0]); err == nil && u.Scheme == "https" {
 			s.VAPIDSubject = urls[0]
 		}

@@ -265,16 +265,13 @@ func TestRoutingDigestBadSchedule(t *testing.T) {
 	}
 }
 
-// 012-AC2: routing waits out a channel edit in flight that turns it into a digest, and queues on the committed schedule.
+// 012-AC9: routing waits out a channel edit in flight that leaves digest mode, and queues the delivery due now, out of the digest.
 func TestRoutingDigestEditInFlight(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	alice := e.user(t, "alice")
 	w := e.watch(t, alice)
 	ch := e.digestChannel(t, alice, "07:00", "UTC")
-	if _, err := e.pool.Exec(ctx, `UPDATE channels SET config = config - 'delivery' - 'at' - 'tz' WHERE id = $1`, ch); err != nil {
-		t.Fatal(err)
-	}
 	e.rule(t, alice, &w, "", ch)
 	ev := e.event(t, w, "release.published", "v1")
 
@@ -287,7 +284,7 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, ch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE channels SET config = config || '{"delivery": "digest", "at": ["07:00"], "tz": "UTC"}' WHERE id = $1`, ch); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE channels SET config = config - 'delivery' - 'at' - 'tz' WHERE id = $1`, ch); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -305,8 +302,8 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if q := e.queued(t, ev, ch); !q.digest || q.due.UTC().Hour() != 7 || time.Until(q.due) <= 0 {
-		t.Errorf("delivery due %s, digest %v; want the committed 07:00 UTC digest", q.due.UTC(), q.digest)
+	if q := e.queued(t, ev, ch); q.digest || time.Until(q.due) > 0 {
+		t.Errorf("delivery due %s, digest %v; want due now, out of the digest", q.due.UTC(), q.digest)
 	}
 }
 

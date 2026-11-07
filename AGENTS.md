@@ -89,6 +89,8 @@
   take `NO KEY UPDATE` (sign-in, caps, transfer and act-as start still wait on them), so FK KEY SHARE on users (audit
   actor and on_behalf_of, sessions, router) never waits on them and may come anywhere. Events: router
   (event, then KEY SHARE on rule/channel/user) and deletes only; events are deleted explicitly before their watch (no reliance on cascade order), and pre-delete rule locks are `NO KEY UPDATE`.
+  Channels: the router takes KEY SHARE on digest channels before inserting deliveries; the digest claim takes the channel
+  `FOR NO KEY UPDATE SKIP LOCKED`, then its deliveries `SKIP LOCKED` too: it never waits under the channel lock (purge, TestPurgeRacingDigestClaim).
 - `audit.Record` stores the value's `encoding/json` form; the key deny-list is only a safety net. A type
   passed to it must not carry secrets in its JSON form (`json:"-"`, or pass the API response type).
 

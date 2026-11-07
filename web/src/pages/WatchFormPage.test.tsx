@@ -28,7 +28,7 @@ describe("WatchFormPage (new)", () => {
     expect(screen.getByText(/Not recognized/)).toBeInTheDocument();
   });
 
-  // 008-AC15: both boxes share one hint on the doubled request count, and reach the config.
+  // 008-AC15: both boxes share one hint on the extra request, and reach the config.
   it("offers the new-items boxes with the request hint", async () => {
     const fn = mockApi({
       "/api/v1/credentials": { items: [] },
@@ -39,9 +39,9 @@ describe("WatchFormPage (new)", () => {
     const prs = screen.getByRole("checkbox", { name: "Report new pull requests" });
     for (const box of [issues, prs]) {
       expect(box).not.toBeChecked();
-      expect(box).toHaveAccessibleDescription(/two requests.*60 an hour without a token/);
+      expect(box).toHaveAccessibleDescription(/1 more request:.*60 an hour without a token/);
     }
-    expect(screen.getAllByText(/two requests/)).toHaveLength(1);
+    expect(screen.getAllByText(/1 more request:/)).toHaveLength(1);
     expect(screen.getByRole("checkbox", { name: "Include pre-releases" })).not.toHaveAttribute(
       "aria-describedby",
     );
@@ -56,6 +56,29 @@ describe("WatchFormPage (new)", () => {
     });
     await userEvent.click(kindCard("GitHub pull request"));
     expect(screen.queryByRole("checkbox", { name: "Report new issues" })).not.toBeInTheDocument();
+  });
+
+  // 011-AC17: the discussions box has its own hint on the extra requests, and reaches the config.
+  it("offers the new discussions box with its request hint", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    const box = screen.getByRole("checkbox", { name: "Report new discussions" });
+    expect(box).not.toBeChecked();
+    expect(box).toHaveAccessibleDescription(/2 to 3 more requests.*60 an hour without a token/);
+    expect(
+      screen.getByRole("checkbox", { name: "Report new pull requests" }),
+    ).not.toHaveAccessibleDescription(/2 to 3/);
+    await userEvent.type(screen.getByLabelText("Repository"), "a/b");
+    await userEvent.click(box);
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body?.config).toMatchObject({
+      new_issues: false,
+      new_discussions: true,
+    });
   });
 
   // 008-AC13: an issue URL picks the GitHub issue card and fills its fields.
@@ -162,7 +185,13 @@ describe("WatchFormPage (new)", () => {
     expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toEqual({
       name: "Mine",
       kind: "github_repo",
-      config: { repo: "a/b", include_prereleases: false, new_issues: false, new_prs: false },
+      config: {
+        repo: "a/b",
+        include_prereleases: false,
+        new_issues: false,
+        new_prs: false,
+        new_discussions: false,
+      },
       credential_id: "c1",
     });
     release(Response.json(watch({ id: "w9", name: "Mine" }), { status: 201 }));
@@ -235,6 +264,7 @@ describe("WatchFormPage (edit)", () => {
         include_prereleases: false,
         new_issues: false,
         new_prs: false,
+        new_discussions: false,
         api_url: "https://api.github.com",
       },
       schedule: "15m",

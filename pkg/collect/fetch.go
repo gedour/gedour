@@ -70,7 +70,7 @@ type Fetcher struct {
 	Now   func() time.Time
 	// Notes holds a release watch's notes by tag, for this run's events only; nil for other kinds.
 	Notes map[string]string
-	// Items holds the issue.opened and pr.opened event of each listed item whose box is on, by number, for
+	// Items holds the issue.opened, pr.opened and discussion.opened event of each listed item whose box is on, by number, for
 	// this run's events only; nil unless a github_repo box is on.
 	Items map[int]Event
 }

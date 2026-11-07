@@ -170,6 +170,13 @@ describe("summarizeEvent", () => {
       "PR #12 opened by alice",
       "change",
     ],
+    // 011-AC16: discussion.opened, mirrored in pkg/notify/message.go.
+    [
+      ev("discussion.opened", { ...pr, author: "alice", category: "Ideas", labels: [] }),
+      "New discussion",
+      "Discussion #12 opened by alice",
+      "change",
+    ],
     [
       ev("mr.state_changed", { ...mr, from: "opened", to: "merged" }),
       "State",

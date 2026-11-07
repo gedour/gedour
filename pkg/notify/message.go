@@ -153,6 +153,8 @@ func summarize(e Event) string {
 		return issue + " commented by " + str(p["author"])
 	case "pr.opened":
 		return pr + " opened by " + str(p["author"])
+	case "discussion.opened":
+		return "Discussion #" + str(p["number"]) + " opened by " + str(p["author"])
 	case "mr.approval_changed":
 		a, _ := p["to"].(map[string]any)
 		n, _ := a["count"].(float64)

@@ -64,9 +64,10 @@ type GitHubRepoConfig struct {
 	Repo               string `json:"repo"`
 	IncludePrereleases bool   `json:"include_prereleases"`
 	APIURL             string `json:"api_url"`
-	// omitempty: a config with both boxes off stays as stored before them, so saving it unchanged is no retarget.
-	NewIssues bool `json:"new_issues,omitempty"`
-	NewPRs    bool `json:"new_prs,omitempty"`
+	// omitempty: a config with the boxes off stays as stored before them, so saving it unchanged is no retarget.
+	NewIssues      bool `json:"new_issues,omitempty"`
+	NewPRs         bool `json:"new_prs,omitempty"`
+	NewDiscussions bool `json:"new_discussions,omitempty"`
 }
 
 // GitHubPRConfig is the normalized config of a github_pr watch.
@@ -140,7 +141,7 @@ func targetOf(cfg map[string]any) (field, raw string) {
 }
 
 // boxKeys only add requests to the same target: changing them is no retarget.
-var boxKeys = []string{"new_issues", "new_prs"}
+var boxKeys = []string{"new_issues", "new_prs", "new_discussions"}
 
 // sameTarget compares two normalized configs, the new-items boxes left out.
 func sameTarget(a, b map[string]any) bool {

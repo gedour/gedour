@@ -104,3 +104,28 @@ func TestTalk(t *testing.T) {
 		t.Fatalf("received: %+v", got)
 	}
 }
+
+// 011-AC4: the fake pages the discussions list like GitHub, so the e2e run takes the probe-then-page path.
+func TestDiscussionsPaging(t *testing.T) {
+	srv := httptest.NewServer(New())
+	defer srv.Close()
+	get := func(q string) (string, []map[string]any) {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/repos/cli/cli/discussions?"+q, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var items []map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Header.Get("Link"), items
+	}
+	if link, items := get("per_page=1"); !strings.Contains(link, `per_page=1&page=2>; rel="last"`) || len(items) != 1 || items[0]["number"] != 9507.0 {
+		t.Fatalf("probe: %q %v", link, items)
+	}
+	if link, items := get("per_page=100&page=1"); link != "" || len(items) != 2 {
+		t.Fatalf("page: %q %d", link, len(items))
+	}
+}

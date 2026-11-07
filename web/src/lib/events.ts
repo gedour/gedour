@@ -136,6 +136,13 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       };
     case "pr.opened":
       return { badge: "New PR", tone: "change", text: `${pr} opened by ${str(p.author)}`, url };
+    case "discussion.opened":
+      return {
+        badge: "New discussion",
+        tone: "change",
+        text: `Discussion #${str(p.number)} opened by ${str(p.author)}`,
+        url,
+      };
     case "mr.approval_changed": {
       const a = (p.to ?? {}) as Approvals;
       const count = plural(a.count ?? 0, "approval");

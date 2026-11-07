@@ -3,8 +3,11 @@ package collect
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -27,10 +30,11 @@ type Release struct {
 // ReleaseState is the normalized state of a release watch, newest first.
 type ReleaseState struct {
 	Releases []Release `json:"releases"`
-	// Numbers of the issues, and of the PRs, listed while their box is on. One list per box, so checking a box
+	// Numbers of the issues, PRs and discussions listed while their box is on. One list per box, so checking a box
 	// starts a baseline for its kind alone; nil (absent) is no list stored, and keeps a boxes-off state as before 008.
-	Issues *[]int `json:"issues,omitempty"`
-	PRs    *[]int `json:"prs,omitempty"`
+	Issues      *[]int `json:"issues,omitempty"`
+	PRs         *[]int `json:"prs,omitempty"`
+	Discussions *[]int `json:"discussions,omitempty"`
 	// Notes by tag: out of the JSON, so an edit of the notes alone changes neither the stored state nor its hash.
 	Notes map[string]string `json:"-"`
 }
@@ -79,24 +83,29 @@ func WithNotes(events []Event, notes map[string]string) {
 	}
 	for _, e := range events {
 		// An item's subject is its number, which a tag may equal.
-		if e.Type != "issue.opened" && e.Type != "pr.opened" {
+		if e.Type != "issue.opened" && e.Type != "pr.opened" && e.Type != "discussion.opened" {
 			e.Payload["body"], e.Payload["cves"] = parseNotes(notes[e.Subject])
 		}
 	}
 }
 
-// itemListed is Diff's placeholder for a new issue or PR number: the stored states hold numbers only.
-const itemListed = "item.listed"
+// itemListed and discussionListed are Diff's placeholders for a new issue or PR number and a new discussion
+// number: the stored states hold numbers only.
+const (
+	itemListed       = "item.listed"
+	discussionListed = "discussion.listed"
+)
 
-// WithItems turns Diff's placeholders into the run's issue.opened and pr.opened events, and drops those
-// whose box is off. Call it before WithNotes.
+// WithItems turns Diff's placeholders into the run's issue.opened, pr.opened and discussion.opened events, and
+// drops those whose box is off. Call it before WithNotes.
 func WithItems(events []Event, items map[int]Event) []Event {
 	out := events[:0]
 	for _, e := range events {
-		if e.Type == itemListed {
+		if e.Type == itemListed || e.Type == discussionListed {
 			n, _ := strconv.Atoi(e.Subject)
 			it, ok := items[n]
-			if !ok {
+			// An issue converted to a discussion keeps its number: the run's item must come from the placeholder's list.
+			if !ok || (it.Type == "discussion.opened") != (e.Type == discussionListed) {
 				continue
 			}
 			e = it
@@ -117,36 +126,163 @@ func githubHeaders(cred *Credential) http.Header {
 func collectGitHubRepo(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, cred *Credential) (ReleaseState, error) {
 	h := githubHeaders(cred)
 	items := cfg.NewIssues || cfg.NewPRs
+	boxed := items || cfg.NewDiscussions
 	// The first page is enough: the newest 50 cover any realistic gap between two runs.
 	u := fmt.Sprintf("%s/repos/%s/releases?per_page=50", cfg.APIURL, cfg.Repo)
-	// A 304 ends the whole run with no state: with a box on it would skip the issues list, so both are read in full.
-	r, err := f.get(ctx, u, h, !items)
+	// A 304 ends the whole run with no state: with a box on it would skip the other lists, so all are read in full.
+	r, err := f.get(ctx, u, h, !boxed)
 	if err != nil {
 		return ReleaseState{}, err
 	}
 	s, err := normalizeGitHubReleases(r.body, cfg.IncludePrereleases)
 	f.Notes = s.Notes
-	if err != nil || !items {
+	if err != nil || !boxed {
 		return s, err
 	}
-	// The list holds PRs too, so one call serves both boxes.
-	// ponytail: first page only; past 50 items opened between two runs, the oldest of them are never reported.
-	u = fmt.Sprintf("%s/repos/%s/issues?state=all&sort=created&direction=desc&per_page=50", cfg.APIURL, cfg.Repo)
-	if r, err = f.get(ctx, u, h, false); err != nil {
-		return ReleaseState{}, err
+	opened := map[int]Event{}
+	if items {
+		// The list holds PRs too, so one call serves both boxes.
+		// ponytail: first page only; past 50 items opened between two runs, the oldest of them are never reported.
+		u = fmt.Sprintf("%s/repos/%s/issues?state=all&sort=created&direction=desc&per_page=50", cfg.APIURL, cfg.Repo)
+		if r, err = f.get(ctx, u, h, false); err != nil {
+			return ReleaseState{}, err
+		}
+		issues, prs, listed, err := normalizeGitHubItems(r.body, cfg.NewIssues, cfg.NewPRs)
+		if err != nil {
+			return ReleaseState{}, err
+		}
+		if cfg.NewIssues {
+			s.Issues = &issues
+		}
+		if cfg.NewPRs {
+			s.PRs = &prs
+		}
+		maps.Copy(opened, listed)
 	}
-	issues, prs, opened, err := normalizeGitHubItems(r.body, cfg.NewIssues, cfg.NewPRs)
-	if err != nil {
-		return ReleaseState{}, err
-	}
-	if cfg.NewIssues {
-		s.Issues = &issues
-	}
-	if cfg.NewPRs {
-		s.PRs = &prs
+	if cfg.NewDiscussions {
+		nums, listed, err := githubDiscussions(ctx, f, cfg, h)
+		if err != nil {
+			return ReleaseState{}, err
+		}
+		s.Discussions = &nums
+		maps.Copy(opened, listed)
 	}
 	f.Items = opened
 	return s, nil
+}
+
+// minDiscussions is the window size below which the page before the last is read too.
+const minDiscussions = 50
+
+// githubDiscussions reads the newest discussions. The list is oldest first and ignores sort, so a per_page=1 probe
+// gives the total as its last page number; the window is the last per_page=100 page, and the page before it when
+// the last holds fewer than minDiscussions. The probe item stays out: page 1's old numbers would drag the floor down.
+// ponytail: a window of 50 at least; past that many opened between two runs, the oldest may go unreported.
+func githubDiscussions(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, h http.Header) ([]int, map[int]Event, error) {
+	base := fmt.Sprintf("%s/repos/%s/discussions", cfg.APIURL, cfg.Repo)
+	get := func(u string) (*response, error) {
+		r, err := f.get(ctx, u, h, false)
+		if he := (*HTTPError)(nil); errors.As(err, &he) && he.Status == http.StatusGone {
+			return nil, fmt.Errorf("discussions are disabled on %s: uncheck \"new discussions\" (%w)", cfg.Repo, err)
+		}
+		return r, err
+	}
+	r, err := get(base + "?per_page=1")
+	if err != nil {
+		return nil, nil, err
+	}
+	pages := [][]byte{r.body}
+	if link := r.header.Get("Link"); link != "" {
+		total := lastPageNumber(link)
+		if total < 1 {
+			return nil, nil, fmt.Errorf("discussions list: no last page number in Link %q", snippet([]byte(link)))
+		}
+		// Built from the config, not the Link: the probe only tells the count.
+		page := func(n int) ([]byte, error) {
+			r, err := get(fmt.Sprintf("%s?per_page=100&page=%d", base, n))
+			if err != nil {
+				return nil, err
+			}
+			return r.body, nil
+		}
+		last := (total + 99) / 100
+		b, err := page(last)
+		if err != nil {
+			return nil, nil, err
+		}
+		pages = [][]byte{b}
+		var short []json.RawMessage
+		if err := json.Unmarshal(b, &short); err != nil {
+			return nil, nil, fmt.Errorf("decode discussions: %w", err)
+		}
+		if len(short) < minDiscussions && last > 1 {
+			if b, err = page(last - 1); err != nil {
+				return nil, nil, err
+			}
+			pages = [][]byte{b, pages[0]}
+		}
+	}
+	nums, opened := []int{}, map[int]Event{}
+	for _, b := range pages {
+		if err := normalizeGitHubDiscussions(b, &nums, opened); err != nil {
+			return nil, nil, err
+		}
+	}
+	// Newest first like the issues list, and the same pages always store the same state.
+	slices.Sort(nums)
+	slices.Reverse(nums)
+	return slices.Compact(nums), opened, nil
+}
+
+// lastPageNumber is the page query parameter of a Link header's rel="last" URL, 0 when absent or unreadable.
+func lastPageNumber(link string) int {
+	m := lastRe.FindStringSubmatch(link)
+	if m == nil {
+		return 0
+	}
+	u, err := url.Parse(m[1])
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(u.Query().Get("page"))
+	return n
+}
+
+// normalizeGitHubDiscussions appends a discussions page's numbers to nums and its opened events to opened, by number.
+func normalizeGitHubDiscussions(body []byte, nums *[]int, opened map[int]Event) error {
+	var raw []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Category struct {
+			Name string `json:"name"`
+		} `json:"category"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+		HTMLURL   string     `json:"html_url"`
+		CreatedAt *time.Time `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("decode discussions: %w", err)
+	}
+	for _, d := range raw {
+		if d.Number <= 0 {
+			continue
+		}
+		*nums = append(*nums, d.Number)
+		labels := []string{}
+		for _, l := range d.Labels {
+			labels = append(labels, l.Name)
+		}
+		opened[d.Number] = Event{Type: "discussion.opened", Subject: strconv.Itoa(d.Number), OccurredAt: d.CreatedAt, Payload: map[string]any{
+			"number": d.Number, "title": d.Title, "author": d.User.Login, "category": d.Category.Name, "labels": labels,
+			"url": d.HTMLURL, "created_at": d.CreatedAt,
+		}}
+	}
+	return nil
 }
 
 // normalizeGitHubItems reads an issues list: the numbers of its issues and of its PRs, never nil, and the
@@ -266,12 +402,40 @@ func diffReleases(old, cur ReleaseState) []Event {
 			events = append(events, Event{Type: "release.promoted", Subject: r.Tag, OccurredAt: r.PublishedAt, Payload: payload})
 		}
 	}
-	added := append(newNumbers(old.Issues, cur.Issues), newNumbers(old.PRs, cur.PRs)...)
-	slices.Sort(added)
-	for _, n := range added {
-		events = append(events, Event{Type: itemListed, Subject: strconv.Itoa(n)})
+	var listed []Event
+	for _, n := range append(newNumbers(old.Issues, cur.Issues), newNumbers(old.PRs, cur.PRs)...) {
+		listed = append(listed, Event{Type: itemListed, Subject: strconv.Itoa(n)})
 	}
-	return events
+	for _, n := range newDiscussions(old.Discussions, cur.Discussions) {
+		listed = append(listed, Event{Type: discussionListed, Subject: strconv.Itoa(n)})
+	}
+	// Issues, PRs and discussions share one numbering: number order is opening order.
+	slices.SortFunc(listed, func(a, b Event) int {
+		x, _ := strconv.Atoi(a.Subject)
+		y, _ := strconv.Atoi(b.Subject)
+		return x - y
+	})
+	return append(events, listed...)
+}
+
+// newDiscussions lists the numbers of cur above old's highest, oldest first; no list in old is a baseline.
+// A converted issue keeps its lower number anywhere in the list, so only a number past every stored one is new.
+func newDiscussions(old, cur *[]int) []int {
+	if old == nil || cur == nil {
+		return nil
+	}
+	floor := 0
+	if len(*old) > 0 {
+		floor = slices.Max(*old)
+	}
+	var out []int
+	for _, n := range *cur {
+		if n > floor {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // newNumbers lists the numbers of cur missing from old, oldest first. No list in old is a baseline (a box just

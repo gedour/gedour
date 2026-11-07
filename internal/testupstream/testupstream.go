@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -88,6 +89,7 @@ func New() *Server {
 	s := &Server{set: "a", hits: map[string]int{}, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/comments", s.static("github_pr", "review_comments"))
@@ -253,6 +255,26 @@ func (s *Server) static(kind, part string) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
 	}
+}
+
+// discussions pages the fixture list like GitHub: per_page and page, with a Link rel="last" past one page.
+func (s *Server) discussions(w http.ResponseWriter, r *http.Request) {
+	var all []json.RawMessage
+	if err := json.Unmarshal(Fixture("github_discussions", s.current()), &all); err != nil {
+		panic(err)
+	}
+	per, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if per < 1 {
+		per = 30
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	page = max(page, 1)
+	if last := (len(all) + per - 1) / per; last > 1 {
+		w.Header().Set("Link", fmt.Sprintf(`<http://%s%s?per_page=%d&page=%d>; rel="last"`, r.Host, r.URL.Path, per, last))
+	}
+	lo := min((page-1)*per, len(all))
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(append([]json.RawMessage{}, all[lo:min(lo+per, len(all))]...))
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {

@@ -141,6 +141,52 @@ func TestRepoItemsCallFails(t *testing.T) {
 	run(2, true, "error", 1)
 }
 
+// 011-AC2, 011-AC3, 011-AC6: through the worker, the discussions box alone: the baseline is quiet, fixture B's new
+// discussion is one event, and a 410 on the list fails the run with no state and no event, naming the box.
+func TestRepoDiscussionsThroughWorker(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	var gone atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gone.Load() && strings.HasSuffix(r.URL.Path, "/discussions") {
+			http.Error(w, `{"message":"Discussions are disabled for this repo"}`, http.StatusGone)
+			return
+		}
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	id := e.addWatch(t, "github_repo", fmt.Sprintf(`{"repo":"cli/cli","api_url":%q,"new_discussions":true}`, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	run := func(k int, set string, fail bool) {
+		t.Helper()
+		up.SetFixture(set)
+		gone.Store(fail)
+		e.clock.set(t0.Add(time.Duration(k) * time.Hour))
+		tick(t, w)
+		r := e.row(t, id)
+		if fail != (*r.status == "error") || (fail && (r.lastErr == nil || !strings.Contains(*r.lastErr, `uncheck "new discussions"`))) {
+			t.Fatalf("run %d: %s %v", k, *r.status, r.lastErr)
+		}
+	}
+	run(0, "a", false)
+	if ev := e.events(t, id); len(ev) != 0 {
+		t.Fatalf("baseline: %v", ev)
+	}
+	run(1, "b", true)
+	if n, ev := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id), e.events(t, id); n != 1 || len(ev) != 0 {
+		t.Fatalf("410: %d states, events %v", n, ev)
+	}
+	run(2, "b", false)
+	want := "release.published v2.104.0-rc.1,release.published v2.103.3,release.published v2.105.0,discussion.opened 9515"
+	if got := strings.Join(e.events(t, id), ","); got != want {
+		t.Fatalf("events\n got  %s\n want %s", got, want)
+	}
+	var category string
+	if err := e.pool.QueryRow(context.Background(), `SELECT payload->>'category' FROM events WHERE type = 'discussion.opened' AND watch_id = $1`, id).Scan(&category); err != nil || category != "Ideas" {
+		t.Fatalf("category %q %v", category, err)
+	}
+}
+
 // pageUpstream serves releases from fixture A and the issues list from page; a nil page is fixture A's.
 type pageUpstream struct {
 	up   *testupstream.Server

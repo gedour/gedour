@@ -185,6 +185,12 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	if time.Until(w.NextRunAt) > time.Minute {
 		t.Fatalf("second box checked: next=%v", w.NextRunAt)
 	}
+	// 011-AC3: checking new_discussions makes the watch due too, and keeps the states.
+	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/tools", "new_issues": true, "new_prs": true, "new_discussions": true}}, http.StatusOK, &w)
+	if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 1 || time.Until(w.NextRunAt) > time.Minute {
+		t.Fatalf("discussions box checked: states=%d next=%v", s, w.NextRunAt)
+	}
 	// Unchecking changes nothing on the schedule.
 	a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
 	a.exec(t, `INSERT INTO http_cache (watch_id, url, etag) VALUES ($1, 'https://api.github.com/x', '"e"')`, w.ID)

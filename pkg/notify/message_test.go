@@ -37,6 +37,9 @@ func TestFormat(t *testing.T) {
 			"Issue #12 opened by alice", "Crash on start", "https://github.com/o/r/issues/12"},
 		{ev("pr.opened", map[string]any{"number": 12.0, "author": "alice", "title": "Fix the crash", "labels": []any{}, "url": "https://github.com/o/r/pull/12"}),
 			"PR #12 opened by alice", "Fix the crash", "https://github.com/o/r/pull/12"},
+		// 011-AC16: discussion.opened, mirrored in web/src/lib/events.ts.
+		{ev("discussion.opened", map[string]any{"number": 12.0, "author": "alice", "title": "Ideas welcome", "category": "Ideas", "labels": []any{}, "url": "https://github.com/o/r/discussions/12"}),
+			"Discussion #12 opened by alice", "Ideas welcome", "https://github.com/o/r/discussions/12"},
 		// 008-AC12: the github_issue events, mirrored in web/src/lib/events.ts.
 		{ev("issue.state_changed", map[string]any{"number": 12.0, "title": "T", "from": "open", "to": "closed", "state_reason": "not_planned"}), "Issue #12 closed (not planned)", "T", ""},
 		{ev("issue.state_changed", map[string]any{"number": 12.0, "from": "open", "to": "closed", "state_reason": "completed"}), "Issue #12 closed (completed)", "", ""},

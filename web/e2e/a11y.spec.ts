@@ -91,7 +91,9 @@ for (const theme of ["light", "dark"] as const) {
           await expect(
             page.getByRole("checkbox", { name: "Report new pull requests" }),
           ).toBeVisible();
-          await expect(page.getByText(/two requests/)).toBeVisible();
+          await expect(page.getByText(/1 more request:/)).toBeVisible();
+          // 011-AC17: and the discussions box with its own hint.
+          await expect(page.getByText(/2 to 3 more requests/)).toBeVisible();
         }
         found[path] = await violations(page);
       }

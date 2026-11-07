@@ -288,9 +288,9 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   off `interval × 2^(failures-1)`, capped at 8 intervals. Rate limits (GitHub `X-RateLimit-*`, GitLab
   `RateLimit-Reset`, `Retry-After`) push the next run to the reset time, at most 1 h away, without
   counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged. A GitHub
-  repository watch with a new-items box on reads both of its lists in full: a 304 on one would skip the other.
+  repository watch with a new-items box on reads all its lists in full: a 304 on one would skip the others.
 - The first run stores a baseline and emits nothing. Each later change becomes typed events
-  (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `pr.state_changed`, `pr.draft_changed`,
+  (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `discussion.opened`, `pr.state_changed`, `pr.draft_changed`,
   `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `issue.state_changed`, `issue.labels_changed`,
   `issue.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
   `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
@@ -298,8 +298,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
   comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
 - A GitHub repository watch reports releases. Its boxes `new_issues` and `new_prs` (config, default `false`) add
-  `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 2 requests
-  instead of 1 (the 50 newest issues and PRs, one list for both boxes). A run reports at most those 50: more than
+  `issue.opened` and `pr.opened`, one per item opened after the box is checked; each run then makes 1 more
+  request (the 50 newest issues and PRs, one list for both boxes). A run reports at most those 50: more than
   that opened between two runs are not reported. Payload: `number`, `title`, `author`,
   `labels` (names, `[]` without any), `url`, `created_at`. A box is not part of the target: toggling one keeps
   the release states, but it is a config change, so on a watch with a credential only its owner may toggle it,
@@ -308,6 +308,13 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   and an item numbered at or below the oldest one stored for its kind is not new. Checking a box makes the watch
   due at once; items opened before that first run succeeds are in its baseline and are not reported. A paused
   watch takes the baseline when it resumes. To follow an item once opened, add a `github_pr` or `github_issue` watch.
+- The box `new_discussions` (config, default `false`) adds `discussion.opened`, one per discussion opened after the
+  box is checked, with the same baseline and due-now rules (list `discussions` in the state); only a number above every stored one is new, so an issue converted to a discussion, which keeps its lower number, is not reported. Each run then
+  makes 2 to 3 more requests (1 with at most one discussion): a `per_page=1` probe whose `Link` last page number
+  is the total, then the last 100-item page of the list (oldest first) and the page before it when the last holds
+  fewer than 50. Only those pages are the window; a `Link` without a readable last page number fails the run. Payload: `number`, `title`,
+  `author`, `category`, `labels` (names), `url`, `created_at`. A repository with discussions disabled (HTTP 410)
+  fails the run with an error naming the box. These REST endpoints are undocumented by GitHub.
 - A `github_issue` watch (config `repo`, `number`, `api_url`, like `github_pr`) follows one issue: 2 GitHub
   requests per run (3 past 100 comments). Events, each with `number`, `title`, `url`: `issue.state_changed`
   (`from`, `to`: `open` or `closed`, plus `state_reason` as GitHub reports it, e.g. `completed`, `not_planned`,
@@ -347,7 +354,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `event.payload.body matches "(?i)breaking.change"`. On an event without them, filters read `cves` as `[]` and
   `body` as `""`; the stored and delivered payload stays as it is. So `len(event.payload.cves) == 0` and
   `event.payload.body == ""` also match non-release events: a rule meant for releases adds a check on
-  `event.type` or targets a watch. New issues and PRs carry their label names in `payload.labels`:
+  `event.type` or targets a watch. New issues, PRs and discussions carry their label names in `payload.labels`
+  (discussions add `payload.category`):
   `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule of the watch's

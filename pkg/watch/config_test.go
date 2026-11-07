@@ -54,6 +54,12 @@ func TestConfigValidation(t *testing.T) {
 			`{"api_url":"https://api.github.com","include_prereleases":false,"new_issues":true,"repo":"a/b"}`, nil},
 		{"github repo both boxes", KindGitHubRepo, `{"repo":"a/b","new_issues":true,"new_prs":true}`,
 			`{"api_url":"https://api.github.com","include_prereleases":false,"new_issues":true,"new_prs":true,"repo":"a/b"}`, nil},
+		// 011-AC1: new_discussions off is left out like the 008 boxes.
+		{"github repo discussions box", KindGitHubRepo, `{"repo":"a/b","new_discussions":true}`,
+			`{"api_url":"https://api.github.com","include_prereleases":false,"new_discussions":true,"repo":"a/b"}`, nil},
+		{"github repo discussions box off", KindGitHubRepo, `{"repo":"a/b","new_discussions":false}`,
+			`{"api_url":"https://api.github.com","include_prereleases":false,"repo":"a/b"}`, nil},
+		{"github repo discussions box not bool", KindGitHubRepo, `{"repo":"a/b","new_discussions":"yes"}`, "", []string{"body.config.new_discussions"}},
 		{"github repo boxes not bool", KindGitHubRepo, `{"repo":"a/b","new_prs":"yes"}`, "", []string{"body.config.new_prs"}},
 		{"github repo box number", KindGitHubRepo, `{"repo":"a/b","new_issues":1}`, "", []string{"body.config.new_issues"}},
 		{"github pr has no boxes", KindGitHubPR, `{"repo":"a/b","number":1,"new_prs":true}`, "", []string{"body.config.new_prs"}},

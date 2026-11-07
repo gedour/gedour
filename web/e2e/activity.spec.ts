@@ -573,9 +573,9 @@ test("rules on release notes route the right releases", async ({ page }) => {
   for (const { id } of watches) await call("DELETE", `/api/v1/watches/${id}`);
 });
 
-// 008-AC5, 008-AC6, 008-AC14: both boxes on, the baseline is quiet; fixture B's new issue and new PR show in the
-// timeline, and a rule on the labels sends the issue, not the PR, to the inbox.
-test("a repository watch reports new issues and PRs", async ({ page }) => {
+// 008-AC5, 008-AC6, 008-AC14, 011-AC2, 011-AC3: all boxes on, the baseline is quiet; fixture B's new issue, PR and
+// discussion show in the timeline, a rule on the labels sends the issue, not the PR, and a rule on the type the discussion.
+test("a repository watch reports new issues, PRs and discussions", async ({ page }) => {
   const t = tag();
   await page.goto("/inbox");
   await setFixture(page, "a");
@@ -590,6 +590,7 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
       api_url: UPSTREAM,
       new_issues: true,
       new_prs: true,
+      new_discussions: true,
     },
   });
   expect(res.status()).toBe(201);
@@ -606,6 +607,13 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
   });
   expect(rule.status()).toBe(201);
   const ruleId = ((await rule.json()) as { id: string }).id;
+  const discRule = await call("POST", "/api/v1/rules", {
+    name: `Discussions ${t}`,
+    watch_id: id,
+    filter: 'event.type == "discussion.opened"',
+  });
+  expect(discRule.status()).toBe(201);
+  const discRuleId = ((await discRule.json()) as { id: string }).id;
 
   await setFixture(page, "b");
   await page.goto(`/watches/${id}`);
@@ -616,6 +624,7 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
     .click();
   await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
     [
+      /Discussion #9515 opened by alice-q/,
       /PR #9514 opened by dependabot\[bot\]/,
       /Issue #9513 opened by alice-q/,
       /v2\.105\.0 published/,
@@ -633,8 +642,11 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
       }[]
     )
       .filter((i) => i.watch.id === id)
-      .map((i) => `${i.event.type} ${i.event.payload.number}`);
-  await expect.poll(routed, { timeout: 15_000 }).toEqual(["issue.opened 9513"]);
+      .map((i) => `${i.event.type} ${i.event.payload.number}`)
+      .sort();
+  await expect
+    .poll(routed, { timeout: 15_000 })
+    .toEqual(["discussion.opened 9515", "issue.opened 9513"]);
   await page.goto("/inbox?state=all");
   await page.getByRole("button", { name: /Issue #9513 opened by alice-q/ }).click();
   const panel = page.getByRole("complementary", { name: "Issue #9513 opened by alice-q" });
@@ -643,6 +655,7 @@ test("a repository watch reports new issues and PRs", async ({ page }) => {
   await setFixture(page, "a");
   // Alice's inbox is back as it was for a retry or a rerun.
   await call("DELETE", `/api/v1/rules/${ruleId}`);
+  await call("DELETE", `/api/v1/rules/${discRuleId}`);
   await call("DELETE", `/api/v1/watches/${id}`);
 });
 

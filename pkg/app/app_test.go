@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,10 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/gedour/gedour/pkg/config"
+	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/netguard"
+	"github.com/gedour/gedour/pkg/notify/webpush"
+	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/server"
 	"github.com/gedour/gedour/pkg/testpg"
 )
@@ -121,6 +125,36 @@ func TestRunServesAndShutsDown(t *testing.T) {
 	}
 }
 
+// A VAPID row sealed under another encryption key leaves Web Push off; the process still starts.
+func TestRunWithUnreadableVAPIDKey(t *testing.T) {
+	cfg := cfgFor(t, config.RoleWorker, testpg.NewDB(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := db.Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	foreign, _ := secret.New("CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=")
+	if _, err := webpush.LoadOrCreate(ctx, pool, foreign); err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg, zap.New(core), server.BuildInfo{}, fstest.MapFS{}) }()
+	waitFor(t, "http://"+cfg.MetricsAddr+"/healthz", http.StatusOK)
+	if l := logs.FilterMessage("vapid_key_unreadable").All(); len(l) != 1 || l[0].Level != zap.ErrorLevel {
+		t.Errorf("vapid_key_unreadable: %+v", l)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunWorkerOnly(t *testing.T) {
 	cfg := cfgFor(t, config.RoleWorker, testpg.NewDB(t))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -143,6 +177,18 @@ func TestNewSender(t *testing.T) {
 	s, err := newSender(cfg, guard, server.BuildInfo{Version: "v1"})
 	if err != nil || s.Mailer != nil || s.UserAgent != "gedour/v1" {
 		t.Fatalf("without SMTP: %+v %v", s, err)
+	}
+	for _, tt := range []struct{ role, public, sub string }{
+		{config.RoleWorker, "", vapidContact},
+		{config.RoleAll, "https://gedour.example,https://other.example", "https://gedour.example"},
+		{config.RoleAll, "http://localhost:8080", vapidContact},
+		{config.RoleAll, "HTTPS://Gedour.example", "HTTPS://Gedour.example"},
+	} {
+		c := config.Config{Role: tt.role, PublicURL: tt.public, AllowHTTPHosts: []string{"127.0.0.1"}}
+		ws, err := newSender(c, guard, server.BuildInfo{})
+		if err != nil || ws.VAPIDSubject != tt.sub || !slices.Equal(ws.HTTPHosts, c.AllowHTTPHosts) {
+			t.Errorf("public %q: subject %q, http hosts %v, %v", tt.public, ws.VAPIDSubject, ws.HTTPHosts, err)
+		}
 	}
 	cfg.SMTPAddr, cfg.SMTPFrom, cfg.SMTPTLS = "mail:25", "gedour <g@x.test>", "none"
 	if s, err = newSender(cfg, guard, server.BuildInfo{}); err != nil || s.Mailer == nil || s.Mailer.From.Address != "g@x.test" ||

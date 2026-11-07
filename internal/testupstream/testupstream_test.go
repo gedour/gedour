@@ -1,6 +1,7 @@
 package testupstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,6 +11,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gedour/gedour/pkg/notify/webpush"
 )
 
 func post(t *testing.T, url string) int {
@@ -101,6 +105,60 @@ func TestTalk(t *testing.T) {
 	}
 	got := up.Received()
 	if got[0].Endpoint != "talk-room" || got[1].Endpoint != "talk-room-rejected" || got[len(got)-1].Endpoint != "talk-force429x-rejected" {
+		t.Fatalf("received: %+v", got)
+	}
+}
+
+// 010-AC6: the fake push service records a payload it decrypts under a VAPID token that verifies, and
+// refuses the rest like a push service.
+func TestPush(t *testing.T) {
+	up := New()
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	k, _ := webpush.GenerateKey()
+	other, _ := webpush.GenerateKey()
+	auth := func(key *webpush.Key, endpoint string) string {
+		h, err := key.Authorization(endpoint, "", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	body, err := webpush.Encrypt([]byte("hello"), PushSubscription(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, servedKey, _ := webpush.ParseAuthorization(auth(k, srv.URL))
+	otherToken, _, _ := webpush.ParseAuthorization(auth(other, srv.URL))
+	for _, tt := range []struct {
+		name, id, authz, encoding string
+		body                      []byte
+		code                      int
+	}{
+		{"valid", "dev", auth(k, srv.URL), "aes128gcm", body, 201},
+		{"gone", "gone-1", auth(k, srv.URL), "aes128gcm", body, 410},
+		{"fail", "fail-1", auth(k, srv.URL), "aes128gcm", body, 500},
+		{"other origin", "dev", auth(k, "https://elsewhere.example"), "aes128gcm", body, 403},
+		{"token of another key", "dev", "vapid t=" + otherToken + ", k=" + servedKey, "aes128gcm", body, 403},
+		{"no vapid", "dev", "Bearer x", "aes128gcm", body, 403},
+		{"other encoding", "dev", auth(k, srv.URL), "aesgcm", body, 400},
+		{"not decryptable", "dev", auth(k, srv.URL), "aes128gcm", []byte("garbage"), 400},
+	} {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL+"/push/"+tt.id, bytes.NewReader(tt.body))
+		req.Header.Set("Authorization", tt.authz)
+		req.Header.Set("Content-Encoding", tt.encoding)
+		req.Header.Set("TTL", "60")
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // test server
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != tt.code {
+			t.Errorf("%s: %d, want %d", tt.name, resp.StatusCode, tt.code)
+		}
+	}
+	got := up.Received()
+	if got[0].Endpoint != "push-dev" || got[0].Body != "hello" || got[1].Endpoint != "push-gone-1-rejected" || got[len(got)-1].Body != "" {
 		t.Fatalf("received: %+v", got)
 	}
 }

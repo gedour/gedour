@@ -127,9 +127,7 @@ describe("WatchesPage", () => {
     expect(screen.queryByRole("group", { name: "Ownership" })).not.toBeInTheDocument();
     await waitFor(() => {
       const q = lastCall(fn, "/api/v1/watches")?.url.searchParams;
-      expect(q?.get("q")).toBe("go");
-      expect(q?.get("kind")).toBe("github_pr");
-      expect(q?.has("shared")).toBe(false);
+      expect(Object.fromEntries(q ?? [])).toEqual({ q: "go", kind: "github_pr" });
     });
     expect(await screen.findByText("No watches match these filters")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
@@ -180,7 +178,8 @@ describe("WatchesPage", () => {
     let items = [
       watch({ id: "a", name: "A" }),
       watch({ id: "b", name: "B" }),
-      watch({ id: "c", name: "C" }),
+      // 009-AC10: a paused watch is selectable too.
+      watch({ id: "c", name: "C", paused: true }),
     ];
     const del = (id: string) => () => {
       items = items.filter((w) => w.id !== id);
@@ -237,10 +236,49 @@ describe("WatchesPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 watch?" });
-    expect(dialog).toHaveTextContent(/its events and every rule on it/);
-    expect(dialog).toHaveTextContent(/Every inbox item and delivery for those events/);
+    expect(dialog).toHaveTextContent(
+      "Deleting a watch also removes its events and every rule on it. Every inbox item and delivery for those events goes too. This cannot be undone.",
+    );
     // 009-AC10: the delete dialog names no share.
     expect(dialog).not.toHaveTextContent(/shar/i);
+  });
+
+  it("keeps watches hidden by a filter selected but out of the count and the delete", async () => {
+    const fn = mockApi({
+      "/api/v1/watches": (url: URL) =>
+        Response.json({
+          items: url.searchParams.get("q")
+            ? [watch({ id: "b", name: "B" })]
+            : [watch({ id: "a", name: "A" }), watch({ id: "b", name: "B" })],
+        }),
+      "/api/v1/watches/b": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/watches");
+    await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+    const search = screen.getByRole("searchbox", { name: "Search" });
+    const hideA = async () => {
+      await userEvent.type(search, "b");
+      await waitFor(() => expect(screen.queryByText("A")).not.toBeInTheDocument());
+    };
+    await hideA();
+    await userEvent.clear(search);
+    expect(await screen.findByRole("button", { name: "Select: A" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await hideA();
+    await userEvent.click(screen.getByRole("button", { name: "Select: B" }));
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    expect(bar).toHaveTextContent("1 selected");
+    expect(within(bar).getByRole("button", { name: "Select none" })).toBeInTheDocument();
+    await userEvent.click(within(bar).getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Delete 1 watch?" })).getByRole("button", {
+        name: "Delete",
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent("Deleted 1 watch");
+    expect(lastCall(fn, "/api/v1/watches/a", "DELETE")).toBeUndefined();
   });
 
   it("holds the dialog open while the delete runs", async () => {

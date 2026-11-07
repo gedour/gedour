@@ -59,6 +59,14 @@ func TestShareDropMigration(t *testing.T) {
 		`INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT e.id, r.id, c.id FROM events e, rules r, channels c
 			WHERE r.name = 'b-all' AND c.name = 'b-all-ch'`,
 		`INSERT INTO inbox_items (user_id, event_id) SELECT u.id, e.id FROM users u, events e WHERE u.oidc_sub IN ('a', 'b')`,
+		// Last, so the cross joins above miss it: carol, a sharee of w, gets an event of her own watch.
+		`INSERT INTO watches (owner_id, name, kind, config) SELECT id, 'cw', 'oci_tags', '{}' FROM users WHERE oidc_sub = 'c'`,
+		`INSERT INTO events (watch_id, type, payload, dedup_key) SELECT id, 'tag.created', '{}', 'k' FROM watches WHERE name = 'cw'`,
+		`INSERT INTO channels (owner_id, name, type) SELECT id, 'c-own-ch', 'telegram' FROM users WHERE oidc_sub = 'c'`,
+		`INSERT INTO rules (owner_id, name, watch_id) SELECT owner_id, 'c-own', id FROM watches WHERE name = 'cw'`,
+		`INSERT INTO deliveries (event_id, rule_id, channel_id) SELECT e.id, r.id, c.id FROM rules r JOIN events e ON e.watch_id = r.watch_id, channels c
+			WHERE r.name = 'c-own' AND c.name = 'c-own-ch'`,
+		`INSERT INTO inbox_items (user_id, event_id) SELECT w.owner_id, e.id FROM watches w JOIN events e ON e.watch_id = w.id WHERE w.name = 'cw'`,
 	} {
 		if _, err := pool.Exec(ctx, sql); err != nil {
 			t.Fatalf("%s: %v", sql, err)
@@ -80,11 +88,14 @@ func TestShareDropMigration(t *testing.T) {
 		// 009-AC1: the rest stays.
 		{"bob's all-watches rule", `SELECT count(*) FROM rules WHERE name = 'b-all' AND watch_id IS NULL`, 1},
 		{"watch w", `SELECT count(*) FROM watches WHERE name = 'w'`, 1},
-		{"event", `SELECT count(*) FROM events`, 1},
+		{"events", `SELECT count(*) FROM events`, 2},
 		{"alice's rule", `SELECT count(*) FROM rules WHERE name = 'a-pinned'`, 1},
 		{"alice's rule channel", `SELECT count(*) FROM rule_channels rc JOIN channels c ON c.id = rc.channel_id WHERE c.name = 'a-ch'`, 1},
 		{"alice's delivery", `SELECT count(*) FROM deliveries d JOIN channels c ON c.id = d.channel_id WHERE c.name = 'a-ch'`, 1},
 		{"alice's inbox item", `SELECT count(*) FROM inbox_items i JOIN users u ON u.id = i.user_id WHERE u.oidc_sub = 'a'`, 1},
+		// 009-AC1: a sharee loses only what came through the shared watch, not what her own watch brings.
+		{"carol's own delivery", `SELECT count(*) FROM deliveries d JOIN channels c ON c.id = d.channel_id WHERE c.name = 'c-own-ch'`, 1},
+		{"carol's own inbox item", `SELECT count(*) FROM inbox_items i JOIN users u ON u.id = i.user_id WHERE u.oidc_sub = 'c'`, 1},
 		// 009-AC3: no share covers carol's or dave's rule.
 		{"carol's transfer leftover", `SELECT count(*) FROM rules WHERE name = 'c-leftover'`, 1},
 		{"dave's transfer leftover", `SELECT count(*) FROM rules WHERE name = 'd-leftover'`, 1},

@@ -104,7 +104,7 @@ export function AdminUsersPage({ item }: { item: NavItem }) {
         <h1 className="font-display text-3xl font-semibold tracking-tight">{item.label}</h1>
         <p className="max-w-prose text-muted">
           Every account, the oldest sign-in first. Disabling one signs it out at once and stops its
-          rules; its data and watches stay. Purging a disabled one deletes its data for good.
+          rules and watches; its data stays. Purging a disabled one deletes its data for good.
         </p>
       </div>
       {me.acting_as ? (
@@ -416,12 +416,15 @@ function ConfirmDialog({ user, onClose }: { user: AdminUser | null; onClose: () 
       {disable ? (
         <p className="text-sm text-muted">
           Signs the account out everywhere and refuses its sign-in. Its rules route nothing and
-          queued deliveries are not sent. Its data stays.
+          queued deliveries are not sent. Its watches stop collecting until it is enabled again. Its
+          data stays.
         </p>
       ) : (
         <p className="text-sm text-muted">
-          The account can sign in again and its rules route new changes. What was skipped while
-          disabled is not replayed.
+          The account can sign in again, its rules route new changes and its watches run again. Each
+          watch's next run reports what changed since its last run, as far as the forge still lists
+          it. Inbox items skipped while disabled are not replayed; the owner can retry dead
+          deliveries from the Channels page.
         </p>
       )}
       {error && (

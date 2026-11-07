@@ -136,7 +136,8 @@ describe("RuleFormPage", () => {
   it("tests the filter against recent events", async () => {
     const fn = mockApi({
       "/api/v1/watches": {
-        items: [watch(), watch({ id: "w2", name: "Postgres" })],
+        // 009-AC10: every watch of the caller is an option, a paused one too.
+        items: [watch(), watch({ id: "w2", name: "Postgres", paused: true })],
       },
       "/api/v1/rules/preview": {
         items: [

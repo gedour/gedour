@@ -105,15 +105,21 @@ func TestTransferWatch(t *testing.T) {
 	e.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, aliceOnW, ch)
 	aliceAll := e.ruleOf(t, alice, "all", nil)
 	carolOnW := e.ruleOf(t, carol, "carol on w", &w)
+	// Created after w but listed first, by name; carol's own watch stays out of alice's list.
+	plain := e.watchOf(t, alice, "a plain", nil)
+	e.watchOf(t, carol, "carol's", nil)
 
 	var listed struct{ Items []AdminWatch }
 	_, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+alice+"/watches", token, "", nil)
-	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Items) != 1 {
+	if err := json.Unmarshal(raw, &listed); err != nil || len(listed.Items) != 2 {
 		t.Fatalf("alice's watches: %v %+v", err, listed)
 	}
 	noShareKeys(t, raw)
-	if got := listed.Items[0]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" {
-		t.Fatalf("listed %+v", got)
+	if got := listed.Items[0]; got.ID != plain || got.CredentialName != nil {
+		t.Fatalf("listed first %+v", got)
+	}
+	if got := listed.Items[1]; got.ID != w || got.CredentialName == nil || *got.CredentialName != "gh" {
+		t.Fatalf("listed second %+v", got)
 	}
 
 	code, raw := e.transfer(t, token, csrf, w, bob)
@@ -190,6 +196,37 @@ func TestTransferWithoutCredential(t *testing.T) {
 	code, raw := e.transfer(t, token, csrf, w, bob)
 	if code != http.StatusOK || !strings.Contains(string(raw), `"credential_moved":false`) || !strings.Contains(string(raw), `"credential_id":null`) {
 		t.Fatalf("transfer: %d %s", code, raw)
+	}
+}
+
+// 009-AC12: a watch rescued from a disabled account does not jump the queue with the due time it went stale on;
+// a future one (a rate-limit hold) or a leased one stays.
+func TestTransferKeepsQueueOrder(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	alice, _, _ := e.signedIn(t, "alice", false)
+	bob, _, _ := e.signedIn(t, "bob", false)
+	// expired: a crashed worker's lease, past its end, holds nothing.
+	for name, due := range map[string]string{"stale": "2000-01-01", "held": "2999-01-01", "leased": "2000-01-01", "expired": "2000-01-01"} {
+		w := e.watchOf(t, alice, name, nil)
+		if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET next_run_at = $2,
+			leased_until = CASE name WHEN 'leased' THEN now() + interval '1 hour' WHEN 'expired' THEN now() - interval '1 hour' END WHERE id = $1`, w, due); err != nil {
+			t.Fatal(err)
+		}
+		if code, raw := e.transfer(t, token, csrf, w, bob); code != http.StatusOK {
+			t.Fatalf("transfer %s: %d %s", name, code, raw)
+		}
+	}
+	var stale, held, leased int
+	if err := e.pool.QueryRow(context.Background(), `SELECT
+		count(*) FILTER (WHERE name IN ('stale', 'expired') AND next_run_at BETWEEN now() - interval '1 minute' AND now()),
+		count(*) FILTER (WHERE name = 'held' AND next_run_at = '2999-01-01'),
+		count(*) FILTER (WHERE name = 'leased' AND next_run_at = '2000-01-01')
+		FROM watches WHERE owner_id = $1`, bob).Scan(&stale, &held, &leased); err != nil {
+		t.Fatal(err)
+	}
+	if stale != 2 || held != 1 || leased != 1 {
+		t.Fatalf("stale due times rescheduled: %d, future kept: %d, leased kept: %d; want 2, 1, 1", stale, held, leased)
 	}
 }
 

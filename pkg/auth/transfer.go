@@ -147,7 +147,7 @@ func (s *Service) transferWatch(ctx context.Context, in *transferInput) (*transf
 			}
 			res.CredentialMoved = true
 		}
-		if _, err := tx.Exec(ctx, `UPDATE watches SET owner_id = $2, updated_at = now() WHERE id = $1`, in.ID, to); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE watches SET owner_id = $2, updated_at = now(), next_run_at = `+staleDueToNow+` WHERE id = $1`, in.ID, to); err != nil {
 			return fmt.Errorf("update watch: %w", err)
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: actor, Action: "watch.transfer", TargetType: "watch", TargetID: in.ID,

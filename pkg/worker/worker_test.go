@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -981,19 +982,44 @@ func TestLeaseUsesDatabaseClock(t *testing.T) {
 	}
 }
 
-// 006-AC8: a disabled owner's watch keeps collecting.
-func TestDisabledOwnerKeepsCollecting(t *testing.T) {
+// 009-AC12: a disabled owner's due watch is neither claimed nor counted due; re-enabled, the next claim takes it.
+func TestDisabledOwnerStopsCollecting(t *testing.T) {
 	e := newEnv(t)
 	id := e.addWatch(t, "github_repo", `{}`, "1m")
-	if _, err := e.pool.Exec(context.Background(), `UPDATE users SET disabled_at = now() WHERE id = $1`, e.user); err != nil {
-		t.Fatal(err)
+	ctx := context.Background()
+	setDisabled := func(on bool) {
+		t.Helper()
+		if _, err := e.pool.Exec(ctx, `UPDATE users SET disabled_at = CASE WHEN $2 THEN now() END WHERE id = $1`, e.user, on); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f := newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
 		return json.RawMessage(`{}`), nil
 	})
-	tick(t, e.worker(t, e.pool, map[string]collect.Collector{"github_repo": f}))
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": f})
+	// Disabled throughout: only the watch's own owner may stop it.
+	if _, err := e.pool.Exec(ctx, `INSERT INTO users (oidc_sub, email, disabled_at) VALUES ('off', 'off@x', now())`); err != nil {
+		t.Fatal(err)
+	}
+	setDisabled(true)
+	// A sentinel: a gauge left at 0 by a failed query would pass for "not counted".
+	e.m.due.Set(-1)
+	w.updateDue(ctx)
+	if got := testutil.ToFloat64(e.m.due); got != 0 {
+		t.Fatalf("due gauge %v while the owner is disabled", got)
+	}
+	tick(t, w)
+	if f.total()[`{}`] != 0 {
+		t.Fatalf("disabled owner's watch ran: %v", f.total())
+	}
+	setDisabled(false)
+	w.updateDue(ctx)
+	if got := testutil.ToFloat64(e.m.due); got != 1 {
+		t.Fatalf("due gauge %v after enable", got)
+	}
+	tick(t, w)
 	if f.total()[`{}`] != 1 || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 1 {
-		t.Fatalf("runs %v", f.total())
+		t.Fatalf("runs after enable %v", f.total())
 	}
 }
 
@@ -1026,5 +1052,112 @@ func TestRecordStoreFailureRetryDropsStaleResult(t *testing.T) {
 	}
 	if <-recorded || retries() != 1 {
 		t.Fatalf("recorded true or retries %d != 1: the claim was gone on the retry", retries())
+	}
+}
+
+// 001-AC9: dispatch claims only for its free slots, the earliest due first, never a paused, leased or
+// future watch; the due gauge counts the same set.
+func TestClaimSelection(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := e.pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due := func(name string, at time.Duration) string {
+		id := e.addWatch(t, "github_repo", `{"n": "`+name+`"}`, "1m")
+		exec(`UPDATE watches SET next_run_at = $2 WHERE id = $1`, id, t0.Add(at))
+		return id
+	}
+	// Latest first, so the table order is not the due order.
+	due("late", -time.Minute)
+	due("early", -3*time.Minute)
+	due("mid", -2*time.Minute)
+	exec(`UPDATE watches SET paused = true WHERE id = $1`, due("paused", -4*time.Minute))
+	exec(`UPDATE watches SET leased_until = now() + interval '1 hour' WHERE id = $1`, due("leased", -4*time.Minute))
+	due("future", time.Minute)
+	f := newFake(func(_ context.Context, cfg string, _ *collect.Credential) (json.RawMessage, error) {
+		return json.RawMessage(cfg), nil
+	})
+	// Plans kept to a table-order scan (no due index, no hashed join): only the claim's ORDER BY yields the earliest.
+	u, err := url.Parse(e.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	for _, p := range []string{"enable_indexscan", "enable_bitmapscan", "enable_hashjoin", "enable_mergejoin"} {
+		q.Set(p, "off")
+	}
+	u.RawQuery = q.Encode()
+	w := e.worker(t, connect(t, u.String()), map[string]collect.Collector{"github_repo": f})
+	e.m.due.Set(-1)
+	w.updateDue(ctx)
+	if got := testutil.ToFloat64(e.m.due); got != 3 {
+		t.Fatalf("due gauge %v, want 3 (late, early, mid)", got)
+	}
+	sem := make(chan struct{}, 3)
+	sem <- struct{}{} // a run in flight: two slots free
+	var wg sync.WaitGroup
+	n, err := w.dispatch(ctx, ctx, sem, &wg)
+	wg.Wait()
+	runs := f.total()
+	if err != nil || n != 2 || len(runs) != 2 || runs[`{"n": "early"}`] != 1 || runs[`{"n": "mid"}`] != 1 {
+		t.Fatalf("dispatch %d, %v; runs %v; want early and mid", n, err, runs)
+	}
+}
+
+// 001-AC9: a watch another replica holds is skipped, not waited on.
+func TestClaimSkipsLockedWatch(t *testing.T) {
+	e := newEnv(t)
+	held := e.addWatch(t, "github_repo", `{"a": 1}`, "1m")
+	free := e.addWatch(t, "github_repo", `{"b": 1}`, "1m")
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, held); err != nil {
+		t.Fatal(err)
+	}
+	// Only bounds the failure: a claim that waits on the lock never returns before the rollback.
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	jobs, err := e.worker(t, e.pool, nil).claim(cctx, 2)
+	if err != nil || len(jobs) != 1 || jobs[0].id != free {
+		t.Fatalf("claim %+v, %v; want only %s", jobs, err, free)
+	}
+}
+
+// A claim that fails starts nothing and reports the failure to the poll loop, which logs it; the watch stays
+// unleased for the next poll.
+func TestClaimFailure(t *testing.T) {
+	e := newEnv(t)
+	id := e.addWatch(t, "github_repo", `{}`, "1m")
+	ctx := context.Background()
+	w := e.worker(t, e.pool, map[string]collect.Collector{"github_repo": newFake(func(context.Context, string, *collect.Credential) (json.RawMessage, error) {
+		t.Error("a failed claim started a run")
+		return nil, nil
+	})})
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	// The UPDATE fails once sent, so the error comes back while reading the rows, not from the query call.
+	if _, err := e.pool.Exec(ctx, `CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$;
+		CREATE TRIGGER refuse BEFORE UPDATE ON watches FOR EACH ROW EXECUTE FUNCTION refuse()`); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]context.Context{"no connection": cancelled, "refused update": ctx} {
+		sem := make(chan struct{}, 2)
+		var wg sync.WaitGroup
+		n, err := w.dispatch(c, ctx, sem, &wg)
+		wg.Wait()
+		if n != 0 || err == nil || !strings.Contains(err.Error(), "claim") || len(sem) != 0 {
+			t.Errorf("%s: dispatch %d, %v, %d slots taken; want the claim error and nothing started", name, n, err, len(sem))
+		}
+	}
+	if n := e.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND claim_token IS NULL AND leased_until IS NULL`, id); n != 1 {
+		t.Fatal("a failed claim left a lease")
 	}
 }

@@ -21,11 +21,28 @@ describe("WatchDetailPage", () => {
     expect(config).toHaveTextContent("Include pre-releasesNo");
     expect(config).toHaveTextContent("At 09:00 on weekdays");
     expect(await within(config).findByText("GitHub bot")).toBeInTheDocument();
+    expect(config).toHaveTextContent("GitHub bot••••cdef");
     // 009-AC10: no share section, badge or form.
     expect(screen.queryByRole("region", { name: "Sharing" })).not.toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "Share" })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/shar/i);
     expect(screen.getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/watches/w1/edit");
+  });
+
+  // 009-AC10: the owner is the only reader, so every control shows whatever the watch's state.
+  it("offers every control on a paused watch without a credential", async () => {
+    mockApi({ "/api/v1/watches/w1": watch({ paused: true }) });
+    renderApp("/watches/w1");
+    expect(await screen.findByRole("switch", { name: "Paused" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("link", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete watch" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    expect(screen.getByRole("region", { name: "Configuration" })).toHaveTextContent(
+      "CredentialNone",
+    );
   });
 
   // 001-AC4: pause and resume from the detail view.

@@ -193,6 +193,8 @@ test("another user's watch reads as not found", async ({ page, browser, baseURL 
     ["PATCH", path, { name: "x" }],
     ["DELETE", path],
     ["POST", `${path}/run`],
+    ["POST", `${path}/pause`],
+    ["POST", `${path}/resume`],
     ["GET", `${path}/states`],
     ["GET", `${path}/events`],
   ];

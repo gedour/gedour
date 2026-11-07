@@ -96,7 +96,14 @@ describe("AdminUsersPage", () => {
       "/api/v1/me": ADMIN,
       "/api/v1/admin/users": {
         items: [
-          account({ id: "n", email: "new@example.test", display_name: "", last_login_at: null }),
+          account({
+            id: "n",
+            email: "new@example.test",
+            display_name: "",
+            last_login_at: null,
+            // Distinct counts, so a column swap shows.
+            counts: { watches: 3, channels: 2, rules: 4, scripts: 1, credentials: 5 },
+          }),
           account(),
           account({ id: "d", email: "dee@example.test", display_name: "Dee", status: "disabled" }),
           account({ id: "p", email: "", display_name: "", status: "purged" }),
@@ -109,7 +116,7 @@ describe("AdminUsersPage", () => {
     await within(table).findByText("Bob");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(5);
-    expect(rows[0]).toHaveTextContent(/^new@example\.testNeverActive32411Act asDisable$/);
+    expect(rows[0]).toHaveTextContent(/^new@example\.testNeverActive32415Act asDisable$/);
     expect(rows[1]).toHaveTextContent("Bobbob@example.test");
     expect(within(rows[1] as HTMLElement).getByRole("time")).toHaveAttribute(
       "datetime",
@@ -268,8 +275,15 @@ describe("AdminUsersPage", () => {
     });
     renderApp("/admin/users", ADMIN);
     await userEvent.click(await screen.findByRole("button", { name: "Disable Bob" }));
+    // 009-AC12: the intro says disabling stops the account's watches too.
+    expect(screen.getByText(/^Every account/)).toHaveTextContent(
+      "Disabling one signs it out at once and stops its rules and watches; its data stays.",
+    );
     const dialog = screen.getByRole("dialog", { name: "Disable Bob?" });
-    expect(dialog).toHaveTextContent("Signs the account out everywhere");
+    // 009-AC12: a disabled account's watches do not collect.
+    expect(dialog).toHaveTextContent(
+      "Signs the account out everywhere and refuses its sign-in. Its rules route nothing and queued deliveries are not sent. Its watches stop collecting until it is enabled again. Its data stays.",
+    );
     // 009-AC10: the disable dialog names no share.
     expect(dialog).not.toHaveTextContent(/shar/i);
     await userEvent.click(within(dialog).getByRole("button", { name: "Disable" }));
@@ -278,6 +292,16 @@ describe("AdminUsersPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Enable Bob" }));
     const enable = screen.getByRole("dialog", { name: "Enable Bob?" });
+    // 009-AC12: re-enabled watches run again and report a diff against their last stored state, no replay.
+    expect(enable).toHaveTextContent(
+      "The account can sign in again, its rules route new changes and its watches run again.",
+    );
+    expect(enable).toHaveTextContent(
+      "Each watch's next run reports what changed since its last run, as far as the forge still lists it.",
+    );
+    expect(enable).toHaveTextContent(
+      "Inbox items skipped while disabled are not replayed; the owner can retry dead deliveries from the Channels page.",
+    );
     await userEvent.click(within(enable).getByRole("button", { name: "Enable" }));
     expect(await screen.findByRole("button", { name: "Disable Bob" })).toBeInTheDocument();
     expect(lastCall(fn, `/api/v1/admin/users/${bob.id}/enable`, "POST")).toBeDefined();
@@ -391,7 +415,9 @@ describe("AdminUsersPage", () => {
     expect(list).toHaveTextContent("Go releasesgithub_repo · credential gh");
     await userEvent.click(within(list).getByRole("button", { name: "Transfer Go releases" }));
     const d = dialog("Transfer Go releases?");
-    expect(d).toHaveTextContent("Its credential gh moves with it");
+    expect(d).toHaveTextContent(
+      "Its credential gh moves with it, unless another watch of Bob uses it.",
+    );
     expect(d).not.toHaveTextContent("rule");
     // 009-AC10: the transfer dialog names no share.
     expect(d).not.toHaveTextContent(/shar/i);
@@ -535,6 +561,7 @@ describe("AdminUsersPage", () => {
         .getAllByRole("listitem")
         .map((l) => l.textContent),
     ).toEqual(["Rule r of Bob"]);
+    expect(d).toHaveTextContent("Transfer a watch first to keep it for them.");
     // 009-AC10: the purge dialog names no share.
     expect(d).not.toHaveTextContent(/shar/i);
     await userEvent.click(within(d).getByRole("button", { name: "Purge" }));

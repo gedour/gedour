@@ -205,13 +205,14 @@ describe("WatchFormPage (new)", () => {
 });
 
 describe("WatchFormPage (edit)", () => {
+  // 009-AC10: no read-only branch: the config and the credential stay editable.
   it("edits name and config; the kind is locked", async () => {
     let saved = false;
     const fn = mockApi({
-      "/api/v1/credentials": { items: [] },
+      "/api/v1/credentials": { items: [credential()] },
       "/api/v1/watches/w1": (_: URL, init?: RequestInit) => {
         saved ||= init?.method === "PATCH";
-        return Response.json(saved ? watch({ name: "Renamed" }) : watch());
+        return Response.json(saved ? watch({ name: "Renamed" }) : watch({ credential_id: "c1" }));
       },
     });
     renderApp("/watches/w1/edit");
@@ -221,19 +222,23 @@ describe("WatchFormPage (edit)", () => {
     expect(screen.queryByLabelText(/Paste a URL/)).not.toBeInTheDocument();
     await userEvent.clear(name);
     await userEvent.type(name, "Renamed");
+    await screen.findByRole("option", { name: "GitHub bot (••••cdef)" });
+    expect(screen.getByLabelText("Credential (optional)")).toHaveValue("c1");
+    await userEvent.clear(screen.getByLabelText("Repository"));
+    await userEvent.type(screen.getByLabelText("Repository"), "golang/tools");
     await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("heading", { level: 1, name: "Renamed" })).toBeInTheDocument();
     expect(lastCall(fn, "/api/v1/watches/w1", "PATCH")?.body).toEqual({
       name: "Renamed",
       config: {
-        repo: "golang/go",
+        repo: "golang/tools",
         include_prereleases: false,
         new_issues: false,
         new_prs: false,
         api_url: "https://api.github.com",
       },
       schedule: "15m",
-      credential_id: "",
+      credential_id: "c1",
     });
   });
 

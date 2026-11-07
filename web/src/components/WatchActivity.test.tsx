@@ -77,7 +77,9 @@ describe("StatusCard", () => {
     const card = await screen.findByRole("region", { name: "Status" });
     expect(card).toHaveTextContent("Message");
     expect(card).toHaveTextContent("Next runPaused");
-    expect(within(card).getByRole("button", { name: "Run now" })).toBeDisabled();
+    const run = within(card).getByRole("button", { name: "Run now" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", "Resume the watch to run it");
   });
 
   // Run now: scheduling, then running until the watch's last run moves, then refreshed events.

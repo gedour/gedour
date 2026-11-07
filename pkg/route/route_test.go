@@ -511,6 +511,32 @@ func TestRetryDelay(t *testing.T) {
 	}
 }
 
+// A delivery claim that fails, before the query runs or on a row it updates, is an error, not an empty poll,
+// and leaves the delivery unclaimed.
+func TestDeliveryClaimFails(t *testing.T) {
+	e := newEnv(t)
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	e.rule(t, alice, nil, "", e.webhook(t, alice, "http://127.0.0.1:1/hook"))
+	e.event(t, w, "release.published", "v1")
+	routeAll(t, e.router())
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if n, err := e.deliverer(t).DeliverOnce(cancelled); n != 0 || err == nil {
+		t.Fatalf("cancelled claim: %d %v", n, err)
+	}
+	if _, err := e.pool.Exec(context.Background(), `CREATE FUNCTION refuse_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$;
+		CREATE TRIGGER refuse_claim BEFORE UPDATE ON deliveries FOR EACH ROW EXECUTE FUNCTION refuse_claim()`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.deliverer(t).DeliverOnce(context.Background()); n != 0 || err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("refused claim: %d %v", n, err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM deliveries WHERE claim_token IS NULL AND attempts = 0`); n != 1 {
+		t.Fatalf("unclaimed deliveries %d, want 1", n)
+	}
+}
+
 // The loops run until cancelled.
 func TestLoopsStop(t *testing.T) {
 	e := newEnv(t)

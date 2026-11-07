@@ -195,7 +195,14 @@ func TestDisableEnable(t *testing.T) {
 		t.Fatalf("bob sign-in: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	_, bob := e.me(t)
-	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'w', 'github_repo', '{}')`, bob.ID)
+	// Due times left stale by the disable; a paused watch and another owner's watch.
+	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config, paused, next_run_at) VALUES
+		($1, 'w', 'github_repo', '{}', false, '2000-01-01'), ($1, 'p', 'github_repo', '{}', true, '2000-01-01'),
+		($1, 'f', 'github_repo', '{}', false, '2999-01-01'), ($1, 'l', 'github_repo', '{}', false, '2000-01-01'), ($2, 'a', 'github_repo', '{}', false, '2000-01-01'),
+		($1, 'x', 'github_repo', '{}', false, '2000-01-01')`, bob.ID, admin)
+	e.exec(t, `UPDATE watches SET leased_until = now() + interval '1 hour' WHERE name = 'l'`)
+	// A crashed worker's lease, past its end: the worker treats the watch as free, so the enable must too.
+	e.exec(t, `UPDATE watches SET leased_until = now() - interval '1 hour' WHERE name = 'x'`)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, bob.ID)
 	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r', '')`, bob.ID)
 	// A second session of bob's, from another browser.
@@ -240,13 +247,26 @@ func TestDisableEnable(t *testing.T) {
 	}
 	post(bob.ID, "disable", http.StatusConflict)
 	post(bob.ID, "enable", http.StatusNoContent)
+	// 009-AC12: enabling moves a stale due time to now, not at the head of the queue; held or leased ones stay.
+	if n := e.count(t, `SELECT count(*) FROM watches WHERE owner_id = $1 AND name IN ('w', 'x') AND next_run_at BETWEEN now() - interval '1 minute' AND now()`, bob.ID); n != 2 {
+		t.Fatalf("%d of bob's unpaused watches, one with an expired lease, rescheduled to now; want 2", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM watches WHERE name IN ('p', 'a') AND next_run_at = '2000-01-01'`); n != 2 {
+		t.Fatalf("%d of the paused and other owner's watches kept their due time, want 2", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM watches WHERE name = 'f' AND next_run_at = '2999-01-01'`); n != 1 {
+		t.Fatal("bob's watch held to a future due time was pulled forward")
+	}
+	if n := e.count(t, `SELECT count(*) FROM watches WHERE name = 'l' AND next_run_at = '2000-01-01'`); n != 1 {
+		t.Fatal("bob's leased watch got a new due time, which its worker reads as a run-now")
+	}
 	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/" {
 		t.Fatalf("re-enabled sign-in: %d -> %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	if code, m := e.me(t); code != http.StatusOK || m.ID != bob.ID {
 		t.Fatalf("me after enable: %d %+v", code, m)
 	}
-	if after := countsOf(); after != before || after.Watches != 1 || after.Channels != 1 || after.Rules != 1 {
+	if after := countsOf(); after != before || after.Watches != 5 || after.Channels != 1 || after.Rules != 1 {
 		t.Fatalf("counts %+v before, %+v after", before, after)
 	}
 

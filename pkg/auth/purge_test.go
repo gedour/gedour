@@ -339,3 +339,57 @@ func TestCrossedPurgesInbox(t *testing.T) {
 		t.Fatalf("purges %d and %d, want 204 both", d, er)
 	}
 }
+
+// 006-AC13, 006-AC18, 009-AC9: one count per type, each a different number, so a count read or written into
+// another type's field shows in the preview and in the audit's deleted counts. Dave's inbox items sit on
+// erin's events (left by a transfer): his own items are counted, not the items on his watches.
+func TestPurgeCountsPerType(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	other, _, _ := e.signedIn(t, "other-admin", true)
+	w := e.watchOf(t, dave, "w", nil)
+	erinW := e.watchOf(t, erin, "erin's", nil)
+	for _, s := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO channels (owner_id, name, type) SELECT $1, 'c' || g, 'webhook' FROM generate_series(1, 2) g`, []any{dave}},
+		{`INSERT INTO rules (owner_id, name) SELECT $1, 'r' || g FROM generate_series(1, 3) g`, []any{dave}},
+		{`INSERT INTO rules (owner_id, name, watch_id) SELECT $1, 'o' || g, $2 FROM generate_series(1, 4) g`, []any{erin, w}},
+		{`INSERT INTO scripts (owner_id, name, source) SELECT $1, 's' || g, '' FROM generate_series(1, 5) g`, []any{dave}},
+		{`INSERT INTO credentials (id, owner_id, name, kind, secret_ciphertext, secret_nonce, key_version)
+			SELECT gen_random_uuid(), $1, 'k' || g, 'github_token', '\x00', '\x00', 1 FROM generate_series(1, 6) g`, []any{dave}},
+		{`INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 't', '{}', 'k' || g FROM generate_series(1, 7) g`, []any{erinW}},
+		{`INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events WHERE watch_id = $2`, []any{dave, erinW}},
+		// signedIn opened the first of dave's 8 sessions.
+		{`INSERT INTO sessions (id, user_id, csrf_token, expires_at) SELECT sha256(('d' || g)::bytea), $1, 'x', now() + interval '1 hour'
+			FROM generate_series(2, 8) g`, []any{dave}},
+		{`INSERT INTO sessions (id, user_id, csrf_token, expires_at, is_admin, acting_as) SELECT sha256(('a' || g)::bytea), $1, 'x',
+			now() + interval '1 hour', true, $2 FROM generate_series(1, 9) g`, []any{other, dave}},
+		{`INSERT INTO api_keys (user_id, name, hash, prefix, scope) SELECT $1, 'k' || g, sha256(('k' || g)::bytea), 'p', 'read'
+			FROM generate_series(1, 10) g`, []any{dave}},
+		{`UPDATE users SET disabled_at = now() WHERE id = $1`, []any{dave}},
+	} {
+		e.exec(t, s.sql, s.args...)
+	}
+	want := PurgeCounts{Watches: 1, Channels: 2, Rules: 3, OtherUsersRules: 4, Scripts: 5, Credentials: 6, InboxItems: 7,
+		Sessions: 8, ActingSessions: 9, APIKeys: 10}
+
+	code, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+dave+"/purge-preview", token, "", nil)
+	var preview purgePreviewOutput
+	if err := json.Unmarshal(raw, &preview.Body); code != http.StatusOK || err != nil || preview.Body.Counts != want {
+		t.Fatalf("preview %d %v: %+v, want %+v", code, err, preview.Body.Counts, want)
+	}
+	if code, raw := e.purge(t, token, csrf, dave); code != http.StatusNoContent {
+		t.Fatalf("purge: %d %s", code, raw)
+	}
+	var after purgeAfter
+	if err := e.pool.QueryRow(context.Background(), `SELECT after FROM audit_log WHERE action = 'user.purge' AND target_id = $1`, dave).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Deleted != want {
+		t.Fatalf("audit deleted %+v, want %+v", after.Deleted, want)
+	}
+}

@@ -64,7 +64,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only) */
+    /** Disable an account: sessions revoked, sign-in refused, rules route nothing, watches stop collecting (admin only) */
     post: operations["admin-disable-user"];
     delete?: never;
     options?: never;

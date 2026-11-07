@@ -2759,7 +2759,7 @@
             "description": "Error"
           }
         },
-        "summary": "Disable an account: sessions revoked, sign-in refused, rules route nothing (admin only)",
+        "summary": "Disable an account: sessions revoked, sign-in refused, rules route nothing, watches stop collecting (admin only)",
         "tags": [
           "admin"
         ]

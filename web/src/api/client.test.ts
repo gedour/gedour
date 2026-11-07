@@ -7,6 +7,7 @@ import {
   getMe,
   getVersion,
   listAudit,
+  listWatches,
   logout,
   request,
   retryQuery,
@@ -168,23 +169,40 @@ describe("api client", () => {
       cursor: "c1",
     });
   });
+
+  // 009-AC7: the list sends only the set kind and search, encoded; no ownership filter.
+  it("builds the watches query from kind and search only", async () => {
+    const fn = mockApi({ "/api/v1/watches": { items: [] } });
+    await listWatches({ q: "a&shared=all #x", kind: "github_pr" });
+    await listWatches({ q: "" });
+    expect(
+      fn.mock.calls.map(([u]) =>
+        Object.fromEntries(new URL(String(u), "http://app.test").searchParams),
+      ),
+    ).toEqual([{ q: "a&shared=all #x", kind: "github_pr" }, {}]);
+  });
 });
+
+const sources = Object.entries(
+  import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+);
 
 // 002-AC3: the loop guard and its storage key are gone (scripted navigation: see src/lint.test.ts).
 describe("login loop guard", () => {
-  const sources = Object.entries(
-    import.meta.glob<string>(["/src/**/*.{ts,tsx}", "!/src/**/*.test.{ts,tsx}"], {
-      query: "?raw",
-      import: "default",
-      eager: true,
-    }),
-  );
-
   it("is gone from every app source", () => {
     expect(sources.map(([f]) => f)).toContain("/src/api/client.ts");
     const key = ["redirected", "At"].join("");
     expect(sources.filter(([, src]) => src.includes(key)).map(([f]) => f)).toEqual([]);
   });
+});
+
+// 009-AC5: the share operations are gone; no app source may call them again.
+it("calls no watch share path", () => {
+  expect(sources.filter(([, src]) => /\/shares\b/.test(src)).map(([f]) => f)).toEqual([]);
 });
 
 describe("retryQuery", () => {

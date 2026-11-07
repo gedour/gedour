@@ -265,9 +265,9 @@ func TestWatchAuthzMatrix(t *testing.T) {
 
 	var ownerCred credJSON
 	a.mustCall(t, owner, http.MethodPost, "/api/v1/credentials", map[string]any{"name": "matrix", "kind": "github_token", "secret": "ghp_0123456789abcdef"}, http.StatusCreated, &ownerCred)
-	freshWith := func(t *testing.T, credentialed bool) string {
+	freshWith := func(t *testing.T, credentialed, paused bool) string {
 		var w watchJSON
-		body := map[string]any{"name": "Go", "kind": "github_repo", "config": map[string]any{"repo": "golang/go"}}
+		body := map[string]any{"name": "Go", "kind": "github_repo", "config": map[string]any{"repo": "golang/go"}, "paused": paused}
 		if credentialed {
 			body["credential_id"] = ownerCred.ID
 		}
@@ -279,28 +279,43 @@ func TestWatchAuthzMatrix(t *testing.T) {
 		body               any
 		want               [2]int // stranger, owner; owner runs last
 		credentialed       bool   // the watch carries the owner's credential
+		paused             bool
 	}{
-		{"get", http.MethodGet, "", nil, [2]int{404, 200}, false},
-		{"rename", http.MethodPatch, "", map[string]any{"name": "renamed"}, [2]int{404, 200}, false},
-		{"edit config", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "a/b"}}, [2]int{404, 200}, false},
-		{"change credential", http.MethodPatch, "", map[string]any{"credential_id": ""}, [2]int{404, 200}, false},
-		{"edit config of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "attacker/loot", "api_url": "https://evil.example"}}, [2]int{404, 200}, true},
-		{"toggle a box of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "golang/go", "new_prs": true}}, [2]int{404, 200}, true},
-		{"rename credentialed watch", http.MethodPatch, "", map[string]any{"name": "renamed", "schedule": "1h", "paused": true}, [2]int{404, 200}, true},
-		{"pause", http.MethodPost, "/pause", nil, [2]int{404, 200}, false},
-		{"resume", http.MethodPost, "/resume", nil, [2]int{404, 200}, false},
-		{"run", http.MethodPost, "/run", nil, [2]int{404, 202}, false},
-		{"states", http.MethodGet, "/states", nil, [2]int{404, 200}, false},
-		{"events", http.MethodGet, "/events", nil, [2]int{404, 200}, false},
-		{"delete", http.MethodDelete, "", nil, [2]int{404, 204}, false},
+		{"get", http.MethodGet, "", nil, [2]int{404, 200}, false, false},
+		{"rename", http.MethodPatch, "", map[string]any{"name": "renamed"}, [2]int{404, 200}, false, false},
+		{"edit config", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "a/b"}}, [2]int{404, 200}, false, false},
+		{"change credential", http.MethodPatch, "", map[string]any{"credential_id": ""}, [2]int{404, 200}, false, false},
+		{"edit config of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "attacker/loot", "api_url": "https://evil.example"}}, [2]int{404, 200}, true, false},
+		{"toggle a box of credentialed watch", http.MethodPatch, "", map[string]any{"config": map[string]any{"repo": "golang/go", "new_prs": true}}, [2]int{404, 200}, true, false},
+		{"rename credentialed watch", http.MethodPatch, "", map[string]any{"name": "renamed", "schedule": "1h", "paused": true}, [2]int{404, 200}, true, false},
+		// A refusal the owner would get (400, 409) must not reach a stranger ahead of the 404.
+		{"blank name", http.MethodPatch, "", map[string]any{"name": " "}, [2]int{404, 400}, false, false},
+		{"run paused", http.MethodPost, "/run", nil, [2]int{404, 409}, false, true},
+		{"pause", http.MethodPost, "/pause", nil, [2]int{404, 200}, false, false},
+		{"resume", http.MethodPost, "/resume", nil, [2]int{404, 200}, false, false},
+		{"run", http.MethodPost, "/run", nil, [2]int{404, 202}, false, false},
+		{"states", http.MethodGet, "/states", nil, [2]int{404, 200}, false, false},
+		{"events", http.MethodGet, "/events", nil, [2]int{404, 200}, false, false},
+		{"delete", http.MethodDelete, "", nil, [2]int{404, 204}, false, false},
 	}
 	for _, r := range routes {
 		t.Run(r.name, func(t *testing.T) {
-			id := freshWith(t, r.credentialed)
+			id := freshWith(t, r.credentialed, r.paused)
+			row := func() string {
+				var s string
+				if err := a.pool.QueryRow(context.Background(), `SELECT to_jsonb(w)::text FROM watches w WHERE id = $1`, id).Scan(&s); err != nil {
+					t.Fatal(err)
+				}
+				return s
+			}
+			before := row()
 			for i, c := range callers {
 				code, raw := a.call(t, c.u, r.method, "/api/v1/watches/"+id+r.path, r.body)
 				if code != r.want[i] {
 					t.Errorf("%s: want %d got %d: %s", c.name, r.want[i], code, raw)
+				}
+				if c.name == "stranger" && (row() != before || a.countRows(t, `SELECT count(*) FROM audit_log WHERE actor_user_id = $1`, c.u.id) != 0) {
+					t.Errorf("the stranger's refused call changed the watch or wrote audit")
 				}
 			}
 		})
@@ -315,13 +330,16 @@ func TestWatchAuthzMatrix(t *testing.T) {
 	})
 
 	t.Run("list and create", func(t *testing.T) {
-		id := freshWith(t, false)
+		id := freshWith(t, false, false)
 		for _, c := range callers {
-			var list struct{ Items []watchJSON }
-			a.mustCall(t, c.u, http.MethodGet, "/api/v1/watches", nil, http.StatusOK, &list)
-			seen := slices.ContainsFunc(list.Items, func(w watchJSON) bool { return w.ID == id })
-			if seen != (c.name == "owner") {
-				t.Errorf("%s lists the watch: %v", c.name, seen)
+			// The filters narrow the caller's own watches, never widen to others'.
+			for _, q := range []string{"", "?kind=github_repo", "?q=Go"} {
+				var list struct{ Items []watchJSON }
+				a.mustCall(t, c.u, http.MethodGet, "/api/v1/watches"+q, nil, http.StatusOK, &list)
+				seen := slices.ContainsFunc(list.Items, func(w watchJSON) bool { return w.ID == id })
+				if seen != (c.name == "owner") {
+					t.Errorf("%s lists the watch with %q: %v", c.name, q, seen)
+				}
 			}
 			a.mustCall(t, c.u, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, nil)
 		}
@@ -483,6 +501,10 @@ func TestCredentials(t *testing.T) {
 		t.Fatalf("attached: %+v", w)
 	}
 	mustRaw(bob, http.MethodPost, "/api/v1/watches", body, http.StatusBadRequest, nil)
+	// 001-AC5: nor on update: bob cannot attach alice's credential to his own watch.
+	var bobs watchJSON
+	mustRaw(bob, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &bobs)
+	mustRaw(bob, http.MethodPatch, "/api/v1/watches/"+bobs.ID, map[string]any{"credential_id": gh.ID}, http.StatusBadRequest, nil)
 	mustRaw(bob, http.MethodGet, "/api/v1/watches/"+w.ID, nil, http.StatusNotFound, nil)
 
 	var list struct{ Items []credJSON }
@@ -773,6 +795,84 @@ func TestWatchTransferredMidRequest(t *testing.T) {
 				t.Fatalf("watch written anyway: %q paused %v owner %s, %v", name, paused, owner, err)
 			}
 		})
+	}
+}
+
+// 001-AC5: a write decides on the row its lock returns, not on one read before a concurrent write
+// committed: no lost update, no second pause audited, no run of a watch paused meanwhile.
+func TestWatchWriteReadsLockedRow(t *testing.T) {
+	a := newDevApp(t)
+	ctx := context.Background()
+	alice := a.signIn(t, "alice")
+	for _, c := range []struct {
+		name, method, suffix string
+		body                 any
+		code                 int
+		check                string // true on the row the request must leave
+	}{
+		{"update", http.MethodPatch, "", map[string]any{"name": "renamed"}, http.StatusOK, `SELECT schedule = '30m' FROM watches WHERE id = $1`},
+		{"pause", http.MethodPost, "/pause", nil, http.StatusOK, `SELECT count(*) = 0 FROM audit_log WHERE action = 'watch.paused' AND target_id = $1::text`},
+		{"run", http.MethodPost, "/run", nil, http.StatusConflict, `SELECT next_run_at > now() + interval '1 hour' FROM watches WHERE id = $1`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var w watchJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+			a.exec(t, `UPDATE watches SET next_run_at = now() + interval '1 day' WHERE id = $1`, w.ID)
+			tx, err := a.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w.ID); err != nil {
+				t.Fatal(err)
+			}
+			done := waitsFor(t, func() (int, []byte) { return a.call(t, alice, c.method, "/api/v1/watches/"+w.ID+c.suffix, c.body) })
+			if _, err := tx.Exec(ctx, `UPDATE watches SET schedule = '30m', paused = true WHERE id = $1`, w.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if r := <-done; r[0] != c.code {
+				t.Fatalf("want %d got %v %s", c.code, r[0], r[1])
+			}
+			var ok bool
+			if err := a.pool.QueryRow(ctx, c.check, w.ID).Scan(&ok); err != nil || !ok {
+				t.Fatalf("acted on the stale row: %s (%v)", c.check, err)
+			}
+		})
+	}
+}
+
+// 001-AC5: reads take no row lock: a watch held by a write still reads at once.
+func TestWatchReadsDoNotWait(t *testing.T) {
+	a := newDevApp(t)
+	ctx := context.Background()
+	alice := a.signIn(t, "alice")
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
+	tx, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"", "/events", "/states"} {
+		got := make(chan int, 1)
+		go func() {
+			code, _ := a.call(t, alice, http.MethodGet, "/api/v1/watches/"+w.ID+path, nil)
+			got <- code
+		}()
+		select {
+		case code := <-got:
+			if code != http.StatusOK {
+				t.Fatalf("GET %s: %d", path, code)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("GET %s waited on the watch lock", path)
+		}
 	}
 }
 

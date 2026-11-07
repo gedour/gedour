@@ -64,7 +64,7 @@ describe("service worker", () => {
       body: "Notes",
       tag: "gedour-event-4",
       silent: true,
-      icon: "/favicon.svg",
+      icon: "/icon-192.png",
       data: { url: "/inbox?event=4" },
     });
   });
@@ -77,7 +77,7 @@ describe("service worker", () => {
         body: "",
         tag: undefined,
         silent: false,
-        icon: "/favicon.svg",
+        icon: "/icon-192.png",
         data: { url: "/inbox" },
       });
     }

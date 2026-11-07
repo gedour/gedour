@@ -100,7 +100,7 @@ func TestGitHubPRFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 		if s.Comments, err = normalizeComments(testupstream.Part("github_pr", set, "reviews"),
-			testupstream.Part("github_pr", set, "review_comments"), testupstream.Part("github_pr", set, "issue_comments")); err != nil {
+			testupstream.Part("github_pr", set, "review_comments"), testupstream.Part("github_pr", set, "issue_comments"), false); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -174,7 +174,7 @@ func TestGitHubPRComments(t *testing.T) {
 	ib, _ := json.Marshal(issue)
 	reviews := `[{"user":{"login":"r"},"body":"","state":"APPROVED","html_url":"r0","submitted_at":"2026-11-05T11:00:00Z"},
 		{"user":{"login":"r"},"body":"late review","state":"COMMENTED","html_url":"r1","submitted_at":"2026-11-05T11:01:00Z"}]`
-	got, err := normalizeComments([]byte(reviews), []byte(`[]`), ib)
+	got, err := normalizeComments([]byte(reviews), []byte(`[]`), ib, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestGitHubPRComments(t *testing.T) {
 	reviews = `[{"id":1,"user":{"login":"r"},"body":"overall fine","state":"COMMENTED","html_url":"r1","submitted_at":"2026-11-05T11:01:00Z"},
 		{"id":2,"user":{"login":"q"},"body":"","state":"COMMENTED","html_url":"r2","submitted_at":"2026-11-05T12:05:00Z"},
 		{"id":3,"user":{"login":"s"},"body":"","state":"COMMENTED","html_url":"r3","submitted_at":"2026-11-05T12:05:00Z"}]`
-	got, err = normalizeComments([]byte(reviews), []byte(inline), []byte(`[]`))
+	got, err = normalizeComments([]byte(reviews), []byte(inline), []byte(`[]`), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +199,10 @@ func TestGitHubPRComments(t *testing.T) {
 		folded = append(folded, c.URL+" "+c.Excerpt)
 	}
 	check(t, folded, []string{"r1 overall fine (+1 inline)", "c11 first (+2 inline)", "c14 a reply"})
-	if got, err := normalizeComments([]byte(`[]`), []byte(`[]`), []byte(`[]`)); err != nil || got == nil {
+	if got, err := normalizeComments([]byte(`[]`), []byte(`[]`), []byte(`[]`), false); err != nil || got == nil {
 		t.Fatalf("empty must be non-nil: %v %v", got, err)
 	}
-	if _, err := normalizeComments([]byte(`[]`), []byte(`{}`), []byte(`[]`)); err == nil {
+	if _, err := normalizeComments([]byte(`[]`), []byte(`{}`), []byte(`[]`), false); err == nil {
 		t.Fatal("bad review comments accepted")
 	}
 	long := strings.Repeat("é", maxExcerpt+10)
@@ -395,7 +395,7 @@ func TestGitHubIssueFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), testupstream.Part("github_issue", set, "comments")); err != nil {
+		if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), testupstream.Part("github_issue", set, "comments"), false); err != nil {
 			t.Fatal(err)
 		}
 		return s
@@ -484,7 +484,7 @@ func TestGitHubDiscussionFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Comments, err = normalizeDiscussionComments(s.URL, testupstream.Part("github_discussion", set, "comments")); err != nil {
+		if s.Comments, err = normalizeDiscussionComments(s.URL, testupstream.Part("github_discussion", set, "comments"), false); err != nil {
 			t.Fatal(err)
 		}
 		return s

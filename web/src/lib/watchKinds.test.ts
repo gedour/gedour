@@ -13,7 +13,11 @@ import {
 describe("toConfig / fromConfig", () => {
   it("sends only the kind's fields, trimmed, numbers as numbers, blanks left out", () => {
     const values = { repo: " golang/go ", number: "12", api_url: "", project: "x/y", extra: "z" };
-    expect(toConfig("github_pr", values)).toEqual({ repo: "golang/go", number: 12 });
+    expect(toConfig("github_pr", values)).toEqual({
+      repo: "golang/go",
+      number: 12,
+      reactions: false,
+    });
     expect(toConfig("github_repo", values)).toEqual({
       repo: "golang/go",
       include_prereleases: false,

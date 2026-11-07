@@ -63,6 +63,13 @@ func TestConfigValidation(t *testing.T) {
 		{"github repo boxes not bool", KindGitHubRepo, `{"repo":"a/b","new_prs":"yes"}`, "", []string{"body.config.new_prs"}},
 		{"github repo box number", KindGitHubRepo, `{"repo":"a/b","new_issues":1}`, "", []string{"body.config.new_issues"}},
 		{"github pr has no boxes", KindGitHubPR, `{"repo":"a/b","number":1,"new_prs":true}`, "", []string{"body.config.new_prs"}},
+		// 011-AC11: reactions off is left out, so a box-off config is stored as before 011.
+		{"github pr reactions", KindGitHubPR, `{"repo":"a/b","number":1,"reactions":true}`,
+			`{"api_url":"https://api.github.com","number":1,"reactions":true,"repo":"a/b"}`, nil},
+		{"github issue reactions off", KindGitHubIssue, `{"repo":"a/b","number":1,"reactions":false}`,
+			`{"api_url":"https://api.github.com","number":1,"repo":"a/b"}`, nil},
+		{"github discussion reactions not bool", KindGitHubDiscussion, `{"repo":"a/b","number":1,"reactions":"yes"}`, "", []string{"body.config.reactions"}},
+		{"github repo has no reactions box", KindGitHubRepo, `{"repo":"a/b","reactions":true}`, "", []string{"body.config.reactions"}},
 		{"github prerelease not bool", KindGitHubRepo, `{"repo":"a/b","include_prereleases":"yes"}`, "", []string{"body.config.include_prereleases"}},
 		{"github http api", KindGitHubRepo, `{"repo":"a/b","api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
 		{"github http allowlisted", KindGitHubRepo, `{"repo":"a/b","api_url":"http://127.0.0.1:9999"}`,

@@ -49,6 +49,23 @@ interface Approvals {
   count?: number;
 }
 
+// GitHub's reaction kinds and their emoji, in GitHub's order (pkg/notify/message.go reactions).
+const REACTIONS: [string, string][] = [
+  ["+1", "👍"],
+  ["-1", "👎"],
+  ["laugh", "😄"],
+  ["hooray", "🎉"],
+  ["confused", "😕"],
+  ["heart", "❤️"],
+  ["rocket", "🚀"],
+  ["eyes", "👀"],
+];
+const REACTED_ON: Record<string, string> = {
+  "issue.reacted": "issue #",
+  "pr.reacted": "PR #",
+  "discussion.reacted": "discussion #",
+};
+
 function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
@@ -164,6 +181,21 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
         text: `${discussion} ${p.reply_to ? "reply" : "commented"} by ${str(p.author)}`,
         url,
       };
+    case "issue.reacted":
+    case "pr.reacted":
+    case "discussion.reacted": {
+      const added = (p.added ?? {}) as Record<string, number>;
+      const rises = REACTIONS.filter(([k]) => (added[k] ?? 0) > 0).map(
+        ([k, emoji]) => `+${added[k]} ${emoji}`,
+      );
+      const on = `${REACTED_ON[e.type]}${str(p.number)}`;
+      return {
+        badge: "Reactions",
+        tone: "change",
+        text: `${rises.join(" ")} on ${p.target === "comment" ? `a comment of ${on}` : on}`,
+        url,
+      };
+    }
     case "mr.approval_changed": {
       const a = (p.to ?? {}) as Approvals;
       const count = plural(a.count ?? 0, "approval");

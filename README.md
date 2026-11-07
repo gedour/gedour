@@ -293,7 +293,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `discussion.opened`, `pr.state_changed`, `pr.draft_changed`,
   `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `issue.state_changed`, `issue.labels_changed`,
   `issue.commented`, `discussion.state_changed`, `discussion.answer_changed`, `discussion.labels_changed`,
-  `discussion.commented`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
+  `discussion.commented`, `issue.reacted`, `pr.reacted`, `discussion.reacted`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
   `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
   run is a new baseline. The last 50 states per watch are kept; events are kept.
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
@@ -331,6 +331,16 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `excerpt`, and `reply_to`, the parent comment's URL, on a reply; `url` is the comment's). The category is
   stored and shown; its change emits nothing. Issues, PRs and discussions are numbered in one sequence: a number that is
   not a discussion fails the run with an error pointing to `github_issue` and `github_pr`.
+- The box `reactions` (config, default `false`) of `github_issue`, `github_pr` and `github_discussion` follows the
+  counts of the 8 reaction kinds (`+1`, `-1`, `laugh`, `hooray`, `confused`, `heart`, `rocket`, `eyes`) on the
+  initial post and on each of the 20 newest comments stored; review bodies, and an entry standing for several
+  inline comments of one review, are not tracked. `github_issue` and `github_discussion` make no extra request;
+  `github_pr` makes 1 more per run (`/issues/{n}`, for the PR body's counts). Event `<kind>.reacted`
+  (`issue.reacted`, `pr.reacted`, `discussion.reacted`), one per target whose counts rose since the last run, every
+  kind that rose in one event. Payload: `number`, `title`, `url` (the item's or the comment's), `target` (`item` or
+  `comment`), `added` (kind to its rise, rises only) and `counts` (the 8 current counts). A drop emits nothing. The
+  first run after the box is checked, and a comment new in the run, are a baseline. Toggling the box is no
+  retarget, and checking it does not make the watch due. Who reacted is not reported.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
@@ -366,7 +376,10 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `event.payload.body == ""` also match non-release events: a rule meant for releases adds a check on
   `event.type` or targets a watch. New issues, PRs and discussions carry their label names in `payload.labels`
   (discussions add `payload.category`):
-  `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
+  `"bug" in event.payload.labels`, `event.type == "pr.opened" && event.payload.author != "dependabot[bot]"`. Reaction
+  events carry their rises in `payload.added`: `event.type == "issue.reacted" && "heart" in event.payload.added`,
+  `"+1" in event.payload.added && event.payload.added["+1"] >= 5` (the `in` check first: a missing kind fails the
+  rule). Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule of the watch's
   owner now, on that watch or on all watches, is evaluated; a match adds one inbox item and one delivery

@@ -81,6 +81,36 @@ describe("WatchFormPage (new)", () => {
     });
   });
 
+  // 011-AC14: the reactions box on the single-item forms, with its request hint, reaches the config.
+  it("offers the reactions box with its request hint", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    expect(screen.queryByRole("checkbox", { name: "Report reactions" })).not.toBeInTheDocument();
+    for (const [card, hint] of [
+      ["GitHub pull request", /1 more request:.*60 an hour without a token/],
+      ["GitHub issue", /No extra request/],
+      ["GitHub discussion", /No extra request/],
+    ] as const) {
+      await userEvent.click(kindCard(card));
+      const box = screen.getByRole("checkbox", { name: "Report reactions" });
+      expect(box).not.toBeChecked();
+      expect(box).toHaveAccessibleDescription(hint);
+    }
+    await userEvent.type(screen.getByLabelText("Repository"), "a/b");
+    await userEvent.type(screen.getByLabelText("Discussion number"), "3");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Report reactions" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body?.config).toEqual({
+      repo: "a/b",
+      number: 3,
+      reactions: true,
+    });
+  });
+
   // 008-AC13: an issue URL picks the GitHub issue card and fills its fields.
   it("picks GitHub issue from a pasted issue URL", async () => {
     const fn = mockApi({

@@ -76,6 +76,8 @@ type GitHubPRConfig struct {
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	APIURL string `json:"api_url"`
+	// omitempty like the github_repo boxes: a box-off config stays as stored before it.
+	Reactions bool `json:"reactions,omitempty"`
 }
 
 // GitHubIssueConfig is the normalized config of a github_issue watch: an alias, so it validates exactly like github_pr's.
@@ -148,13 +150,15 @@ func targetOf(cfg map[string]any) (field, raw string) {
 // boxKeys only add requests to the same target: changing them is no retarget.
 var boxKeys = []string{"new_issues", "new_prs", "new_discussions"}
 
-// sameTarget compares two normalized configs, the new-items boxes left out.
+// sameTarget compares two normalized configs, the boxes left out.
 func sameTarget(a, b map[string]any) bool {
 	strip := func(m map[string]any) map[string]any {
 		out := maps.Clone(m)
 		for _, k := range boxKeys {
 			delete(out, k)
 		}
+		// Not in boxKeys: reactions before the first run only shift the baseline, so checking it is not due now.
+		delete(out, "reactions")
 		return out
 	}
 	return reflect.DeepEqual(strip(a), strip(b))

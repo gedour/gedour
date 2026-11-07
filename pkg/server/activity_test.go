@@ -216,6 +216,24 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	}
 }
 
+// 011-AC13: toggling reactions keeps the states, and checking it does not make the watch due: the next run baselines it.
+func TestReactionsBoxKeepsSchedule(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w activityWatch
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &w)
+	base := "/api/v1/watches/" + w.ID
+	a.exec(t, `INSERT INTO watch_states (watch_id, state, state_hash) VALUES ($1, '{}', 'h')`, w.ID)
+	for _, on := range []bool{true, false} {
+		a.exec(t, `UPDATE watches SET next_run_at = now() + interval '3 days' WHERE id = $1`, w.ID)
+		w.Config = nil // decoding merges into a map
+		a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "golang/go", "number": 1, "reactions": on}}, http.StatusOK, &w)
+		if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 1 || time.Until(w.NextRunAt) < 24*time.Hour || (w.Config["reactions"] == true) != on {
+			t.Fatalf("reactions %v: states=%d next=%v", on, s, w.NextRunAt)
+		}
+	}
+}
+
 // Run all: every watch the caller owns, paused ones left out, one audit row each.
 func TestRunAllWatches(t *testing.T) {
 	a := newDevApp(t)

@@ -134,6 +134,15 @@ const PROJECT: FieldSpec = {
 
 const ITEM_REQUESTS =
   "Each run then makes 1 more request: GitHub allows 60 an hour without a token.";
+const reactions = (hint: string): FieldSpec => ({
+  key: "reactions",
+  label: "Report reactions",
+  type: "checkbox",
+  hint,
+});
+const REACTIONS_FREE = reactions(
+  "No extra request: the counts come with the item and its comments.",
+);
 const DISCUSSION_REQUESTS =
   "Each run then makes 2 to 3 more requests: GitHub allows 60 an hour without a token.";
 
@@ -155,16 +164,19 @@ export const FIELDS: Record<WatchKind, FieldSpec[]> = {
   github_pr: [
     REPO,
     { key: "number", label: "Pull request number", type: "number", placeholder: "123" },
+    reactions(ITEM_REQUESTS),
     GITHUB_API,
   ],
   github_issue: [
     REPO,
     { key: "number", label: "Issue number", type: "number", placeholder: "123" },
+    REACTIONS_FREE,
     GITHUB_API,
   ],
   github_discussion: [
     REPO,
     { key: "number", label: "Discussion number", type: "number", placeholder: "123" },
+    REACTIONS_FREE,
     GITHUB_API,
   ],
   gitlab_release: [GITLAB_URL, PROJECT],

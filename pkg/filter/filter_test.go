@@ -312,3 +312,27 @@ func TestSanitizedStringsBounded(t *testing.T) {
 	delete(p, "body")
 	walk(p)
 }
+
+// 011-AC12: the README reaction examples evaluate without error on every event shape a rule on all watches sees.
+func TestReadmeReactionExamples(t *testing.T) {
+	envs := map[string]Env{
+		"heart rise": {Event: Event{Type: "issue.reacted", Payload: map[string]any{"added": map[string]any{"heart": 2}}}},
+		"+1 rise":    {Event: Event{Type: "pr.reacted", Payload: map[string]any{"added": map[string]any{"+1": 6}}}},
+		"no added":   sample,
+	}
+	want := map[string]map[string]bool{
+		`event.type == "issue.reacted" && "heart" in event.payload.added`: {"heart rise": true, "+1 rise": false, "no added": false},
+		`"+1" in event.payload.added && event.payload.added["+1"] >= 5`:   {"heart rise": false, "+1 rise": true, "no added": false},
+	}
+	for src, cases := range want {
+		p, err := Compile(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		for name, w := range cases {
+			if got, err := Match(p, envs[name]); err != nil || got != w {
+				t.Errorf("%s on %s = %v, %v; want %v", src, name, got, err, w)
+			}
+		}
+	}
+}

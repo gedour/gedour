@@ -246,6 +246,30 @@ describe("summarizeEvent", () => {
       "Discussion #12 reply by bob",
       "change",
     ],
+    // 011-AC16: the reacted events, rises in GitHub's order, mirrored in pkg/notify/message.go.
+    [
+      ev("issue.reacted", { ...pr, target: "item", added: { heart: 2 } }),
+      "Reactions",
+      "+2 ❤️ on issue #12",
+      "change",
+    ],
+    [
+      ev("pr.reacted", { ...pr, number: 7, target: "comment", added: { "+1": 1 } }),
+      "Reactions",
+      "+1 👍 on a comment of PR #7",
+      "change",
+    ],
+    [
+      ev("discussion.reacted", {
+        ...pr,
+        number: 3,
+        target: "item",
+        added: { rocket: 1, heart: 2, eyes: 0 },
+      }),
+      "Reactions",
+      "+2 ❤️ +1 🚀 on discussion #3",
+      "change",
+    ],
     [
       ev("mr.state_changed", { ...mr, from: "opened", to: "merged" }),
       "State",

@@ -473,6 +473,8 @@ type PRState struct {
 	CI             string `json:"ci"`              // success, failure, pending or none
 	HeadSHA        string `json:"head_sha"`
 	URL            string `json:"url"`
+	// Reactions are the PR body's counts, nil with the box off so a box-off state stays as before 011.
+	Reactions *Reactions `json:"reactions,omitempty"`
 	// Comments are the newest maxComments, oldest first. nil is a state stored before comments were
 	// collected: the diff then takes the current ones as its baseline instead of announcing them.
 	Comments []PRComment `json:"comments"`
@@ -487,6 +489,72 @@ type PRComment struct {
 	Excerpt string `json:"excerpt"`
 	// ReplyTo is the parent comment's URL on a discussion reply; omitempty keeps issue and PR states as they were.
 	ReplyTo string `json:"reply_to,omitempty"`
+	// Reactions are nil with the box off, and on an entry standing for a review or for several inline comments.
+	Reactions *Reactions `json:"reactions,omitempty"`
+}
+
+// Reactions are the counts of GitHub's 8 reaction kinds; total_count and url are dropped.
+type Reactions struct {
+	PlusOne  int `json:"+1"`
+	MinusOne int `json:"-1"`
+	Laugh    int `json:"laugh"`
+	Hooray   int `json:"hooray"`
+	Confused int `json:"confused"`
+	Heart    int `json:"heart"`
+	Rocket   int `json:"rocket"`
+	Eyes     int `json:"eyes"`
+}
+
+// reactionKinds names the counts of Reactions.list, in GitHub's order.
+var reactionKinds = [...]string{"+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
+
+func (r *Reactions) list() [len(reactionKinds)]int {
+	return [...]int{r.PlusOne, r.MinusOne, r.Laugh, r.Hooray, r.Confused, r.Heart, r.Rocket, r.Eyes}
+}
+
+// itemReactions reads the reaction counts of an issue, PR (through its issue) or discussion body; nil when absent.
+func itemReactions(body []byte) (*Reactions, error) {
+	var raw struct {
+		Reactions *Reactions `json:"reactions"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("decode reactions: %w", err)
+	}
+	return raw.Reactions, nil
+}
+
+// reactedEvents emits typ once per target whose counts rose: the item, then each comment stored in both states.
+// No counts on either side (box just checked, a state from before 011, a folded entry) is a baseline.
+func reactedEvents(typ string, number int, title, url string, old, cur *Reactions, oldC, curC []PRComment) []Event {
+	var events []Event
+	rose := func(target, u string, o, c *Reactions) {
+		if o == nil || c == nil {
+			return
+		}
+		added := map[string]int{}
+		ol, cl := o.list(), c.list()
+		for i, k := range reactionKinds {
+			if cl[i] > ol[i] {
+				added[k] = cl[i] - ol[i]
+			}
+		}
+		if len(added) == 0 {
+			return
+		}
+		counts, _ := json.Marshal(c)
+		events = append(events, Event{Type: typ, Subject: u + ">" + string(counts), Payload: map[string]any{
+			"number": number, "title": title, "url": u, "target": target, "added": added, "counts": *c,
+		}})
+	}
+	rose("item", url, old, cur)
+	before := make(map[string]*Reactions, len(oldC))
+	for _, c := range oldC {
+		before[c.URL] = c.Reactions
+	}
+	for _, c := range curC {
+		rose("comment", c.URL, before[c.URL], c.Reactions)
+	}
+	return events
 }
 
 const (
@@ -532,8 +600,18 @@ func collectGitHubPR(ctx context.Context, f *Fetcher, cfg watch.GitHubPRConfig, 
 	if err != nil {
 		return PRState{}, err
 	}
-	if s.Comments, err = normalizeComments(bodies[0], bodies[3], issue); err != nil {
+	if s.Comments, err = normalizeComments(bodies[0], bodies[3], issue, cfg.Reactions); err != nil {
 		return PRState{}, err
+	}
+	if cfg.Reactions {
+		// 011-AC14: the pulls endpoint has no counts; the issues one answers for the PR's conversation item.
+		r, err := f.get(ctx, fmt.Sprintf("%s/issues/%d", base, cfg.Number), h, false)
+		if err != nil {
+			return PRState{}, err
+		}
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return PRState{}, err
+		}
 	}
 	return s, nil
 }
@@ -558,7 +636,8 @@ func lastPage(ctx context.Context, f *Fetcher, u string, h http.Header) ([]byte,
 // normalizeComments merges review bodies, inline comments and conversation comments into the newest
 // maxComments, oldest first. The result is never nil, so the next diff knows comments were collected.
 // One review is one comment: its inline comments fold into its body, or into the first of them.
-func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte) ([]PRComment, error) {
+// With reactions, an entry from one inline or conversation comment carries its counts.
+func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte, reactions bool) ([]PRComment, error) {
 	type item struct {
 		ID       int64 `json:"id"`
 		ReviewID int64 `json:"pull_request_review_id"`
@@ -569,6 +648,7 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 		HTMLURL     string     `json:"html_url"`
 		CreatedAt   *time.Time `json:"created_at"`
 		SubmittedAt *time.Time `json:"submitted_at"`
+		Reactions   *Reactions `json:"reactions"`
 	}
 	var reviews, inline, issue []item
 	for _, d := range []struct {
@@ -586,11 +666,16 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 		if at == nil || it.HTMLURL == "" || strings.TrimSpace(it.Body) == "" {
 			return false
 		}
-		out = append(out, PRComment{Author: it.User.Login, CreatedAt: *at, URL: it.HTMLURL, Excerpt: excerpt(it.Body)})
+		c := PRComment{Author: it.User.Login, CreatedAt: *at, URL: it.HTMLURL, Excerpt: excerpt(it.Body)}
+		if reactions {
+			c.Reactions = it.Reactions
+		}
+		out = append(out, c)
 		return true
 	}
 	carrier := map[int64]int{} // review id -> index in out of the comment that stands for the review
 	for _, r := range reviews {
+		r.Reactions = nil // review bodies have no counts
 		if add(r, r.SubmittedAt) {
 			carrier[r.ID] = len(out) - 1
 		}
@@ -613,6 +698,7 @@ func normalizeComments(reviewsBody, reviewCommentsBody, issueCommentsBody []byte
 	}
 	for i, n := range more {
 		out[i].Excerpt += fmt.Sprintf(" (+%d inline)", n)
+		out[i].Reactions = nil // one comment's counts would stand for several
 	}
 	for _, c := range issue {
 		add(c, c.CreatedAt)
@@ -759,7 +845,8 @@ func diffPR(old, cur PRState) []Event {
 		{"review_changed", old.ReviewDecision, cur.ReviewDecision},
 		{"ci_changed", old.CI, cur.CI},
 	})
-	return append(events, commentEvents("pr.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	events = append(events, commentEvents("pr.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("pr.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
 }
 
 // commentEvents emits typ for each comment of cur missing from old.
@@ -829,7 +916,8 @@ type IssueState struct {
 	Labels      []string `json:"labels"` // names, sorted, never nil
 	URL         string   `json:"url"`
 	// Comments follow PRState.Comments: nil is a state stored before comments were collected.
-	Comments []PRComment `json:"comments"`
+	Comments  []PRComment `json:"comments"`
+	Reactions *Reactions  `json:"reactions,omitempty"` // like PRState.Reactions
 }
 
 func collectGitHubIssue(ctx context.Context, f *Fetcher, cfg watch.GitHubIssueConfig, cred *Credential) (IssueState, error) {
@@ -843,12 +931,17 @@ func collectGitHubIssue(ctx context.Context, f *Fetcher, cfg watch.GitHubIssueCo
 	if err != nil {
 		return IssueState{}, err
 	}
+	if cfg.Reactions {
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return IssueState{}, err
+		}
+	}
 	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
 	if err != nil {
 		return IssueState{}, err
 	}
 	// An issue has conversation comments only: no reviews, no inline comments.
-	if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), comments); err != nil {
+	if s.Comments, err = normalizeComments([]byte(`[]`), []byte(`[]`), comments, cfg.Reactions); err != nil {
 		return IssueState{}, err
 	}
 	return s, nil
@@ -891,7 +984,8 @@ func diffIssue(old, cur IssueState) []Event {
 		{"state_changed", old.State, cur.State},
 		{"labels_changed", old.Labels, cur.Labels},
 	}))
-	return append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	events = append(events, commentEvents("issue.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("issue.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
 }
 
 // withStateReason adds cur's reason to the <prefix>.state_changed of events, and emits one for a reason change while closed.
@@ -923,7 +1017,8 @@ type DiscussionState struct {
 	AnswerChosenBy string `json:"answer_chosen_by"`
 	URL            string `json:"url"`
 	// Comments follow PRState.Comments, replies included with ReplyTo set.
-	Comments []PRComment `json:"comments"`
+	Comments  []PRComment `json:"comments"`
+	Reactions *Reactions  `json:"reactions,omitempty"` // like PRState.Reactions
 }
 
 func collectGitHubDiscussion(ctx context.Context, f *Fetcher, cfg watch.GitHubDiscussionConfig, cred *Credential) (DiscussionState, error) {
@@ -942,11 +1037,16 @@ func collectGitHubDiscussion(ctx context.Context, f *Fetcher, cfg watch.GitHubDi
 	if err != nil {
 		return DiscussionState{}, err
 	}
+	if cfg.Reactions {
+		if s.Reactions, err = itemReactions(r.body); err != nil {
+			return DiscussionState{}, err
+		}
+	}
 	comments, err := lastPage(ctx, f, base+"/comments?per_page=100", h)
 	if err != nil {
 		return DiscussionState{}, err
 	}
-	if s.Comments, err = normalizeDiscussionComments(s.URL, comments); err != nil {
+	if s.Comments, err = normalizeDiscussionComments(s.URL, comments, cfg.Reactions); err != nil {
 		return DiscussionState{}, err
 	}
 	return s, nil
@@ -983,7 +1083,7 @@ func normalizeGitHubDiscussion(body []byte) (DiscussionState, error) {
 }
 
 // normalizeDiscussionComments normalizes the flat comments list like issue comments, then points each reply at its parent.
-func normalizeDiscussionComments(discussionURL string, body []byte) ([]PRComment, error) {
+func normalizeDiscussionComments(discussionURL string, body []byte, reactions bool) ([]PRComment, error) {
 	var raw []struct {
 		HTMLURL  string `json:"html_url"`
 		ParentID *int64 `json:"parent_id"`
@@ -991,7 +1091,7 @@ func normalizeDiscussionComments(discussionURL string, body []byte) ([]PRComment
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("decode discussion comments: %w", err)
 	}
-	out, err := normalizeComments([]byte(`[]`), []byte(`[]`), body)
+	out, err := normalizeComments([]byte(`[]`), []byte(`[]`), body, reactions)
 	if err != nil {
 		return nil, err
 	}
@@ -1025,5 +1125,6 @@ func diffDiscussion(old, cur DiscussionState) []Event {
 			e.Payload["chosen_by"] = cur.AnswerChosenBy
 		}
 	}
-	return append(events, commentEvents("discussion.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	events = append(events, commentEvents("discussion.commented", cur.Number, cur.Title, old.Comments, cur.Comments)...)
+	return append(events, reactedEvents("discussion.reacted", cur.Number, cur.Title, cur.URL, old.Reactions, cur.Reactions, old.Comments, cur.Comments)...)
 }

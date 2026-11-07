@@ -62,6 +62,12 @@ func TestFormat(t *testing.T) {
 		{ev("issue.labels_changed", map[string]any{"number": 12.0, "from": []any{"bug"}, "to": []any{}}), "Issue #12 labels: none", "", ""},
 		{ev("issue.commented", map[string]any{"number": 12.0, "author": "alice", "title": "T", "excerpt": "Same here.\nOn 1.2", "url": "https://github.com/o/r/issues/12#issuecomment-1"}),
 			"Issue #12 commented by alice", "Same here. On 1.2", "https://github.com/o/r/issues/12#issuecomment-1"},
+		// 011-AC16: the reacted events, rises in GitHub's order, mirrored in web/src/lib/events.ts.
+		{ev("issue.reacted", map[string]any{"number": 12.0, "title": "T", "target": "item", "added": map[string]any{"heart": 2.0}, "url": "https://github.com/o/r/issues/12"}),
+			"+2 ❤️ on issue #12", "T", "https://github.com/o/r/issues/12"},
+		{ev("pr.reacted", map[string]any{"number": 7.0, "target": "comment", "added": map[string]any{"+1": 1.0}}), "+1 👍 on a comment of PR #7", "", ""},
+		{ev("discussion.reacted", map[string]any{"number": 3.0, "target": "item", "added": map[string]any{"rocket": 1.0, "heart": 2.0, "eyes": 0.0}}),
+			"+2 ❤️ +1 🚀 on discussion #3", "", ""},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": true, "count": 2.0}}), "MR !3 approved (2 approvals)", "", ""},
 		{ev("mr.approval_changed", map[string]any{"iid": 3.0, "to": map[string]any{"approved": false, "count": 1.0}}), "MR !3 not approved (1 approval)", "", ""},
 		{ev("mr.pipeline_changed", map[string]any{"iid": 3.0, "to": "success"}), "MR !3 pipeline success", "", ""},

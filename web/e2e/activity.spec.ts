@@ -659,9 +659,9 @@ test("a repository watch reports new issues, PRs and discussions", async ({ page
   await call("DELETE", `/api/v1/watches/${id}`);
 });
 
-// 008-AC13, 008-AC9: a pasted issue URL picks the GitHub issue kind; the baseline is quiet, then fixture B's
-// close (not planned), new label and new comment show in the timeline.
-test("an issue watch reports a close and a comment", async ({ page }) => {
+// 008-AC13, 008-AC9, 011-AC12: a pasted issue URL picks the GitHub issue kind, reactions box checked; the baseline
+// is quiet, then fixture B's close (not planned), new label, new comment and reactions show in the timeline.
+test("an issue watch reports a close, a comment and reactions", async ({ page }) => {
   const t = tag();
   await page.goto("/watches/new");
   await setFixture(page, "a");
@@ -671,6 +671,7 @@ test("an issue watch reports a close and a comment", async ({ page }) => {
   await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("cli/cli");
   await expect(page.getByLabel("Issue number")).toHaveValue("9400");
   await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByRole("checkbox", { name: "Report reactions" }).check();
   await page.getByLabel("Name").fill(`Issue ${t}`);
   await page.getByRole("button", { name: "Create watch" }).click();
   await expect(page.getByRole("heading", { level: 1, name: `Issue ${t}` })).toBeVisible();
@@ -691,6 +692,8 @@ test("an issue watch reports a close and a comment", async ({ page }) => {
     .click();
   await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
     [
+      /\+1 👍 on a comment of issue #9400/,
+      /\+2 ❤️ on issue #9400/,
       /Issue #9400 commented by maintainer/,
       /Issue #9400 labels: bug, wontfix/,
       /Issue #9400 closed \(not planned\)/,

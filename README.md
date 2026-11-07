@@ -310,7 +310,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   due at once; items opened before that first run succeeds are in its baseline and are not reported. A paused
   watch takes the baseline when it resumes. To follow an item once opened, add a `github_pr`, `github_issue` or `github_discussion` watch.
 - The box `new_discussions` (config, default `false`) adds `discussion.opened`, one per discussion opened after the
-  box is checked, with the same baseline and due-now rules (list `discussions` in the state); only a number above every stored one is new, so an issue converted to a discussion, which keeps its lower number, is not reported. Each run then
+  box is checked, with the same baseline and due-now rules (list `discussions` in the state); only a number above every stored one is new. An issue converted to a discussion keeps its number: it is skipped when that number is at or below the highest stored, and reported otherwise (a recent issue, or any conversion while the stored list is empty). Each run then
   makes 2 to 3 more requests (1 with at most one discussion): a `per_page=1` probe whose `Link` last page number
   is the total, then the last 100-item page of the list (oldest first) and the page before it when the last holds
   fewer than 50. Only those pages are the window; a `Link` without a readable last page number fails the run. Payload: `number`, `title`,
@@ -637,6 +637,11 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   and delete version 17 from `goose_db_version`: a new-version pod starting before that would apply 17
   again. Shares come back as an empty table. Only a backup taken before the upgrade restores the deleted
   rules, inbox items and deliveries.
+- Discussions and reactions (migration 18). Rollback: deploy the older image first; its `github_discussion`
+  watches then fail every run and their detail page does not render. Delete those watches, run migration
+  18's `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 18 from
+  `goose_db_version`. Stored states keep the new keys, which the older image ignores; saving a watch from its
+  UI drops the `new_discussions` and `reactions` boxes.
 
 ## Endpoints
 

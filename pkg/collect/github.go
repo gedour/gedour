@@ -176,7 +176,7 @@ const minDiscussions = 50
 
 // githubDiscussions reads the newest discussions. The list is oldest first and ignores sort, so a per_page=1 probe
 // gives the total as its last page number; the window is the last per_page=100 page, and the page before it when
-// the last holds fewer than minDiscussions. The probe item stays out: page 1's old numbers would drag the floor down.
+// the last holds fewer than minDiscussions.
 // ponytail: a window of 50 at least; past that many opened between two runs, the oldest may go unreported.
 func githubDiscussions(ctx context.Context, f *Fetcher, cfg watch.GitHubRepoConfig, h http.Header) ([]int, map[int]Event, error) {
 	base := fmt.Sprintf("%s/repos/%s/discussions", cfg.APIURL, cfg.Repo)

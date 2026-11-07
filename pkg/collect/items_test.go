@@ -519,6 +519,9 @@ func TestNewDiscussions(t *testing.T) {
 		{&[]int{}, &[]int{3}, []int{3}},
 		{&[]int{1248, 1200, 500}, &[]int{1250, 1249, 1248, 1199, 1100, 500}, []int{1249, 1250}},
 		{&[]int{12, 11, 10}, &[]int{12, 11, 10, 3}, nil},
+		// A converted issue numbered above every stored discussion is reported, as on an empty list.
+		{&[]int{1002, 1001, 1000}, &[]int{1300, 1002, 1001, 1000}, []int{1300}},
+		{&[]int{}, &[]int{30, 20, 10}, []int{10, 20, 30}},
 	} {
 		if got := newDiscussions(tt.old, tt.cur); !slices.Equal(got, tt.want) {
 			t.Errorf("newDiscussions(%v, %v) = %v, want %v", tt.old, tt.cur, got, tt.want)

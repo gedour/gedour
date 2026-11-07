@@ -1,6 +1,6 @@
 # 011 — GitHub discussions and reactions
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-07
 
@@ -38,11 +38,11 @@ one of its recent comments produces one event.
   box.
 - New kind `github_discussion`: config `repo`, `number`, `api_url`, `reactions`; credential
   `github_token`; default schedule `1h`.
-- `github_discussion` state: `state` (`open`, `closed`), `state_reason` (as GitHub reports it, e.g.
+- `github_discussion` state: `number`, `state` (`open`, `closed`), `state_reason` (as GitHub reports it, e.g.
   `resolved`, `outdated`, `duplicate`, or empty), `title`, `category`, `labels` (sorted), `answer_url`
-  (empty when none), `url`, and the 20 newest comments, read with `lastPage` and normalized like issue
-  comments. The comments list is flat and holds replies too: a reply carries `reply_to`, the URL of its
-  parent comment.
+  (empty when none), `answer_chosen_by` (for `chosen_by`), `url`, and the 20 newest comments, read with
+  `lastPage` and normalized like issue comments. The comments list is flat and holds replies too: a reply
+  carries `reply_to`, the URL of its parent comment.
 - `github_discussion` events: `discussion.state_changed` (from/to plus `state_reason`, also on a reason
   change while closed, like `issue.state_changed`), `discussion.answer_changed` (from/to answer URLs,
   plus `chosen_by`), `discussion.labels_changed` (from/to), `discussion.commented` (author, excerpt, and
@@ -74,8 +74,8 @@ one of its recent comments produces one event.
 - The GraphQL API, and a fallback to it if GitHub removes the REST endpoints.
 - GitHub Enterprise Server: the endpoints were checked on github.com only.
 - Who reacted: the REST `/reactions` endpoints answer 404 for discussions, and the counts are enough.
-- Reactions on comments outside the 20 stored, on review bodies, and on items reported by the new-items
-  boxes of `github_repo`.
+- Reactions on comments outside the 20 stored, on review bodies (and on a PR entry folding several inline
+  comments of one review), and on items reported by the new-items boxes of `github_repo`.
 - Reactions on GitLab items.
 - Discussion upvotes (`upvote_count` is null in the REST answer), category changes, locks, title or body
   edits.
@@ -84,43 +84,43 @@ one of its recent comments produces one event.
 
 ## Acceptance criteria
 
-- [ ] **AC1** A `github_repo` watch with `new_discussions` off makes exactly the requests it made before
+- [x] **AC1** A `github_repo` watch with `new_discussions` off makes exactly the requests it made before
   this spec, and its events do not change.
-- [ ] **AC2** With `new_discussions` on, a discussion opened between two runs produces one
+- [x] **AC2** With `new_discussions` on, a discussion opened between two runs produces one
   `discussion.opened` with the payload above.
-- [ ] **AC3** The first run after the box is checked emits no `discussion.opened`; checking it makes the
+- [x] **AC3** The first run after the box is checked emits no `discussion.opened`; checking it makes the
   watch due now, like `new_issues`.
-- [ ] **AC4** A last page of 14 discussions plus a full page before it: a discussion opened at the end of
+- [x] **AC4** A last page of 14 discussions plus a full page before it: a discussion opened at the end of
   the page before it is reported, and the run made at most 3 extra requests.
-- [ ] **AC5** A discussion that reappears in the window with a number below the oldest stored emits
+- [x] **AC5** A discussion that reappears in the window with a number below the oldest stored emits
   nothing.
-- [ ] **AC6** A 410 or a failing call on the discussions list fails the run with no partial state and no
+- [x] **AC6** A 410 or a failing call on the discussions list fails the run with no partial state and no
   events; the 410 error names the "new discussions" box.
-- [ ] **AC7** A `github_discussion` watch reports a close as `discussion.state_changed` with
+- [x] **AC7** A `github_discussion` watch reports a close as `discussion.state_changed` with
   `state_reason`, a reopen the same way, a chosen or removed answer as `discussion.answer_changed`, a
   label change as `discussion.labels_changed`, and each new comment or reply as `discussion.commented`
   (`reply_to` set on the reply); its first run emits nothing.
-- [ ] **AC8** A `github_discussion` watch on an issue number fails with an error that names `github_issue`
+- [x] **AC8** A `github_discussion` watch on an issue number fails with an error that names `github_issue`
   and `github_pr`.
-- [ ] **AC9** The API refuses a `github_discussion` config with a bad `repo` or a non-positive `number`,
+- [x] **AC9** The API refuses a `github_discussion` config with a bad `repo` or a non-positive `number`,
   with field errors like `github_issue`'s.
-- [ ] **AC10** Pasting `https://github.com/o/r/discussions/12` in the watch form picks
+- [x] **AC10** Pasting `https://github.com/o/r/discussions/12` in the watch form picks
   `github_discussion` with repo `o/r` and number 12.
-- [ ] **AC11** With `reactions` off, `github_issue`, `github_pr` and `github_discussion` watches make the
+- [x] **AC11** With `reactions` off, `github_issue`, `github_pr` and `github_discussion` watches make the
   same requests as before and their stored states do not change.
-- [ ] **AC12** With `reactions` on, two hearts added to the item and one `+1` added to a stored comment
+- [x] **AC12** With `reactions` on, two hearts added to the item and one `+1` added to a stored comment
   between two runs produce two `<kind>.reacted` events: one with `target: "item"` and
   `added: {"heart": 2}`, one with `target: "comment"`, the comment URL and `added: {"+1": 1}`. This
   holds for each of the three kinds.
-- [ ] **AC13** The first run after `reactions` is checked, and the first run of a state stored before
+- [x] **AC13** The first run after `reactions` is checked, and the first run of a state stored before
   this spec, emit no `*.reacted`; a reaction removed between two runs emits nothing.
-- [ ] **AC14** A `github_pr` watch with `reactions` on makes one extra request per run
+- [x] **AC14** A `github_pr` watch with `reactions` on makes one extra request per run
   (`/issues/{n}`); `github_issue` and `github_discussion` make none.
 - [ ] ~~**AC15** A rule filter `event.payload.author == "alice"` routes a `pr.reacted` fixture on alice's
   comment and drops one on bob's.~~
-- [ ] **AC16** Telegram, email, Talk and the UI show one readable line for each new event type (e.g.
+- [x] **AC16** Telegram, email, Talk and the UI show one readable line for each new event type (e.g.
   "Discussion #12 opened by alice", "Answer chosen on discussion #12", "+2 ❤️ on issue #12").
-- [ ] **AC17** The form hints state the extra request counts; a11y, 375 px and CSP e2e checks pass on the
+- [x] **AC17** The form hints state the extra request counts; a11y, 375 px and CSP e2e checks pass on the
   `github_repo` and `github_discussion` forms.
 
 ## Phases
@@ -168,7 +168,8 @@ numbers with the discussions box on; item states grow by 8 counts per tracked ta
   instead of downloading the oldest 100 discussions.
 - A discussion is new only above the highest number stored, not the lowest as for issues: GitHub lists
   a converted issue among the newest with its old lower number, and that floor would turn one deletion
-  into up to 100 false `discussion.opened`. A converted issue is never reported as a discussion.
+  into up to 100 false `discussion.opened`. A converted issue keeps its number: it is skipped at or
+  below the highest stored, and reported otherwise (a recent issue, or any conversion on an empty list).
 - A 410 fails the run, like a failing issues call (008-AC8), instead of hiding the box's failure behind
   release events that still flow.
 - Reaction events on rises only: a removal is rarely news, and reporting it would double the noise.

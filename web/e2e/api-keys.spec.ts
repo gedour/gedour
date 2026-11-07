@@ -35,7 +35,7 @@ test("create, reveal, list and revoke an API key", async ({ page, baseURL }) => 
   const key = await reveal.getByLabel("API key", { exact: true }).inputValue();
   expect(key).toMatch(/^gdr_[A-Za-z0-9_-]{43}$/);
   await expect(reveal.getByLabel("Client setup", { exact: true })).toHaveValue(
-    `claude mcp add --transport http gedour ${baseURL}/mcp --header "Authorization: Bearer ${key}"`,
+    `claude mcp add --scope user --transport http gedour ${baseURL}/mcp --header "Authorization: Bearer ${key}"`,
   );
   await reveal.getByRole("button", { name: "Copy API key" }).click();
   await expect(reveal.getByRole("button", { name: "Copied API key" })).toBeVisible();

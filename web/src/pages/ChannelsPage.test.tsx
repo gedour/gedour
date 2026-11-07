@@ -578,4 +578,251 @@ describe("ChannelsPage", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Hide" }));
     expect(screen.queryByRole("region", { name: "Test run of Runs" })).not.toBeInTheDocument();
   });
+
+  // 012-AC11: Delivery is offered on the four digest types only; Digest shows its times and zone.
+  it("creates a digest channel with its times and time zone, checked before sending", async () => {
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(channel({ name: "Phone", type: "telegram" }), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    const digest = () => within(dialog).queryByRole("radio", { name: /^Digest/ });
+    for (const kind of ["Webhook", "Script"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(digest()).not.toBeInTheDocument();
+    }
+    for (const kind of ["Email", "Web Push", "Nextcloud Talk", "Telegram"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(within(dialog).getByRole("radio", { name: /^Immediate/ })).toBeChecked();
+    }
+    expect(within(dialog).queryByRole("list", { name: "Digest times" })).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Phone");
+    await userEvent.type(within(dialog).getByLabelText("Chat ID"), "-1001");
+    await userEvent.type(within(dialog).getByLabelText("Bot token"), "123:abc");
+    await userEvent.click(digest() as HTMLElement);
+    expect(within(dialog).getByLabelText("Time 1")).toHaveValue("09:00");
+    expect(within(dialog).getByRole("button", { name: "Remove time 1" })).toBeDisabled();
+    const zone = within(dialog).getByLabelText("Time zone");
+    expect(zone).toHaveValue(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(zone).toHaveAccessibleDescription("The times are local to this zone.");
+
+    // A duplicate, an empty row and an unknown zone are refused here, as the server would.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add a time" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add a time" }));
+    await userEvent.type(within(dialog).getByLabelText("Time 2"), "09:00");
+    await userEvent.clear(zone);
+    await userEvent.type(zone, "Mars/Olympus");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    expect(within(dialog).getByText("09:00 is already listed")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Time 2")).toHaveAttribute("aria-invalid", "true");
+    expect(within(dialog).getByLabelText("Time 3")).toHaveAttribute("aria-invalid", "true");
+    // Each row is described by its own error only.
+    expect(within(dialog).getByLabelText("Time 1")).not.toHaveAttribute("aria-describedby");
+    expect(within(dialog).getByLabelText("Time 2")).toHaveAccessibleDescription(
+      "09:00 is already listed",
+    );
+    expect(within(dialog).getByLabelText("Time 3")).toHaveAccessibleDescription(
+      "a local time as HH:MM, e.g. 09:00",
+    );
+    expect(within(dialog).getByText("an IANA time zone, e.g. Europe/Paris")).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/channels", "POST")).toBeUndefined();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove time 3" }));
+    // The rows changed: their errors go with them.
+    expect(within(dialog).queryByText("09:00 is already listed")).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Time 2")).not.toHaveAttribute("aria-invalid");
+    const second = within(dialog).getByLabelText("Time 2");
+    await userEvent.clear(second);
+    await userEvent.type(second, "18:00");
+    await userEvent.clear(zone);
+    await userEvent.type(zone, "Europe/Paris");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+      name: "Phone",
+      type: "telegram",
+      config: {
+        chat_id: "-1001",
+        silent: false,
+        delivery: "digest",
+        at: ["09:00", "18:00"],
+        tz: "Europe/Paris",
+      },
+      secret: "123:abc",
+    });
+  });
+
+  // 012-AC11: an empty zone is sent as UTC, 24 rows is the cap, and a server error lands on its row.
+  it("caps the digest times and places the server's schedule errors", async () => {
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? problem(400, "invalid channel", [
+              { location: "body.config.at[0]", message: "server says no" },
+              { location: "body.config.delivery", message: "digest refused" },
+            ])
+          : Response.json({ items: [] }),
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByText("Email"));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^Digest/ }));
+    await userEvent.clear(within(dialog).getByLabelText("Time zone"));
+    const add = within(dialog).getByRole("button", { name: "Add a time" });
+    for (let i = 1; i < 24; i++) await userEvent.click(add);
+    expect(add).toBeDisabled();
+    for (let i = 24; i > 1; i--)
+      await userEvent.click(within(dialog).getByRole("button", { name: `Remove time ${i}` }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    expect(await within(dialog).findByText("server says no")).toBeInTheDocument();
+    expect(within(dialog).getByText("digest refused")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    for (const radio of ["Immediate", "Digest"])
+      expect(
+        within(dialog).getByRole("radio", { name: new RegExp(`^${radio}`) }),
+      ).toHaveAccessibleDescription("digest refused");
+    expect(within(dialog).getByLabelText("Time 1")).toHaveAccessibleDescription("server says no");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Add a time" }));
+    expect(within(dialog).queryByText("server says no")).not.toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toMatchObject({
+      config: { delivery: "digest", at: ["09:00"], tz: "UTC" },
+    });
+  });
+
+  // 012-AC11: the card names the schedule; editing shows it back, and Immediate drops its keys.
+  it("shows and edits a digest channel's schedule", async () => {
+    const tg = channel({
+      type: "telegram",
+      config: {
+        chat_id: "-1001",
+        silent: true,
+        delivery: "digest",
+        at: ["09:00", "18:00"],
+        tz: "Europe/Paris",
+      },
+    });
+    const fn = mockApi({
+      "/api/v1/channels": { items: [tg] },
+      "/api/v1/channels/c1": Response.json(tg),
+    });
+    renderApp("/channels");
+    const list = await screen.findByRole("list", { name: "Channels" });
+    expect(within(list).getByText("Digest at 09:00, 18:00 (Europe/Paris)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Edit Deploy bot" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("radio", { name: /^Digest/ })).toBeChecked();
+    expect(within(dialog).getByLabelText("Time 1")).toHaveValue("09:00");
+    expect(within(dialog).getByLabelText("Time 2")).toHaveValue("18:00");
+    expect(within(dialog).getByLabelText("Time zone")).toHaveValue("Europe/Paris");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
+      name: "Deploy bot",
+      config: tg.config,
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Edit Deploy bot" }));
+    const again = screen.getByRole("dialog");
+    await userEvent.click(within(again).getByRole("radio", { name: /^Immediate/ }));
+    expect(within(again).queryByLabelText("Time zone")).not.toBeInTheDocument();
+    await userEvent.click(within(again).getByRole("button", { name: "Save channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
+      name: "Deploy bot",
+      config: { chat_id: "-1001", silent: true },
+    });
+  });
+
+  // 012-AC11: a skipped delivery shows its reason, not as an error, and has no retry.
+  it("shows a skipped delivery with its reason", async () => {
+    const fn = mockApi({
+      "/api/v1/channels": { items: [channel()] },
+      "/api/v1/deliveries": {
+        items: [
+          delivery(4, {
+            status: "skipped",
+            last_error: "not sent: read in the inbox before the digest",
+          }),
+        ],
+      },
+    });
+    renderApp("/channels");
+    const table = await screen.findByRole("table", { name: "Deliveries" });
+    const reason = await within(table).findByText("not sent: read in the inbox before the digest", {
+      selector: "summary",
+    });
+    expect(reason).toHaveClass("text-muted");
+    expect(reason).not.toHaveClass("text-rose-700");
+    expect(within(table).getAllByRole("row")[1]).toHaveTextContent("Skipped");
+    expect(within(table).queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("Status"))
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Any status", "Pending", "Sent", "Retrying", "Failed", "Skipped"]);
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "skipped");
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/deliveries")?.url.searchParams.get("status")).toBe("skipped"),
+    );
+  });
+
+  // 012-AC11: focus follows the rows: a new row takes it, a removed one hands it back.
+  it("moves focus as digest times are added and removed", async () => {
+    mockApi();
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByText("Telegram"));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^Digest/ }));
+    const add = within(dialog).getByRole("button", { name: "Add a time" });
+    await userEvent.click(add);
+    await userEvent.click(add);
+    expect(document.activeElement).toBe(within(dialog).getByLabelText("Time 3"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove time 3" }));
+    expect(document.activeElement).toBe(within(dialog).getByLabelText("Time 2"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove time 1" }));
+    expect(document.activeElement).toBe(add);
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  // 012-AC11: Digest picked on a digest type, then a type without it: nothing of the schedule is sent.
+  it("drops the schedule when the type has no digest", async () => {
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(channel(), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByText("Telegram"));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^Digest/ }));
+    await userEvent.click(within(dialog).getByText("Webhook"));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Hook");
+    await userEvent.type(within(dialog).getByLabelText("URL"), "https://hooks.example.com/x");
+    await userEvent.type(within(dialog).getByLabelText("Signing secret"), "s3cret");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+        name: "Hook",
+        type: "webhook",
+        config: { url: "https://hooks.example.com/x" },
+        secret: "s3cret",
+      }),
+    );
+  });
 });

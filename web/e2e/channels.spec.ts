@@ -54,6 +54,40 @@ test("create, test, edit and delete a Nextcloud Talk channel", async ({ page }) 
   await expect(card).toHaveCount(0);
 });
 
+// 012-AC11: a digest channel from the UI: times and zone saved, summarized on its card and shown back on edit.
+test("create a digest channel and see its schedule", async ({ page }) => {
+  const name = `Digest ${tag()}`;
+  await page.goto("/channels");
+  await page.getByRole("button", { name: "New channel" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "New channel" });
+  await dialog.getByText("Telegram", { exact: true }).click();
+  await dialog.getByLabel("Name").fill(name);
+  await dialog.getByLabel("Chat ID").fill(`-100${Date.now()}`);
+  await dialog.getByLabel("Bot token").fill("123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+  await dialog.getByRole("radio", { name: /^Digest/ }).check();
+  await dialog.getByRole("button", { name: "Add a time" }).click();
+  await dialog.getByLabel("Time 2", { exact: true }).fill("18:00");
+  await dialog.getByLabel("Time zone").fill("Europe/Paris");
+  await dialog.getByRole("button", { name: "Create channel" }).click();
+  await expect(dialog).toBeHidden();
+
+  const card = page.getByRole("listitem").filter({ hasText: name });
+  await expect(card).toContainText("Digest at 09:00, 18:00 (Europe/Paris)");
+  await card.getByRole("button", { name: `Edit ${name}` }).click();
+  const edit = page.getByRole("dialog", { name: /^Edit/ });
+  await expect(edit.getByRole("radio", { name: /^Digest/ })).toBeChecked();
+  await expect(edit.getByLabel("Time 2", { exact: true })).toHaveValue("18:00");
+  await expect(edit.getByLabel("Time zone")).toHaveValue("Europe/Paris");
+  await edit.getByRole("button", { name: "Cancel" }).click();
+
+  await card.getByRole("button", { name: `Delete ${name}` }).click();
+  await page
+    .getByRole("dialog", { name: /^Delete/ })
+    .getByRole("button", { name: /^Delete/ })
+    .click();
+  await expect(card).toHaveCount(0);
+});
+
 test.describe("as bob", () => {
   // The test button is rate limited per user: alice's test above must not hold this one back.
   test.use({ storageState: BOB_AUTH_FILE });

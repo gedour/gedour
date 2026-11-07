@@ -63,7 +63,7 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery (\"immediate\", the default, or \"digest\"), at (digest: 1 to 24 local times \"HH:MM\"), tz (digest: IANA time zone, default UTC)"`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`

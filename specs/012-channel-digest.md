@@ -1,6 +1,6 @@
 # 012 — Channel digests
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-07
 
@@ -33,8 +33,9 @@ A digest with nothing left to list sends nothing.
   event read between two retries drops out of the retry.
 - One digest message per channel per scheduled time: header with the count, then events grouped by watch,
   each line the event summary and its upstream link, oldest first.
-- Length cap per channel type (Telegram 4096, Talk 32000 characters); past it the message ends with
-  "+N more" and a link to the gedour inbox (`GEDOUR_PUBLIC_URL`).
+- Length cap per channel type (Telegram 4096 bytes, Talk 31000 characters, below its 32000 limit; email
+  1000 events or 256 KiB); past it the message ends with "+N more" and a link to the gedour inbox
+  (`GEDOUR_PUBLIC_URL`).
 - Telegram and Talk `silent` (spec 003) applies to digests.
 - A digest's deliveries are sent together, or failed together with the existing backoff taken from the
   batch's highest attempt; each delivery is dead after its own `MaxAttempts`.
@@ -54,30 +55,30 @@ A digest with nothing left to list sends nothing.
 
 ## Acceptance criteria
 
-- [ ] **AC1** A channel saved with `delivery: digest` and no `at`, more than 24 times, a time that is not
+- [x] **AC1** A channel saved with `delivery: digest` and no `at`, more than 24 times, a time that is not
   `HH:MM`, or an unknown `tz` is a 400; `digest` on a webhook or script channel is a 400.
-- [ ] **AC2** Given a digest channel at 09:00 and 18:00 Europe/Paris, an event routed at 10:12 Paris time
+- [x] **AC2** Given a digest channel at 09:00 and 18:00 Europe/Paris, an event routed at 10:12 Paris time
   gets a delivery due at 18:00 Paris time; one routed at 18:30 is due at 09:00 the next day. A DST change
   between routing and the scheduled time keeps the local time.
-- [ ] **AC3** At a scheduled time, every due delivery of the channel goes out in one message, grouped by
+- [x] **AC3** At a scheduled time, every due delivery of the channel goes out in one message, grouped by
   watch, oldest first; all its deliveries end `sent` with the same `sent_at`.
-- [ ] **AC4** A due delivery whose inbox item for the channel owner is read or archived is not listed and
+- [x] **AC4** A due delivery whose inbox item for the channel owner is read or archived is not listed and
   ends `skipped`; if none is left, nothing is sent.
-- [ ] **AC5** An item marked unread again before the scheduled time is listed.
-- [ ] **AC6** An event taken by a high priority rule on a digest channel is sent alone at once and is not
+- [x] **AC5** An item marked unread again before the scheduled time is listed.
+- [x] **AC6** An event taken by a high priority rule on a digest channel is sent alone at once and is not
   listed in the next digest.
-- [ ] **AC7** A failed digest send retries with the existing backoff; an event read before the retry is
+- [x] **AC7** A failed digest send retries with the existing backoff; an event read before the retry is
   skipped in it; each delivery is `dead` after its own `MaxAttempts`, so the deliveries that shared every
   attempt die together.
-- [ ] **AC8** A digest longer than the channel type's cap is cut on a whole line and ends with "+N more"
+- [x] **AC8** A digest longer than the channel type's cap is cut on a whole line and ends with "+N more"
   and the inbox link.
-- [ ] **AC9** Changing the schedule moves waiting deliveries to the new next time; switching to
+- [x] **AC9** Changing the schedule moves waiting deliveries to the new next time; switching to
   `immediate` makes them due at once.
-- [ ] **AC10** Two replicas delivering side by side never send the same digest twice nor split one digest
+- [x] **AC10** Two replicas delivering side by side never send the same digest twice nor split one digest
   into two messages.
-- [ ] **AC11** The deliveries list and API show `skipped` with its reason; "Send test" on a digest channel
+- [x] **AC11** The deliveries list and API show `skipped` with its reason; "Send test" on a digest channel
   sends a sample digest.
-- [ ] **AC12** A Web Push digest channel sends one notification per scheduled time to its devices, titled
+- [x] **AC12** A Web Push digest channel sends one notification per scheduled time to its devices, titled
   with the unread count, opening the inbox on click; a retry reaches only the devices that have not
   accepted it (spec 010).
 

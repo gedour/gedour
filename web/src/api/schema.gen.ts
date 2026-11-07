@@ -993,7 +993,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery ("immediate", the default, or "digest"), at (digest: 1 to 24 local times "HH:MM"), tz (digest: IANA time zone, default UTC) */
       config: {
         [key: string]: unknown;
       };
@@ -1170,7 +1170,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery ("immediate", the default, or "digest"), at (digest: 1 to 24 local times "HH:MM"), tz (digest: IANA time zone, default UTC) */
       config: {
         [key: string]: unknown;
       };

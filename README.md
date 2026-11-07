@@ -400,6 +400,15 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `disable_notification: true`, which notifies without sound. Email: multipart text + HTML through
   the instance's SMTP server, at most 10 recipients per channel.
 - Nextcloud Talk: see [below](#nextcloud-talk-channels).
+- Digest (Telegram, Nextcloud Talk, email, Web Push): config `delivery: digest` with `at`, 1 to 24 local
+  times (`HH:MM`), and `tz`, an IANA time zone (default `UTC`). Deliveries wait for the channel's next
+  time; then one message lists them, grouped by watch, oldest first, cut on a whole line past the type's cap
+  (Telegram 4096 bytes, Talk 31000 characters, email 256 KiB or 1000 events) with "+N more" and the inbox
+  link. Web Push sends one notification "N unread events" opening the inbox. Only events still unread in the
+  owner's inbox are listed: one read or archived meanwhile ends `skipped` (shown as Skipped) with the reason,
+  and an empty digest sends nothing. An event of a high priority rule goes out at once, alone. Silent
+  applies. Editing the times moves waiting deliveries to the new next time; switching to `immediate` sends
+  them at once. "Send test" sends a sample digest. The default `immediate` sends each event as it is routed.
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing

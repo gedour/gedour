@@ -10,7 +10,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import {
@@ -35,7 +35,18 @@ import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { Field, inputClass } from "@/components/ui/field";
 import { useToast } from "@/hooks/toast";
 import { DEVICES_KEY, useAddBrowser, usePushDevices, usePushUnavailable } from "@/hooks/usePush";
-import { CHANNEL_KINDS, channelKind, channelTarget } from "@/lib/channels";
+import {
+  browserTimeZone,
+  CHANNEL_KINDS,
+  channelKind,
+  channelTarget,
+  DELIVERY_STATUS,
+  DIGEST_TYPES,
+  digestErrors,
+  digestSummary,
+  MAX_DIGEST_TIMES,
+  timeZones,
+} from "@/lib/channels";
 import { summarizeEvent } from "@/lib/events";
 import { fieldErrors, problemText, unplaced } from "@/lib/problems";
 import { defaultDeviceName, pushBlocked } from "@/lib/push";
@@ -143,6 +154,7 @@ function ChannelCard({
   const toast = useToast();
   const client = useQueryClient();
   const script = c.type === "script";
+  const digest = digestSummary(c.config);
   const test = useMutation({
     mutationFn: () => testChannel(c.id),
     onSuccess: (r) => {
@@ -171,6 +183,7 @@ function ChannelCard({
           <span className="truncate text-xs text-muted">
             {channelKind(c.type).label} · <span className="font-mono">{target}</span>
           </span>
+          {digest && <span className="truncate text-xs text-muted">{digest}</span>}
         </div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -338,7 +351,14 @@ function ChannelForm({
   const toast = useToast();
   const available = types.data?.find((t) => t.type === type);
 
-  const config = () => {
+  const [digest, setDigest] = useState(cfg.delivery === "digest");
+  const [times, setTimes] = useState<string[]>(
+    Array.isArray(cfg.at) ? cfg.at.map(String) : ["09:00"],
+  );
+  const [tz, setTz] = useState(typeof cfg.tz === "string" ? cfg.tz : browserTimeZone);
+  const digestOn = digest && DIGEST_TYPES.includes(type);
+
+  const typeConfig = () => {
     if (type === "telegram") return { chat_id: chatId, silent };
     if (type === "nextcloud_talk") return { url, conversation, silent };
     if (type === "email") return { to: splitRecipients(to) };
@@ -346,6 +366,11 @@ function ChannelForm({
     if (type === "web_push") return { devices: picked ?? "all", silent };
     return { url };
   };
+  // Immediate is the server default: its keys are left out, so the payload stays as before 012.
+  const config = () =>
+    digestOn
+      ? { ...typeConfig(), delivery: "digest", at: times, tz: tz.trim() || "UTC" }
+      : typeConfig();
   const save = useMutation({
     // The response may hold the signing secret: nothing keeps it once this form is gone.
     gcTime: 0,
@@ -372,8 +397,9 @@ function ChannelForm({
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    setErrors({});
-    save.mutate();
+    const local = digestOn ? digestErrors(times, tz.trim()) : {};
+    setErrors(local);
+    if (Object.keys(local).length === 0) save.mutate();
   };
 
   if (signing)
@@ -396,12 +422,17 @@ function ChannelForm({
     "to",
     "script_id",
     "devices",
+    "delivery",
+    "at",
+    "tz",
   ];
   return (
     <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
       {unplaced(errors, [
         ...shown,
-        ...Object.keys(errors).filter((k) => k.startsWith("to[") || k.startsWith("devices[")),
+        ...Object.keys(errors).filter(
+          (k) => k.startsWith("to[") || k.startsWith("devices[") || k.startsWith("at["),
+        ),
       ]).map((m) => (
         <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
           {m}
@@ -722,6 +753,25 @@ function ChannelForm({
           )}
         </Field>
       )}
+      {DIGEST_TYPES.includes(type) && (
+        <DeliveryFields
+          digest={digest}
+          setDigest={setDigest}
+          times={times}
+          setTimes={(v) => {
+            setTimes(v);
+            // A schedule error is about the rows that were there: it goes when they change.
+            setErrors((e) =>
+              Object.fromEntries(
+                Object.entries(e).filter(([k]) => k !== "at" && !k.startsWith("at[")),
+              ),
+            );
+          }}
+          tz={tz}
+          setTz={setTz}
+          errors={errors}
+        />
+      )}
       <DialogActions>
         <Button type="button" variant="ghost" onClick={onClose}>
           Cancel
@@ -735,6 +785,150 @@ function ChannelForm({
         </Button>
       </DialogActions>
     </form>
+  );
+}
+
+/** 012: immediate or digest, and the digest's daily times and time zone. */
+function DeliveryFields({
+  digest,
+  setDigest,
+  times,
+  setTimes,
+  tz,
+  setTz,
+  errors,
+}: {
+  digest: boolean;
+  setDigest: (v: boolean) => void;
+  times: string[];
+  setTimes: (v: string[]) => void;
+  tz: string;
+  setTz: (v: string) => void;
+  errors: Record<string, string>;
+}) {
+  const [zones] = useState(timeZones);
+  const id = useId();
+  const zoneList = `${id}-zones`;
+  const deliveryErrorId = `${id}-delivery-error`;
+  const list = useRef<HTMLUListElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  // Row to focus once times re-render: -1 is the Add button.
+  const focusRow = useRef<number | null>(null);
+  useEffect(() => {
+    const i = focusRow.current;
+    if (i === null) return;
+    focusRow.current = null;
+    (i < 0 ? addButton.current : list.current?.querySelectorAll("input")[i])?.focus();
+  }, [times]);
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="mb-1.5 text-sm font-medium">Delivery</legend>
+      {[
+        { on: false, label: "Immediate", hint: "One message per event, as it comes." },
+        {
+          on: true,
+          label: "Digest",
+          hint: "One message at set times, listing the events still unread. High priority goes out at once.",
+        },
+      ].map((o) => (
+        <label key={o.label} className="flex items-start gap-2 text-sm">
+          <input
+            type="radio"
+            name="delivery"
+            checked={digest === o.on}
+            aria-describedby={errors.delivery ? deliveryErrorId : undefined}
+            onChange={() => setDigest(o.on)}
+            className="mt-0.5 accent-beacon"
+          />
+          <span>
+            {o.label} <span className="text-xs text-muted">{o.hint}</span>
+          </span>
+        </label>
+      ))}
+      {errors.delivery && (
+        <p id={deliveryErrorId} className="text-sm text-rose-700 dark:text-rose-300">
+          {errors.delivery}
+        </p>
+      )}
+      {digest && (
+        <div className="flex flex-col gap-3 pl-6">
+          <ul ref={list} aria-label="Digest times" className="flex flex-col gap-1.5">
+            {times.map((v, i) => {
+              const error = errors[`at[${i}]`];
+              const errorId = `${id}-at-${i}`;
+              return (
+                <li key={i} className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="time"
+                    aria-label={`Time ${i + 1}`}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? errorId : undefined}
+                    value={v}
+                    onChange={(e) => setTimes(times.map((x, j) => (j === i ? e.target.value : x)))}
+                    className={cn(inputClass, "w-32 font-mono")}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Remove time ${i + 1}`}
+                    disabled={times.length === 1}
+                    onClick={() => {
+                      focusRow.current = i - 1;
+                      setTimes(times.filter((_, j) => j !== i));
+                    }}
+                  >
+                    <Trash2 aria-hidden />
+                  </Button>
+                  {error && (
+                    <p id={errorId} className="w-full text-sm text-rose-700 dark:text-rose-300">
+                      {error}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {errors.at && <p className="text-sm text-rose-700 dark:text-rose-300">{errors.at}</p>}
+          <Button
+            ref={addButton}
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            disabled={times.length >= MAX_DIGEST_TIMES}
+            onClick={() => {
+              focusRow.current = times.length;
+              setTimes([...times, ""]);
+            }}
+          >
+            <Plus aria-hidden />
+            Add a time
+          </Button>
+          <Field label="Time zone" error={errors.tz} hint="The times are local to this zone.">
+            {(p) => (
+              <>
+                <input
+                  {...p}
+                  list={zoneList}
+                  value={tz}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="UTC"
+                  onChange={(e) => setTz(e.target.value)}
+                  className={cn(inputClass, "font-mono")}
+                />
+                <datalist id={zoneList}>
+                  {zones.map((z) => (
+                    <option key={z} value={z} />
+                  ))}
+                </datalist>
+              </>
+            )}
+          </Field>
+        </div>
+      )}
+    </fieldset>
   );
 }
 
@@ -853,10 +1047,9 @@ function DeleteDialog({ channel, onClose }: { channel: Channel | null; onClose: 
 
 const STATUSES: { value: DeliveryStatus | ""; label: string }[] = [
   { value: "", label: "Any status" },
-  { value: "pending", label: "Pending" },
-  { value: "sent", label: "Sent" },
-  { value: "failed", label: "Retrying" },
-  { value: "dead", label: "Failed" },
+  ...(Object.entries(DELIVERY_STATUS) as [DeliveryStatus, { label: string }][]).map(
+    ([value, s]) => ({ value, label: s.label }),
+  ),
 ];
 
 function DeliveriesSection({ channels }: { channels: Channel[] }) {
@@ -1029,7 +1222,15 @@ function DeliveryTable({ items, loading }: { items: Delivery[]; loading: boolean
                       {d.logs != null && <DeliveryLogs logs={d.logs} />}
                       {d.last_error ? (
                         <details>
-                          <summary className="cursor-pointer truncate font-mono text-xs text-rose-700 marker:text-muted dark:text-rose-300">
+                          <summary
+                            className={cn(
+                              "cursor-pointer truncate font-mono text-xs marker:text-muted",
+                              // 012: a skipped delivery's reason is not a failure.
+                              d.status === "skipped"
+                                ? "text-muted"
+                                : "text-rose-700 dark:text-rose-300",
+                            )}
+                          >
                             {d.last_error.split("\n")[0]}
                           </summary>
                           <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-bg p-2 font-mono text-xs break-words whitespace-pre-wrap">

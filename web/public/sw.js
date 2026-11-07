@@ -15,7 +15,8 @@ function showPush(data) {
     body: m.body || "",
     tag: m.tag || undefined,
     silent: m.silent === true,
-    icon: "/favicon.svg",
+    // Not the SVG favicon: Chrome resolves showNotification yet drops some notifications with an SVG icon.
+    icon: "/icon-192.png",
     data: { url: m.url || "/inbox" },
   });
 }

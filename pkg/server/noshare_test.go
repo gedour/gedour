@@ -52,9 +52,9 @@ func TestNoWatchSharingLeft(t *testing.T) {
 // Sharing in prose: the lock modes, the audit target type of old entries, unrelated wording and the upgrade
 // note are the only allowed contexts.
 var (
-	shareProse      = regexp.MustCompile(`(?i)\bshar(e|es|ing)\b|shared with`)
+	shareProse      = regexp.MustCompile(`(?i)\bshar(e|ed|es|ing)\b`)
 	shareProseAllow = strings.NewReplacer("FOR SHARE", "", "KEY SHARE", "", "ACCESS SHARE", "", "`SHARE`", "", "watch_share", "",
-		"share the load", "")
+		"share the load", "", "shared secret", "", "shared budget", "", "shared by concurrent", "", "`<kind>_b.json`), shared", "")
 	upgradeSection = regexp.MustCompile(`(?s)\n## Upgrading\n.*?\n## `)
 )
 

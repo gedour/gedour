@@ -10,4 +10,4 @@
 | [006](006-roles-admin.md) | Roles from the identity provider and account administration | shipped; sharing removed by [009](009-remove-watch-sharing.md) |
 | [007](007-mcp-api-keys.md) | MCP server and API keys | shipped |
 | [008](008-github-issues-new-items.md) | GitHub repository watches: new issues and PRs, one-issue watches | shipped |
-| [009](009-remove-watch-sharing.md) | Remove watch sharing | in progress |
+| [009](009-remove-watch-sharing.md) | Remove watch sharing | shipped |

@@ -1,6 +1,6 @@
 # 009 — Remove watch sharing
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-06
 
@@ -50,39 +50,39 @@ A disabled account's watches stop collecting: without sharing, their events reac
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given a database at version 16 where alice's watch W is shared with bob, bob has a rule
+- [x] **AC1** Given a database at version 16 where alice's watch W is shared with bob, bob has a rule
   pinned to W with a channel, an inbox item and a delivery for an event of W, and a rule on all
   watches, when migration 17 runs, then bob's pinned rule, its `rule_channels` row, the inbox item and
   the delivery are gone; bob's all-watches rule, W, its events and alice's rules, items and deliveries
   stay; `watch_shares` and `watch_shares_not_owner()` no longer exist.
-- [ ] **AC2** Migration 17 writes one `watch_share.removed` audit row per share, actor null, target
+- [x] **AC2** Migration 17 writes one `watch_share.removed` audit row per share, actor null, target
   `<watch>:<user>`, `before` holding user ID, email and permission. Alice sees it in her audit view.
-- [ ] **AC3** A rule on another user's watch that no share covers (left by a transfer) survives
+- [x] **AC3** A rule on another user's watch that no share covers (left by a transfer) survives
   migration 17.
-- [ ] **AC4** Migration 17's down recreates an empty `watch_shares` with its index, function and
+- [x] **AC4** Migration 17's down recreates an empty `watch_shares` with its index, function and
   trigger; up after down succeeds.
-- [ ] **AC5** Every method on `/api/v1/watches/{id}/shares` and `/api/v1/watches/{id}/shares/{user_id}`
+- [x] **AC5** Every method on `/api/v1/watches/{id}/shares` and `/api/v1/watches/{id}/shares/{user_id}`
   answers problem+json 404; `api/openapi.json` has no share operation or schema.
-- [ ] **AC6** Bob gets 404 on every watch route for alice's watch (get, update, delete, run, states,
+- [x] **AC6** Bob gets 404 on every watch route for alice's watch (get, update, delete, run, states,
   events), never 403.
-- [ ] **AC7** A watch in a response has no `permission`, `owner_id` or `owner_name`. `GET
+- [x] **AC7** A watch in a response has no `permission`, `owner_id` or `owner_name`. `GET
   /api/v1/watches` lists the caller's watches only; a `shared` query parameter changes nothing.
-- [ ] **AC8** A rule naming another user's watch is refused like an unknown watch; preview, inbox,
+- [x] **AC8** A rule naming another user's watch is refused like an unknown watch; preview, inbox,
   deliveries, the router and script test events only reach the caller's own watches.
-- [ ] **AC9** Admin responses carry no share field: users list, user's watches, purge preview, transfer
+- [x] **AC9** Admin responses carry no share field: users list, user's watches, purge preview, transfer
   result. A purge's audit `deleted` counts have no `shares_received`.
-- [ ] **AC10** The watch detail page has no share section or "Shared by" badge. The watches page has no
+- [x] **AC10** The watch detail page has no share section or "Shared by" badge. The watches page has no
   ownership filter and every tile is selectable. The delete dialog, the rule form and the admin
   disable, purge and transfer dialogs name no share.
-- [ ] **AC11** MCP `list_watches` and `run_watch` descriptions name no share; `list_watches` output has
+- [x] **AC11** MCP `list_watches` and `run_watch` descriptions name no share; `list_watches` output has
   no `permission`, `owner_id` or `owner_name`.
-- [ ] **AC12** While alice is disabled, no worker claims her due watches and the due gauge leaves them
+- [x] **AC12** While alice is disabled, no worker claims her due watches and the due gauge leaves them
   out. After re-enable, the next claim takes them.
-- [ ] **AC13** No file under `pkg cmd web/src web/e2e`, nor `README.md` or `AGENTS.md`, matches
+- [x] **AC13** No file under `pkg cmd web/src web/e2e`, nor `README.md` or `AGENTS.md`, matches
   `watch_shares|sharee|shared_with|addShare|SharedBadge|with_me|levelWrite|shares_received|SharedWatch|dropped_share`
   (case-insensitive), except migrations `00003` and `00017`, the migration test and the guard test
   `pkg/server/noshare_test.go`, whose `shareNames` holds the pattern and enforces it.
-- [ ] **AC14** README, AGENTS.md and `specs/README.md` describe no sharing; AGENTS.md's lock order has
+- [x] **AC14** README, AGENTS.md and `specs/README.md` describe no sharing; AGENTS.md's lock order has
   no `addShare` and no share wait. `grep -niE 'shar(e|es|ing)\b|shared with' README.md AGENTS.md`
   matches only PostgreSQL lock modes (`FOR SHARE`, `KEY SHARE`), unrelated wording ("share the
   load"), the README's upgrade note on the removal and the `watch_share` audit target type of old

@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { api, expect, setFixture, TALK_SECRET, test, UPSTREAM } from "./fixtures";
+import { addDevice, api, expect, setFixture, TALK_SECRET, test, UPSTREAM } from "./fixtures";
 
 // Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
 test.describe.configure({ mode: "serial" });
@@ -750,4 +750,87 @@ test("a discussion watch reports a close and a reply", async ({ page }) => {
 
   await setFixture(page, "a");
   await call("DELETE", `/api/v1/watches/${id}`);
+});
+
+// 010-AC18: a rule targeting a Web Push channel pushes its routed events: the fake push service decrypts one
+// per event, linking to its inbox item, and each delivery is sent.
+test("a rule routes upstream changes to Web Push", async ({ page }) => {
+  const t = tag();
+  await setFixture(page, "a");
+  await page.goto("/channels");
+  const call = await api(page);
+  // Paths of what this test created, deleted at the end whatever happens: rule first, device last.
+  const created: string[] = [];
+  try {
+    const res = await call("POST", "/api/v1/watches", {
+      name: `Pushed CLI ${t}`,
+      kind: "github_repo",
+      schedule: "1h",
+      config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+    });
+    expect(res.status()).toBe(201);
+    const watch = (await res.json()) as { id: string; name: string };
+    created.unshift(`/api/v1/watches/${watch.id}`);
+    await expect
+      .poll(
+        async () => (await (await call("GET", `/api/v1/watches/${watch.id}`)).json()).last_status,
+        { timeout: 15_000 },
+      )
+      .toBe("ok");
+    const device = await addDevice(page, `Activity ${t}`);
+    const devices = (await (await call("GET", "/api/v1/push/devices")).json()).items as {
+      id: string;
+      name: string;
+    }[];
+    created.push(`/api/v1/push/devices/${devices.find((d) => d.name === device)?.id}`);
+    const ch = await call("POST", "/api/v1/channels", {
+      name: `Push ${t}`,
+      type: "web_push",
+      config: { devices: "all", silent: false },
+    });
+    expect(ch.status()).toBe(201);
+    const channel = (await ch.json()) as { id: string };
+    created.unshift(`/api/v1/channels/${channel.id}`);
+    const rule = await call("POST", "/api/v1/rules", {
+      name: `Pushed ${t}`,
+      watch_id: watch.id,
+      filter: 'event.type == "release.published"',
+      channel_ids: [channel.id],
+    });
+    expect(rule.status()).toBe(201);
+    created.unshift(`/api/v1/rules/${((await rule.json()) as { id: string }).id}`);
+
+    await setFixture(page, "b");
+    expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
+    type Sent = { status: string; event: { id: number } };
+    let deliveries: Sent[] = [];
+    await expect
+      .poll(
+        async () => {
+          deliveries = (
+            await (await call("GET", `/api/v1/deliveries?channel_id=${channel.id}`)).json()
+          ).items as Sent[];
+          return deliveries.map((d) => d.status);
+        },
+        { timeout: 20_000 },
+      )
+      .toEqual(["sent", "sent"]);
+    const pushed = ((await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[])
+      .filter((r) => r.endpoint.startsWith("push-"))
+      .map((r) => JSON.parse(r.body) as { title: string; url: string })
+      .filter((m) => m.title.startsWith(`${watch.name}: `));
+    expect(pushed.map((m) => m.title).sort()).toEqual([
+      `${watch.name}: v2.103.3 published`,
+      `${watch.name}: v2.105.0 published`,
+    ]);
+    expect(pushed.map((m) => m.url).sort()).toEqual(
+      deliveries.map((d) => `/inbox?event=${d.event.id}`).sort(),
+    );
+  } finally {
+    // Leaves alice as she was: the watch takes its events and inbox items with it.
+    await setFixture(page, "a");
+    for (const path of created) {
+      expect.soft((await call("DELETE", path)).ok(), path).toBe(true);
+    }
+  }
 });

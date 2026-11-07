@@ -499,12 +499,12 @@ A Talk channel posts each delivery into a conversation as a bot. No Nextcloud us
 
 A Web Push channel shows a native browser notification on the owner's registered browsers (devices).
 
-- In the browser: Channels → Push devices → "Add this browser" (named after the browser, editable; rename
-  and remove from the same list; removing a device asks first). Picking Web Push in a new channel form
-  registers the current browser too when it is not a device yet: the browser asks for permission then,
-  never on page load or on save.
-  "Add this browser" in the form is the fallback after a dismissed prompt. A blocked permission or a browser
-  without Web Push shows why and registers nothing. On iPhone and iPad, Safari offers Web Push only to a site
+- In the browser: devices are managed in the Web Push channel form (new and edit), which lists them with
+  rename and remove (removing asks first). Picking Web Push in a new channel form registers the current
+  browser, named after it, when it is not a device yet: the browser asks for permission then, never on page
+  load or on save. "Add this browser" in the form is the fallback after a dismissed prompt; add another
+  browser by opening the form there. A blocked permission or a browser without Web Push shows why and
+  registers nothing. On iPhone and iPad, Safari offers Web Push only to a site
   added to the Home Screen, which gedour does not support yet.
 - Service worker: `/sw.js` shows the notification. A click focuses an open gedour tab and routes it in place
   to the event's inbox item without a reload, or opens a new tab.

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { QueryClient } from "@tanstack/react-query";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -82,6 +83,14 @@ function deviceApi(initial: PushDevice[] = [], extra: Record<string, unknown> = 
   });
 }
 
+/** Waits for the device list and this browser's endpoint: the Web Push pick needs both (010-AC17). */
+async function pushReady(client: QueryClient) {
+  await waitFor(() => {
+    expect(client.getQueryState(["push-devices"])?.status).not.toBe("pending");
+    expect(client.getQueryState(["push-endpoint"])?.status).toBe("success");
+  });
+}
+
 async function openNewChannel() {
   await userEvent.click(
     (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
@@ -89,12 +98,21 @@ async function openNewChannel() {
   return screen.getByRole("dialog", { name: "New channel" });
 }
 
+/** Opens the edit form of the Web Push channel "Push", which picks d1. */
+async function openPushChannel() {
+  await userEvent.click(await screen.findByRole("button", { name: "Edit Push" }));
+  return screen.getByRole("dialog", { name: "Edit Push" });
+}
+
+const pushChannel = (config: Record<string, unknown> = { devices: ["d1"], silent: false }) =>
+  channel({ type: "web_push", name: "Push", config });
+
 afterEach(() => {
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "serviceWorker");
 });
 
-describe("Push devices", () => {
+describe("Web Push devices in the channel form", () => {
   it("names a device after its browser", () => {
     for (const [ua, want] of [
       [
@@ -120,13 +138,26 @@ describe("Push devices", () => {
     }
   });
 
-  // 010-AC14: no Push API: the section and the form say why, and nothing registers.
+  // 010-AC18: the Channels page lists channels only; devices live in the Web Push channel form.
+  it("has no device section on the Channels page", async () => {
+    deviceApi([device()]);
+    renderApp("/channels");
+    await screen.findByRole("heading", { level: 1, name: "Channels" });
+    await waitFor(() => expect(screen.getAllByRole("region").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("region", { name: /device/i })).toBeNull();
+    expect(screen.queryByRole("list", { name: "My devices" })).toBeNull();
+    expect(screen.queryByText("Work laptop")).toBeNull();
+    const dialog = await openNewChannel();
+    await userEvent.click(within(dialog).getByText("Web Push"));
+    expect(within(dialog).getByRole("list", { name: "My devices" })).toHaveTextContent(
+      "Work laptop",
+    );
+  });
+
+  // 010-AC14: no Push API: the form says why, and nothing registers.
   it("says why a browser without Push cannot be added", async () => {
     const fn = deviceApi();
     renderApp("/channels");
-    const section = await screen.findByRole("region", { name: "Push devices" });
-    expect(await within(section).findByText(NO_PUSH)).toBeInTheDocument();
-    expect(within(section).queryByRole("button", { name: "Add this browser" })).toBeNull();
     const dialog = await openNewChannel();
     await userEvent.click(within(dialog).getByText("Web Push"));
     expect(within(dialog).getByText(NO_PUSH)).toBeInTheDocument();
@@ -138,12 +169,12 @@ describe("Push devices", () => {
   it("says why when notifications are blocked", async () => {
     const push = stubPush({ permission: "denied" });
     const fn = deviceApi();
-    renderApp("/channels");
-    const section = await screen.findByRole("region", { name: "Push devices" });
-    expect(await within(section).findByText(PUSH_DENIED)).toBeInTheDocument();
+    const { client } = renderApp("/channels");
+    await pushReady(client);
     const dialog = await openNewChannel();
     await userEvent.click(within(dialog).getByText("Web Push"));
     expect(within(dialog).getByText(PUSH_DENIED)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Add this browser" })).toBeNull();
     expect(push.requestPermission).not.toHaveBeenCalled();
     expect(lastCall(fn, "/api/v1/push/devices", "POST")).toBeUndefined();
   });
@@ -164,8 +195,8 @@ describe("Push devices", () => {
       };
       return "granted";
     });
-    renderApp("/channels");
-    expect(await screen.findByRole("form", { name: "Add this browser" })).toBeInTheDocument();
+    const { client } = renderApp("/channels");
+    await pushReady(client);
     const dialog = await openNewChannel();
     expect(push.requestPermission).not.toHaveBeenCalled();
     await userEvent.click(within(dialog).getByText("Web Push"));
@@ -184,13 +215,18 @@ describe("Push devices", () => {
       userVisibleOnly: true,
       applicationServerKey: KEY,
     });
-    // Registered: the fallback button goes, and picking devices ticks this browser.
+    // Registered: the fallback button goes, the list marks it, and picking devices ticks it.
     await waitFor(() =>
       expect(within(dialog).queryByRole("button", { name: "Add this browser" })).toBeNull(),
     );
+    expect(within(dialog).getByRole("list", { name: "My devices" })).toHaveTextContent(
+      `${defaultDeviceName()}This browser`,
+    );
+    expect(within(dialog).getByLabelText(/All my devices/)).toBeChecked();
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
     await userEvent.click(within(dialog).getByLabelText(/Pick devices/));
-    const list = within(dialog).getByRole("list", { name: "Devices to notify" });
-    expect(within(list).getByRole("checkbox", { name: /this browser/ })).toBeChecked();
+    const list = within(dialog).getByRole("list", { name: "My devices" });
+    expect(within(list).getByRole("checkbox", { name: /This browser/ })).toBeChecked();
     expect(within(list).getByRole("checkbox", { name: "Work laptop" })).not.toBeChecked();
     await userEvent.click(within(list).getByRole("checkbox", { name: "Work laptop" }));
     await userEvent.click(within(dialog).getByRole("switch", { name: "Silent" }));
@@ -214,8 +250,8 @@ describe("Push devices", () => {
       () => new Promise<NotificationPermission>((r) => (answer = r)),
     );
     const fn = deviceApi();
-    renderApp("/channels");
-    await screen.findByRole("form", { name: "Add this browser" });
+    const { client } = renderApp("/channels");
+    await pushReady(client);
     const dialog = await openNewChannel();
     await userEvent.click(within(dialog).getByText("Web Push"));
     await userEvent.click(within(dialog).getByText("Webhook"));
@@ -275,33 +311,34 @@ describe("Push devices", () => {
   it("keeps Add this browser after a dismissed prompt", async () => {
     const push = stubPush({ answer: "default" });
     const fn = deviceApi();
-    renderApp("/channels");
+    const { client } = renderApp("/channels");
+    await pushReady(client);
     const dialog = await openNewChannel();
     await userEvent.click(within(dialog).getByText("Web Push"));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(PUSH_DISMISSED);
     expect(lastCall(fn, "/api/v1/push/devices", "POST")).toBeUndefined();
-    // "All my devices" stays the default, with no device yet the picked list says so.
+    // "All my devices" stays the default; with no device yet the list says so.
     expect(within(dialog).getByLabelText(/All my devices/)).toBeChecked();
-    await userEvent.click(within(dialog).getByLabelText(/Pick devices/));
     expect(within(dialog).getByText(/No device yet: add this browser/)).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByLabelText(/Pick devices/));
     push.requestPermission.mockResolvedValue("granted");
     await userEvent.click(within(dialog).getByRole("button", { name: "Add this browser" }));
     await waitFor(() => expect(lastCall(fn, "/api/v1/push/devices", "POST")).toBeDefined());
-    expect(await within(dialog).findByRole("checkbox", { name: /this browser/ })).toBeChecked();
+    expect(await within(dialog).findByRole("checkbox", { name: /This browser/ })).toBeChecked();
   });
 
   // 010-AC17: a browser that is already a device is not prompted; the list marks it.
   it("does not prompt a browser that is already a device", async () => {
     const push = stubPush({ permission: "granted", endpoint: "https://push.example/send/old" });
     deviceApi([device({ last_push_at: new Date().toISOString() })]);
-    renderApp("/channels");
-    const list = await screen.findByRole("list", { name: "Push devices" });
-    expect(await within(list).findByText("This browser")).toBeInTheDocument();
-    expect(list).toHaveTextContent("Firefox/140");
-    expect(list).toHaveTextContent("Last push");
-    expect(screen.queryByRole("form", { name: "Add this browser" })).toBeNull();
+    const { client } = renderApp("/channels");
+    await pushReady(client);
     const dialog = await openNewChannel();
     await userEvent.click(within(dialog).getByText("Web Push"));
+    const list = within(dialog).getByRole("list", { name: "My devices" });
+    expect(within(list).getByText("This browser")).toBeInTheDocument();
+    expect(list).toHaveTextContent("Firefox/140");
+    expect(list).toHaveTextContent("Last push");
     expect(push.requestPermission).not.toHaveBeenCalled();
     expect(within(dialog).queryByRole("button", { name: "Add this browser" })).toBeNull();
   });
@@ -309,53 +346,43 @@ describe("Push devices", () => {
   // 010-AC14: a failed registration says why.
   it("tells when the registration fails", async () => {
     stubPush({ permission: "granted" });
-    deviceApi([], {
+    const fn = deviceApi([], {
       "/api/v1/push/key": () =>
         Response.json({ status: 503, detail: "Web Push is off" }, { status: 503 }),
     });
-    renderApp("/channels");
-    const form = await screen.findByRole("form", { name: "Add this browser" });
-    const name = within(form).getByLabelText("Name of this browser");
-    await userEvent.clear(name);
-    await userEvent.type(name, "Desk");
-    await userEvent.click(within(form).getByRole("button", { name: "Add this browser" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Web Push is off");
+    const { client } = renderApp("/channels");
+    await pushReady(client);
+    const dialog = await openNewChannel();
+    await userEvent.click(within(dialog).getByText("Web Push"));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Web Push is off");
+    expect(lastCall(fn, "/api/v1/push/devices", "POST")).toBeUndefined();
+    expect(within(dialog).getByRole("button", { name: "Add this browser" })).toBeEnabled();
   });
 
-  it("registers this browser under the name given", async () => {
-    stubPush({ permission: "granted" });
-    const fn = deviceApi();
-    renderApp("/channels");
-    const form = await screen.findByRole("form", { name: "Add this browser" });
-    const name = within(form).getByLabelText("Name of this browser");
-    expect(name).toHaveValue(defaultDeviceName());
-    await userEvent.clear(name);
-    await userEvent.type(name, "Desk");
-    await userEvent.click(within(form).getByRole("button", { name: "Add this browser" }));
-    await waitFor(() =>
-      expect(lastCall(fn, "/api/v1/push/devices", "POST")?.body?.name).toBe("Desk"),
-    );
-    expect(await screen.findByText("This browser")).toBeInTheDocument();
-  });
-
-  // 010-AC2: rename and remove from the list.
-  it("renames and removes a device", async () => {
-    let items = [device()];
+  // 010-AC2, 010-AC18: rename, and remove after a confirm, from the channel form; the removed device leaves the picks.
+  it("renames and removes a device in the channel form", async () => {
+    let items = [device(), device({ id: "d2", name: "Phone" })];
     const fn = mockApi({
-      "/api/v1/push/devices": { items },
+      "/api/v1/push/devices": () => Response.json({ items }),
       "/api/v1/push/devices/d1": (_: URL, init?: RequestInit) => {
         if (init?.method === "DELETE") {
-          items = [];
+          items = items.filter((d) => d.id !== "d1");
           return new Response(null, { status: 204 });
         }
         const { name } = JSON.parse(String(init?.body)) as { name: string };
         if (!name.trim())
           return Response.json({ status: 400, detail: "invalid device" }, { status: 400 });
+        items = items.map((d) => (d.id === "d1" ? { ...d, name } : d));
         return Response.json(device({ name }));
       },
+      "/api/v1/channels": { items: [pushChannel({ devices: ["d1", "d2"], silent: false })] },
+      "/api/v1/channels/c1": (_: URL, init?: RequestInit) =>
+        Response.json(pushChannel(JSON.parse(String(init?.body)).config)),
     });
     renderApp("/channels");
-    const list = await screen.findByRole("list", { name: "Push devices" });
+    const form = await openPushChannel();
+    const list = within(form).getByRole("list", { name: "My devices" });
+    expect(await within(list).findByText("Work laptop")).toBeInTheDocument();
     expect(list).toHaveTextContent("No push yet");
     await userEvent.click(within(list).getByRole("button", { name: "Rename Work laptop" }));
     let dialog = screen.getByRole("dialog", { name: "Rename Work laptop" });
@@ -365,41 +392,192 @@ describe("Push devices", () => {
     expect(await within(dialog).findByText("invalid device")).toBeInTheDocument();
     await userEvent.type(input, "Desk");
     await userEvent.click(within(dialog).getByRole("button", { name: "Rename" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /^Rename/ })).not.toBeInTheDocument(),
+    );
     expect(lastCall(fn, "/api/v1/push/devices/d1", "PATCH")?.body).toEqual({ name: "Desk" });
-    await userEvent.click(within(list).getByRole("button", { name: "Rename Work laptop" }));
-    dialog = screen.getByRole("dialog", { name: "Rename Work laptop" });
+    // Closing a device dialog leaves the channel form open.
+    expect(screen.getByRole("dialog", { name: "Edit Push" })).toBeInTheDocument();
+    await userEvent.click(await within(list).findByRole("button", { name: "Rename Desk" }));
+    dialog = screen.getByRole("dialog", { name: "Rename Desk" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog", { name: "Edit Push" })).toBeInTheDocument();
     // Removal asks first, as channel deletion does; Cancel removes nothing.
-    await userEvent.click(within(list).getByRole("button", { name: "Remove Work laptop" }));
-    dialog = screen.getByRole("dialog", { name: "Remove Work laptop?" });
+    await userEvent.click(within(list).getByRole("button", { name: "Remove Desk" }));
+    dialog = screen.getByRole("dialog", { name: "Remove Desk?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(lastCall(fn, "/api/v1/push/devices/d1", "DELETE")).toBeUndefined();
-    await userEvent.click(within(list).getByRole("button", { name: "Remove Work laptop" }));
-    dialog = screen.getByRole("dialog", { name: "Remove Work laptop?" });
+    expect(screen.getByRole("dialog", { name: "Edit Push" })).toBeInTheDocument();
+    await userEvent.click(within(list).getByRole("button", { name: "Remove Desk" }));
+    dialog = screen.getByRole("dialog", { name: "Remove Desk?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
-    expect(await screen.findByText("Removed Work laptop")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText("Removed Desk")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /^Remove/ })).not.toBeInTheDocument();
     expect(lastCall(fn, "/api/v1/push/devices/d1", "DELETE")).toBeDefined();
+    await waitFor(() => expect(within(list).queryByText("Desk")).toBeNull());
+    await userEvent.click(within(form).getByRole("button", { name: "Save channel" }));
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
+        name: "Push",
+        config: { devices: ["d2"], silent: false },
+      }),
+    );
+  });
+
+  // 010-AC18: in the new form too, with all devices targeted: rename and remove, no checkbox.
+  it("manages devices from the new channel form", async () => {
+    let items = [device()];
+    const fn = mockApi({
+      "/api/v1/push/devices": () => Response.json({ items }),
+      "/api/v1/push/devices/d1": () => {
+        items = [];
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp("/channels");
+    const form = await openNewChannel();
+    await userEvent.click(within(form).getByText("Web Push"));
+    const list = within(form).getByRole("list", { name: "My devices" });
+    expect(within(list).queryByRole("checkbox")).toBeNull();
+    expect(within(list).getByRole("button", { name: "Rename Work laptop" })).toBeInTheDocument();
+    await userEvent.click(within(list).getByRole("button", { name: "Remove Work laptop" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog", { name: "Remove Work laptop?" })).getByRole("button", {
+        name: "Remove",
+      }),
+    );
+    expect(await within(form).findByText(/No device yet/)).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/push/devices/d1", "DELETE")).toBeDefined();
+  });
+
+  /** Devices whose DELETE drops them from the list. */
+  function removableDevices(items: PushDevice[]) {
+    return mockApi({
+      "/api/v1/push/devices": () => Response.json({ items }),
+      ...Object.fromEntries(
+        items.map((d) => [
+          `/api/v1/push/devices/${d.id}`,
+          () => {
+            items = items.filter((x) => x.id !== d.id);
+            return new Response(null, { status: 204 });
+          },
+        ]),
+      ),
+      "/api/v1/channels": { items: [pushChannel()] },
+    });
+  }
+
+  async function confirmRemove(form: HTMLElement, name: string) {
+    await userEvent.click(within(form).getByRole("button", { name: `Remove ${name}` }));
+    const dialog = screen.getByRole("dialog", { name: `Remove ${name}?` });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: `Remove ${name}?` })).toBeNull(),
+    );
+  }
+
+  // 010-AC15: a confirmed removal moves the focus to the next device, the previous one after the last row,
+  // else to "Add this browser".
+  it("keeps the focus in the form after a removal", async () => {
+    stubPush({ permission: "granted" });
+    removableDevices([
+      device(),
+      device({ id: "d2", name: "Phone" }),
+      device({ id: "d3", name: "Tablet" }),
+    ]);
+    const { client } = renderApp("/channels");
+    await pushReady(client);
+    const form = await openPushChannel();
+    await within(form).findByText("Tablet");
+    await confirmRemove(form, "Phone");
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "Rename Tablet" })).toHaveFocus(),
+    );
+    await confirmRemove(form, "Tablet");
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "Rename Work laptop" })).toHaveFocus(),
+    );
+    await confirmRemove(form, "Work laptop");
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "Add this browser" })).toHaveFocus(),
+    );
+  });
+
+  // 010-AC15: the removed row leaves the list at once, so the focus moves even when the refetch fails, and
+  // only once: a later refetch leaves the focus where the user put it.
+  it("moves the focus once after a removal whose refetch fails", async () => {
+    let items = [device(), device({ id: "d2", name: "Phone" })];
+    let listFails = false;
+    mockApi({
+      "/api/v1/push/devices": () =>
+        listFails ? new Response("", { status: 500 }) : Response.json({ items }),
+      "/api/v1/push/devices/d1": () => {
+        items = items.filter((x) => x.id !== "d1");
+        listFails = true;
+        return new Response(null, { status: 204 });
+      },
+      "/api/v1/channels": { items: [pushChannel()] },
+    });
+    const { client } = renderApp("/channels");
+    const form = await openPushChannel();
+    await within(form).findByText("Phone");
+    await confirmRemove(form, "Work laptop");
+    await waitFor(() =>
+      expect(within(form).getByRole("button", { name: "Rename Phone" })).toHaveFocus(),
+    );
+    expect(within(form).queryByText("Work laptop")).toBeNull();
+    const name = within(form).getByLabelText("Name");
+    name.focus();
+    listFails = false;
+    // New data, so the refocus effect runs again: it must have nothing left to do.
+    items = [device({ id: "d2", name: "Phone 2" })];
+    await act(() => client.invalidateQueries({ queryKey: ["push-devices"] }));
+    expect(await within(form).findByText("Phone 2")).toBeInTheDocument();
+    expect(name).toHaveFocus();
+  });
+
+  // 010-AC14, 010-AC15: a browser that cannot be added: the focus goes to the devices group, and the empty
+  // list does not tell to add it.
+  it("focuses the devices group after the last removal when this browser cannot be added", async () => {
+    removableDevices([device()]);
+    renderApp("/channels");
+    const form = await openPushChannel();
+    await within(form).findByText("Work laptop");
+    await confirmRemove(form, "Work laptop");
+    await waitFor(() => expect(within(form).getByRole("group", { name: "Devices" })).toHaveFocus());
+    expect(within(form).getByText(NO_PUSH)).toBeInTheDocument();
+    expect(within(form).getByText("No device yet.")).toBeInTheDocument();
+    expect(within(form).queryByText(/add this browser/i)).toBeNull();
   });
 
   it("tells when a removal or the list fails", async () => {
     mockApi({
       "/api/v1/push/devices": { items: [device()] },
       "/api/v1/push/devices/d1": () => new Response("", { status: 500 }),
+      "/api/v1/channels": { items: [pushChannel()] },
     });
     const first = renderApp("/channels");
-    const list = await screen.findByRole("list", { name: "Push devices" });
-    await userEvent.click(within(list).getByRole("button", { name: "Remove Work laptop" }));
+    const form = await openPushChannel();
+    await userEvent.click(await within(form).findByRole("button", { name: "Remove Work laptop" }));
     const dialog = screen.getByRole("dialog", { name: "Remove Work laptop?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       /Could not remove the device/,
     );
     first.unmount();
-    mockApi({ "/api/v1/push/devices": () => new Response("", { status: 500 }) });
+    mockApi({
+      "/api/v1/push/devices": () => new Response("", { status: 500 }),
+      "/api/v1/channels": { items: [pushChannel()] },
+    });
     renderApp("/channels");
-    expect(await screen.findByText("Devices could not be loaded.")).toBeInTheDocument();
+    const again = await openPushChannel();
+    expect(await within(again).findByText("Devices could not be loaded.")).toBeInTheDocument();
+    mockApi({
+      "/api/v1/push/devices": { items: [device()] },
+      "/api/v1/channels": { items: [pushChannel()] },
+    });
+    await userEvent.click(within(again).getByRole("button", { name: "Retry" }));
+    expect(await within(again).findByRole("checkbox", { name: "Work laptop" })).toBeChecked();
   });
 
   // The server's reason when Web Push is off (no VAPID key), like other unavailable types.
@@ -410,14 +588,16 @@ describe("Push devices", () => {
       "/api/v1/channel-types": {
         items: [...CHANNEL_TYPES, { type: "web_push", available: false, hint }],
       },
+      "/api/v1/channels": { items: [pushChannel()] },
     });
     renderApp("/channels");
-    const section = await screen.findByRole("region", { name: "Push devices" });
-    expect(await within(section).findByText(hint)).toBeInTheDocument();
-    expect(await screen.findByText("No device yet.")).toBeInTheDocument();
     const dialog = await openNewChannel();
     expect(within(dialog).getByRole("radio", { name: "Web Push" })).toBeDisabled();
     expect(dialog).toHaveTextContent(hint);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const edit = await openPushChannel();
+    expect(await within(edit).findByText(hint)).toBeInTheDocument();
+    expect(within(edit).queryByRole("button", { name: "Add this browser" })).toBeNull();
   });
 
   it("edits a Web Push channel's device list", async () => {
@@ -481,7 +661,7 @@ describe("Push devices", () => {
     expect(await within(dialog).findByText("no such device among yours")).toBeInTheDocument();
     expect(within(dialog).queryByText(/devices\[0\]:/)).toBeNull();
     await userEvent.click(within(dialog).getByLabelText(/All my devices/));
-    expect(within(dialog).queryByRole("list", { name: "Devices to notify" })).toBeNull();
+    expect(within(dialog).queryByRole("checkbox", { name: "Work laptop" })).toBeNull();
   });
 
   // A Web Push test some devices refused is sent, with a warning naming them.

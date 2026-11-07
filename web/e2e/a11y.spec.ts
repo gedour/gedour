@@ -128,7 +128,7 @@ for (const theme of ["light", "dark"] as const) {
 
       const device = await addDevice(page, `a11y ${theme}`);
       await page.goto("/channels");
-      await expect(page.getByRole("list", { name: "Push devices" })).toContainText(device);
+      await expect(page.getByRole("heading", { level: 1, name: "Channels" })).toBeVisible();
       expect(await violations(page)).toEqual([]);
       await page.getByRole("button", { name: "New channel" }).first().click();
       const dialog = page.getByRole("dialog", { name: "New channel" });
@@ -149,27 +149,35 @@ for (const theme of ["light", "dark"] as const) {
         await silent.click();
       }
 
-      // 010-AC15: the Web Push form, devices picked, and its Silent switch.
+      // 010-AC15, 010-AC18: the Web Push form with its device list, all then picked, and its Silent switch.
       await dialog.getByText("Web Push", { exact: true }).click();
+      const devices = dialog.getByRole("list", { name: "My devices" });
+      await expect(devices).toContainText(device);
+      expect(await violations(page)).toEqual([]);
       await dialog.getByLabel(/Pick devices/).check();
-      await expect(dialog.getByRole("list", { name: "Devices to notify" })).toBeVisible();
+      await expect(devices.getByRole("checkbox", { name: device })).toBeVisible();
       expect(await violations(page)).toEqual([]);
       const pushSilent = dialog.getByRole("switch", { name: "Silent" });
       await pushSilent.click();
       await expect(pushSilent).toBeChecked();
       await expect.poll(() => switchContrast(pushSilent)).toBeGreaterThanOrEqual(3);
       expect(await violations(page)).toEqual([]);
+      // 010-AC15: the device rename and remove dialogs, over the channel form.
+      await devices.getByRole("button", { name: `Rename ${device}` }).click();
+      const rename = page.getByRole("dialog", { name: `Rename ${device}` });
+      await expect(rename).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(rename).toBeHidden();
+      await devices.getByRole("button", { name: `Remove ${device}` }).click();
+      const remove = page.getByRole("dialog", { name: `Remove ${device}?` });
+      await expect(remove).toBeVisible();
+      expect(await violations(page)).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(remove).toBeHidden();
+      await expect(dialog).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(dialog).toBeHidden();
-      // 010-AC15: the device list and its rename dialog.
-      await page.getByRole("button", { name: `Rename ${device}` }).click();
-      await expect(page.getByRole("dialog", { name: `Rename ${device}` })).toBeVisible();
-      expect(await violations(page)).toEqual([]);
-      await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: `Remove ${device}` }).click();
-      await expect(page.getByRole("dialog", { name: `Remove ${device}?` })).toBeVisible();
-      expect(await violations(page)).toEqual([]);
-      await page.keyboard.press("Escape");
 
       // 007-AC32: the create form with the manage warning, the reveal and the revoke confirmation.
       const name = `a11y ${theme} ${Date.now().toString(36)}`;

@@ -12,14 +12,16 @@ has no direct way to get one.
 
 ## Solution
 
-A user registers each browser where they want notifications as a device, from the gedour UI: one click, the
-browser asks for permission, the device gets a name ("Work laptop"). A new channel type, Web Push, sends
+Web Push is a channel type like the others, and rules target it like any channel. From the Web Push channel
+form, a user registers each browser where they want notifications as a device: one click, the browser asks
+for permission, the device gets a name ("Work laptop"). The channel sends
 native browser notifications to the user's devices: either all of them (devices added later included) or the
 ones picked in the channel form. Clicking a notification opens gedour on the event.
 
 ## Scope
 
-- Devices: a user registers, renames and removes push subscriptions of their own browsers. Each device keeps
+- Devices: from the Web Push channel form, a user registers, renames and removes push subscriptions of their
+  own browsers; the Channels page lists channels only. Each device keeps
   its name, the browser's user agent at registration, and when it last received a push.
 - `web_push` channel type: config `devices: "all"` or a list of the owner's device ids, plus `silent` (as
   Telegram and Talk, spec 003).
@@ -34,10 +36,10 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 - Service worker at `/sw.js`: shows the notification, opens gedour on click. CSP gains `worker-src 'self'`.
 - Permission is asked only on a user gesture: picking the Web Push type in the new channel form, when the
   current browser is not a device yet and its permission is still `default`, or a click on "Add this
-  browser" (device list and channel form, the fallback after a dismissed prompt). Saving a channel never
+  browser" (in the channel form, the fallback after a dismissed prompt). Saving a channel never
   prompts: it can target devices registered from other browsers.
 - "Send test" on a Web Push channel pushes to its devices.
-- API, OpenAPI, channel form, device list, README.
+- API, OpenAPI, channel form with its device list, README.
 
 ## Out of scope
 
@@ -78,13 +80,16 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
   Chromium cannot reach a real push service) and the OS click is replaced by the worker's own handler.
 - [x] **AC14** A browser that refuses permission, or has no Push API, shows why in the form and registers
   nothing.
-- [x] **AC15** The device list and channel form pass the a11y (light and dark), 375 px, keyboard and CSP checks.
+- [x] **AC15** The Web Push channel form, its device list included, passes the a11y (light and dark), 375 px, keyboard and CSP checks.
 - [x] **AC16** Device registration, rename and removal, and Web Push channel changes, are in the audit log;
   the endpoint and keys never appear in it or in the API's channel output.
 - [x] **AC17** In the new channel form, picking the Web Push type asks for permission when the current browser
   is not a device and its permission is `default` (already `granted`: it registers without a prompt);
   "Add this browser" stays as the fallback. No prompt on page load or on save. Once granted, the new device is
   registered and selected in the form.
+- [x] **AC18** The Channels page has no device section: devices are added, renamed and removed (removal asks
+  first) only in the Web Push channel form, new and edit. A Web Push channel created there appears in the rule
+  form's channel list, and a rule targeting it delivers through it (e2e).
 
 ## Phases
 
@@ -112,6 +117,13 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 - **Data model impact**: none
 - **DoD**: `make e2e` green including the push spec; `make lint` clean.
 
+### Phase 4 — Devices in the channel form
+- Work: remove the Channels page device section; manage devices in the Web Push channel form; tests, README,
+  AGENTS.md.
+- **Covers**: AC15, AC17, AC18
+- **Data model impact**: none
+- **DoD**: `make lint` clean; `make coverage` with Go ≥ 92.1 % and web statements ≥ 98.43 %; full e2e green.
+
 ## Data model impact (summary)
 
 - New: VAPID key table (one sealed row), `push_devices`, a per-delivery sent-device table.
@@ -126,6 +138,8 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 
 - Devices belong to the user, channels point at them: one browser serves several channels, and "all" covers
   new devices without editing channels. Because that is the model chosen on 2026-11-07.
+- Devices are managed only inside the Web Push channel form (2026-11-07, after the lab showed a browser
+  registered from a separate section and no channel): the UI shows channels only, as for the other types.
 - Push endpoints and keys are sealed like channel secrets: the endpoint is a bearer capability for that
   browser. Personal data stays what channels already hold (a user agent string is added), so the auth model
   is unchanged.

@@ -184,24 +184,32 @@ test("the Nextcloud Talk form fits 375 px", async ({ page }) => {
   await shot(page, "talk-form");
 });
 
-// 010-AC15: the device list and the Web Push form, devices picked, fit 375 px and work by touch.
-test("the Web Push devices and form fit 375 px", async ({ page }) => {
+// 010-AC15, 010-AC18: the Web Push form with its device list, devices picked, fits 375 px and works by touch.
+test("the Web Push form and its devices fit 375 px", async ({ page }) => {
   const device = await addDevice(page, "Mobile with a rather long device name");
   await page.goto("/channels");
-  await expect(page.getByRole("list", { name: "Push devices" })).toContainText(device);
-  await expectNoHorizontalScroll(page);
+  await expect(page.getByRole("heading", { level: 1, name: "Channels" })).toBeVisible();
   await page.getByRole("button", { name: "New channel" }).first().tap();
   const dialog = page.getByRole("dialog", { name: "New channel" });
   await dialog.getByText("Web Push", { exact: true }).tap();
+  const devices = dialog.getByRole("list", { name: "My devices" });
+  await expect(devices).toContainText(device);
   await dialog.getByLabel(/Pick devices/).tap();
-  const box = dialog.getByRole("checkbox", { name: device });
+  const box = devices.getByRole("checkbox", { name: device });
   await box.scrollIntoViewIfNeeded();
   await box.tap();
   await expect(box).toBeChecked();
+  const remove = devices.getByRole("button", { name: `Remove ${device}` });
+  await expect(remove).toBeInViewport();
   const width = await dialog.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
   expect(width.scroll).toBeLessThanOrEqual(width.client);
   await expectNoHorizontalScroll(page);
   await shot(page, "web-push-form");
+  await remove.tap();
+  const confirm = page.getByRole("dialog", { name: `Remove ${device}?` });
+  await confirm.getByRole("button", { name: "Remove" }).tap();
+  await expect(confirm).toBeHidden();
+  await expect(devices).not.toContainText(device);
 });
 
 test.describe("without a session", () => {

@@ -58,11 +58,12 @@ func partlySent(err error) (string, bool) {
 
 // PushDevice is a device as the API returns it: never its endpoint or keys.
 type PushDevice struct {
-	ID         string     `json:"id" format:"uuid"`
-	Name       string     `json:"name"`
-	UserAgent  string     `json:"user_agent" doc:"The browser's user agent at registration"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastPushAt *time.Time `json:"last_push_at" nullable:"true" doc:"When a push service last accepted a message for it"`
+	ID             string     `json:"id" format:"uuid"`
+	Name           string     `json:"name"`
+	UserAgent      string     `json:"user_agent" doc:"The browser's user agent at registration"`
+	EndpointSHA256 string     `json:"endpoint_sha256" doc:"Hex SHA-256 of the subscription endpoint; the endpoint itself is never returned"`
+	CreatedAt      time.Time  `json:"created_at"`
+	LastPushAt     *time.Time `json:"last_push_at" nullable:"true" doc:"When a push service last accepted a message for it"`
 }
 
 // deviceAudit is what the audit log records of a device: no endpoint, no keys.
@@ -119,13 +120,13 @@ type sealedSub struct {
 	Auth     []byte `json:"auth"`
 }
 
-const deviceColumns = `id::text, name, user_agent, created_at, last_push_at, owner_id::text`
+const deviceColumns = `id::text, name, user_agent, encode(endpoint_hash, 'hex'), created_at, last_push_at, owner_id::text`
 
 const deviceSelect = `SELECT ` + deviceColumns + ` FROM push_devices`
 
 func scanDevice(r pgx.Row) (deviceAudit, error) {
 	var d deviceAudit
-	err := r.Scan(&d.ID, &d.Name, &d.UserAgent, &d.CreatedAt, &d.LastPushAt, &d.OwnerID)
+	err := r.Scan(&d.ID, &d.Name, &d.UserAgent, &d.EndpointSHA256, &d.CreatedAt, &d.LastPushAt, &d.OwnerID)
 	return d, err
 }
 

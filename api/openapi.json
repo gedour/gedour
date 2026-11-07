@@ -2022,6 +2022,10 @@
             "format": "date-time",
             "type": "string"
           },
+          "endpoint_sha256": {
+            "description": "Hex SHA-256 of the subscription endpoint; the endpoint itself is never returned",
+            "type": "string"
+          },
           "id": {
             "format": "uuid",
             "type": "string"
@@ -2046,6 +2050,7 @@
           "id",
           "name",
           "user_agent",
+          "endpoint_sha256",
           "created_at",
           "last_push_at"
         ],

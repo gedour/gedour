@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 
 import { inboxAction, listInbox } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
@@ -136,6 +136,39 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     setOpened(it.read_at ? it : { ...it, read_at: now() });
     if (!it.read_at) run("read", [it.id]);
   };
+  // A notification's link (/inbox?event=<id>, 010-AC13) opens that event's item once the list holds it.
+  // Keyed by location: the same link followed again opens it again.
+  // ponytail: only items of the loaded pages are found; an item API would reach older ones.
+  const linked = Number(params.get("event")) || 0;
+  const { key } = useLocation();
+  const [link, setLink] = useState<{ key: string; event: number } | null>(null);
+  // After the mount refetch: a cached list from an earlier visit lacks the event just pushed. A failed
+  // refetch resolves too, against what is cached, so the link never hangs in the URL.
+  if (linked && link?.key !== key && (query.isSuccess || query.isError) && !query.isFetching) {
+    setLink({ key, event: linked });
+    const hit = items.find((i) => i.event.id === linked);
+    if (hit) setOpened(hit.read_at ? hit : { ...hit, read_at: now() });
+  }
+  const dropLink = useEffectEvent(() => {
+    const hit = items.find((i) => i.event.id === link?.event);
+    // Not run(): the read must go out even while another action is pending.
+    if (hit && !hit.read_at) act.mutate({ action: "read", ids: [hit.id] });
+    if (!hit)
+      toast(
+        "That event is not among the inbox items loaded here: it may be archived or older.",
+        "warning",
+      );
+    setParams(
+      (p) => {
+        p.delete("event");
+        return p;
+      },
+      { replace: true },
+    );
+  });
+  useEffect(() => {
+    if (link) dropLink();
+  }, [link]);
   const close = () => {
     const id = opened?.id;
     setOpened(null);

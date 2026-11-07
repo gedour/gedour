@@ -459,6 +459,15 @@ A Talk channel posts each delivery into a conversation as a bot. No Nextcloud us
 
 A Web Push channel shows a native browser notification on the owner's registered browsers (devices).
 
+- In the browser: Channels → Push devices → "Add this browser" (named after the browser, editable; rename
+  and remove from the same list; removing a device asks first). Picking Web Push in a new channel form
+  registers the current browser too when it is not a device yet: the browser asks for permission then,
+  never on page load or on save.
+  "Add this browser" in the form is the fallback after a dismissed prompt. A blocked permission or a browser
+  without Web Push shows why and registers nothing. On iPhone and iPad, Safari offers Web Push only to a site
+  added to the Home Screen, which gedour does not support yet.
+- Service worker: `/sw.js` shows the notification. A click focuses an open gedour tab and routes it in place
+  to the event's inbox item without a reload, or opens a new tab.
 - Devices: `POST /api/v1/push/devices {endpoint, keys: {p256dh, auth}, name, user_agent}` with the browser's
   `PushSubscription`, subscribed with the key from `GET /api/v1/push/key`. The endpoint passes the webhook
   rules: https (http only for `GEDOUR_ALLOW_HTTP_HOSTS`); a literal private IP is a 400 at registration unless
@@ -466,7 +475,8 @@ A Web Push channel shows a native browser notification on the owner's registered
   it at send time when it resolves to a private address; `p256dh` is a 65-byte P-256 point, `auth`
   16 bytes, both base64url. A known endpoint updates its device; registered by another user, the device moves
   to them and leaves the previous owner's channels. At most 20 devices per user. Endpoints and keys are sealed
-  with `GEDOUR_ENCRYPTION_KEY` and never returned or audited.
+  with `GEDOUR_ENCRYPTION_KEY` and never returned or audited. `GET /api/v1/push/devices` returns
+  `endpoint_sha256` (hex SHA-256 of the endpoint) so a browser recognizes its own device.
 - Config: `devices` is `"all"` (every device of the owner, later ones included) or a list of the owner's
   device ids; `silent` sets urgency `low` and the notification's `silent` option. No secret.
 - Delivery: one delivery pushes to every targeted device (5 at a time, 10 s each). Urgency is `high` for an

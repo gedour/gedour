@@ -73,15 +73,18 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 - [ ] **AC12** `/sw.js` is served with a JavaScript content type, not the SPA fallback; the CSP allows it and
   e2e sees no CSP violation.
 - [ ] **AC13** In Chromium with notifications granted, an e2e test registers a device, creates a channel,
-  sends a test, and the service worker shows the notification; clicking it opens gedour.
+  sends a test that the fake push service decrypts, and the real service worker shows the delivered
+  notification; its click handler opens gedour on the item. The browser's subscribe call is stubbed (headless
+  Chromium cannot reach a real push service) and the OS click is replaced by the worker's own handler.
 - [ ] **AC14** A browser that refuses permission, or has no Push API, shows why in the form and registers
   nothing.
 - [ ] **AC15** The device list and channel form pass the a11y (light and dark), 375 px, keyboard and CSP checks.
 - [ ] **AC16** Device registration, rename and removal, and Web Push channel changes, are in the audit log;
   the endpoint and keys never appear in it or in the API's channel output.
 - [ ] **AC17** In the new channel form, picking the Web Push type asks for permission when the current browser
-  is not a device and its permission is `default`; "Add this browser" stays as the fallback. No prompt on page
-  load or on save. Once granted, the new device is registered and selected in the form.
+  is not a device and its permission is `default` (already `granted`: it registers without a prompt);
+  "Add this browser" stays as the fallback. No prompt on page load or on save. Once granted, the new device is
+  registered and selected in the form.
 
 ## Phases
 

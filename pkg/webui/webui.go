@@ -32,8 +32,8 @@ func Handler(fsys fs.FS) http.Handler {
 				http.ServeFileFS(w, r, fsys, name) //nolint:gosec // fs.FS refuses "..", name is already path.Clean-ed
 				return
 			}
-			// A missing hashed asset must 404, not return HTML the browser would try to execute.
-			if strings.HasPrefix(name, "assets/") {
+			// A missing hashed asset or service worker must 404, not return HTML the browser would try to execute.
+			if strings.HasPrefix(name, "assets/") || name == "sw.js" {
 				http.NotFound(w, r)
 				return
 			}

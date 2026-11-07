@@ -1585,6 +1585,8 @@ export interface components {
     PushDevice: {
       /** Format: date-time */
       created_at: string;
+      /** @description Hex SHA-256 of the subscription endpoint; the endpoint itself is never returned */
+      endpoint_sha256: string;
       /** Format: uuid */
       id: string;
       /**

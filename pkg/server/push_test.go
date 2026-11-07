@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +25,7 @@ type deviceJSON struct {
 	Name       string  `json:"name"`
 	UserAgent  string  `json:"user_agent"`
 	LastPushAt *string `json:"last_push_at"`
+	EndpointSH string  `json:"endpoint_sha256"`
 }
 
 func pushBody(endpoint, name string) map[string]any {
@@ -63,6 +65,13 @@ func TestPushDeviceRegister(t *testing.T) {
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/push/devices", pushBody(base+"/push/a", " Laptop "), http.StatusCreated, &d)
 	if d.Name != "Laptop" || d.UserAgent != "Firefox/140" || d.LastPushAt != nil {
 		t.Fatalf("%+v", d)
+	}
+	// 010-AC17: the browser finds itself among the devices by the endpoint's hash, never the endpoint.
+	if sum := sha256.Sum256([]byte(base + "/push/a")); d.EndpointSH != hex.EncodeToString(sum[:]) {
+		t.Fatalf("endpoint_sha256 %q", d.EndpointSH)
+	}
+	if listed := a.devices(t, alice); len(listed) != 1 || listed[0].EndpointSH != d.EndpointSH {
+		t.Fatalf("listed %+v", listed)
 	}
 	keys := func(p256dh, auth string) map[string]any {
 		b := pushBody(base+"/push/b", "x")
@@ -308,7 +317,7 @@ func TestPushChannels(t *testing.T) {
 	}
 	_, chans := a.call(t, alice, http.MethodGet, "/api/v1/channels", nil)
 	_, devs := a.call(t, bob, http.MethodGet, "/api/v1/push/devices", nil)
-	for _, leak := range []string{"/push/", testupstream.PushP256DH, testupstream.PushAuth, "p256dh", "endpoint"} {
+	for _, leak := range []string{"/push/", testupstream.PushP256DH, testupstream.PushAuth, "p256dh", `"endpoint"`} {
 		if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE COALESCE(before::text, '') || COALESCE(after::text, '') LIKE '%' || $1 || '%'`, leak); n != 0 {
 			t.Errorf("%d audit entries carry %q", n, leak)
 		}

@@ -145,7 +145,7 @@ func apiFallback(api huma.API, mux *http.ServeMux) http.Handler {
 func contentSecurityPolicy(scriptHashes []string) string {
 	scriptSrc := strings.Join(append([]string{"'self'"}, scriptHashes...), " ")
 	return "default-src 'self'; script-src " + scriptSrc +
-		"; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		"; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 }
 
 func secureHeaders(csp string, next http.Handler) http.Handler {

@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
+import { addDevice, enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE });
 
@@ -213,6 +213,53 @@ test("the Silent switch by keyboard", async ({ page }) => {
   await expect(silent).not.toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+});
+
+// 010-AC15: rename a push device, then pick it in a Web Push channel, by keyboard only.
+test("Web Push devices and form by keyboard", async ({ page }) => {
+  const device = await addDevice(page, "Keyboard");
+  await page.goto("/channels");
+  const rename = page.getByRole("button", { name: `Rename ${device}` });
+  await tabTo(page, rename);
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: `Rename ${device}` });
+  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type(`${device} 2`);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole("list", { name: "Push devices" })).toContainText(`${device} 2`);
+
+  const open = page.getByRole("button", { name: "New channel" }).first();
+  await open.focus();
+  await page.keyboard.press("Enter");
+  const form = page.getByRole("dialog", { name: "New channel" });
+  await tabTo(page, form.getByRole("radio", { name: "Webhook" }));
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(form.getByRole("radio", { name: "Web Push" })).toBeChecked();
+  await tabTo(page, form.getByRole("radio", { name: /All my devices/ }));
+  await page.keyboard.press("ArrowDown");
+  await expect(form.getByRole("radio", { name: /Pick devices/ })).toBeChecked();
+  const box = form.getByRole("checkbox", { name: `${device} 2` });
+  await tabTo(page, box);
+  await page.keyboard.press("Space");
+  await expect(box).toBeChecked();
+  const silent = form.getByRole("switch", { name: "Silent" });
+  await tabTo(page, silent);
+  await page.keyboard.press("Space");
+  await expect(silent).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(form).toBeHidden();
+
+  // Removal asks first; its confirm button by keyboard.
+  await tabTo(page, page.getByRole("button", { name: `Remove ${device} 2` }));
+  await page.keyboard.press("Enter");
+  const confirm = page.getByRole("dialog", { name: `Remove ${device} 2?` });
+  await tabTo(page, confirm.getByRole("button", { name: "Remove" }));
+  await page.keyboard.press("Enter");
+  await expect(confirm).toBeHidden();
+  await expect(page.getByRole("button", { name: `Rename ${device} 2` })).toHaveCount(0);
 });
 
 test.describe("without a session", () => {

@@ -26,6 +26,9 @@ const (
 	RoleWorker = "worker"
 )
 
+// HTTPWriteTimeout bounds writing one response of the HTTP listeners; a handler doing slow work keeps under it.
+const HTTPWriteTimeout = 30 * time.Second
+
 // Config is the process configuration, read from GEDOUR_* environment variables.
 type Config struct {
 	Role            string

@@ -63,6 +63,7 @@ func (s *Service) Register(api huma.API, mux *http.ServeMux, viewer func(context
 	s.registerRules(api)
 	s.registerDeliveries(api)
 	s.registerInbox(api)
+	s.registerPush(api)
 	mux.HandleFunc("GET /api/v1/inbox/stream", s.stream)
 }
 

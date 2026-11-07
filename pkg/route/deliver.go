@@ -184,11 +184,11 @@ func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify
 		return ch, nd, errOwnerDisabled
 	}
 	if j.ruleID != nil {
-		var name string
-		err := d.pool.QueryRow(ctx, `SELECT name FROM rules WHERE id = $1`, *j.ruleID).Scan(&name)
+		var name, priority string
+		err := d.pool.QueryRow(ctx, `SELECT name, priority FROM rules WHERE id = $1`, *j.ruleID).Scan(&name, &priority)
 		switch {
 		case err == nil:
-			nd.Rule = &notify.Rule{ID: *j.ruleID, Name: name}
+			nd.Rule = &notify.Rule{ID: *j.ruleID, Name: name, Priority: priority}
 		case !errors.Is(err, pgx.ErrNoRows):
 			return ch, nd, fmt.Errorf("load rule: %w", err)
 		}
@@ -208,7 +208,10 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 		}
 	}
 	var logs *string
-	if err == nil {
+	switch {
+	case err == nil && ch.Type == notify.TypeWebPush:
+		_, err = pushSend(ctx, d.pool, d.box, d.sender, ch, nd)
+	case err == nil:
 		var lines []string
 		lines, err = send(ctx, d.pool, d.sender, d.runner, ch, nd, false)
 		if lines != nil {
@@ -238,17 +241,20 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 		return
 	}
 	d.metrics.deliveries.WithLabelValues(typ, status).Inc()
-	if err != nil {
+	switch refused, partly := partlySent(err); {
+	case partly:
+		log.Debug("delivery_sent", zap.String("refused", refused))
+	case status == "sent":
+		log.Debug("delivery_sent")
+	default:
 		log.Info("delivery_failed", zap.String("status", status), zap.Int("attempt", j.attempts+1), zap.Error(err))
-		return
 	}
-	log.Debug("delivery_sent")
 }
 
 // drained tells a send the shutdown drain cut from one that ended on its own: a send that succeeded,
 // even as the drain ran out, is recorded like any other.
 func drained(sendErr error, stop context.Context) bool {
-	return sendErr != nil && stop.Err() != nil
+	return sendErr != nil && !errors.Is(sendErr, errPartlySent) && stop.Err() != nil
 }
 
 // holdTalk sends the delivery back without an attempt while its channel is paused after a 401, or while
@@ -311,6 +317,10 @@ func (d *Deliverer) finish(ctx context.Context, j claimed, sendErr error, logs *
 	defer cancel()
 	attempt := j.attempts + 1
 	status, lastErr, delay := "sent", (*string)(nil), time.Duration(0)
+	if refusals, ok := partlySent(sendErr); ok {
+		msg := truncate(refusals)
+		lastErr, sendErr = &msg, nil
+	}
 	if sendErr != nil {
 		msg := truncate(sendErr.Error())
 		lastErr = &msg

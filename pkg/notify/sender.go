@@ -28,12 +28,14 @@ const (
 	TypeNextcloudTalk = "nextcloud_talk"
 	TypeEmail         = "email"
 	TypeWebhook       = "webhook"
+	// TypeWebPush channels fan out to the owner's browsers (pkg/route), never through Send.
+	TypeWebPush = "web_push"
 	// TypeScript channels run a script in the sandbox (pkg/script), never through Send.
 	TypeScript = "script"
 )
 
 // Types lists the channel types in display order.
-var Types = []string{TypeTelegram, TypeNextcloudTalk, TypeEmail, TypeWebhook, TypeScript}
+var Types = []string{TypeTelegram, TypeNextcloudTalk, TypeEmail, TypeWebhook, TypeScript, TypeWebPush}
 
 // Webhook headers.
 const (
@@ -68,6 +70,9 @@ type permanentError struct{ error }
 func (permanentError) Is(target error) bool { return target == ErrPermanent }
 
 func (e permanentError) Unwrap() error { return e.error }
+
+// Permanent marks err as a refusal a retry cannot fix, for senders outside this package.
+func Permanent(err error) error { return permanentError{err} }
 
 // TelegramConfig is the non-secret config of a telegram channel; the bot token is its secret.
 type TelegramConfig struct {

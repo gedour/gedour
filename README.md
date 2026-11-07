@@ -455,6 +455,32 @@ A Talk channel posts each delivery into a conversation as a bot. No Nextcloud us
   deleted while a channel runs it (409 naming them).
 - Metrics: `gedour_script_runs_total{outcome=ok|error|timeout|killed}`, `gedour_script_run_duration_seconds`.
 
+## Web Push channels
+
+A Web Push channel shows a native browser notification on the owner's registered browsers (devices).
+
+- Devices: `POST /api/v1/push/devices {endpoint, keys: {p256dh, auth}, name, user_agent}` with the browser's
+  `PushSubscription`, subscribed with the key from `GET /api/v1/push/key`. The endpoint passes the webhook
+  rules: https (http only for `GEDOUR_ALLOW_HTTP_HOSTS`); a literal private IP is a 400 at registration unless
+  `GEDOUR_ALLOW_PRIVATE_NETS` allows it; a hostname (`localhost` included) registers, and the SSRF guard refuses
+  it at send time when it resolves to a private address; `p256dh` is a 65-byte P-256 point, `auth`
+  16 bytes, both base64url. A known endpoint updates its device; registered by another user, the device moves
+  to them and leaves the previous owner's channels. At most 20 devices per user. Endpoints and keys are sealed
+  with `GEDOUR_ENCRYPTION_KEY` and never returned or audited.
+- Config: `devices` is `"all"` (every device of the owner, later ones included) or a list of the owner's
+  device ids; `silent` sets urgency `low` and the notification's `silent` option. No secret.
+- Delivery: one delivery pushes to every targeted device (5 at a time, 10 s each). Urgency is `high` for an
+  event of a high priority rule, `low` when silent, `normal` otherwise. A retry skips the devices that
+  accepted. A device the push service answers 404 or 410 is removed (audited as `push_device.gone`); a
+  permanent refusal (400, 401, 403, 413) skips that device for this attempt; a retry caused by another device
+  tries it again. Once the others accepted, the delivery is `sent` with the refusals as its error. With no
+  device left to send to, the delivery is `dead` with `no device`.
+- Payload: JSON `{title, body, url, tag, silent}`, the Telegram text cut to fit 4 KB; `url` is
+  `/inbox?event=<id>`. "Send test" pushes to the channel's devices (cut after 25 s) and answers `accepted`, the
+  devices that took it; `ok` when at least one took it and none can retry.
+- VAPID: a key pair generated at first start and sealed in the database. If it no longer opens (a changed
+  encryption key), Web Push is unavailable: `GET /api/v1/push/key` answers 503 and the type cannot be picked.
+
 ## Kubernetes
 
 `deploy/k8s` is a namespace-less Kustomize base: `kubectl apply -k deploy/k8s` deploys into the current
@@ -624,7 +650,8 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `/api/v1/me` and retry once.
 - `GET /api/v1/audit`: audit entries, newest first (`target_type`, `actor`, `from`, `to`, `cursor`, `limit`).
   A user sees what they did or what was done as them, plus entries on the watches, credentials, channels, rules
-  and deliveries (through the channel) they own now. `watch_share` entries from before migration 17, the
+  and deliveries (through the channel) they own now, and the push device entries that name them as owner (a move
+  writes one per owner, naming that owner only). `watch_share` entries from before migration 17, the
   upgrade's system entries included, go to the watch owner. `GET /api/v1/audit/actors`: the actors of those entries.
 - `/api/v1/watches` (`GET ?kind=&q=`, `POST`), `/api/v1/watches/{id}` (`GET`,
   `PATCH`, `DELETE`), `POST /api/v1/watches/{id}/pause|resume`. A watch carries its run status:
@@ -649,6 +676,8 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 events of your watches in scope.
   `GET /api/v1/filters/reference`: what a filter may use, and its limits.
 - `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
+- `GET /api/v1/push/key`, `/api/v1/push/devices` (`GET`, `POST`), `/api/v1/push/devices/{id}` (`PATCH {name}`,
+  `DELETE`): see [Web Push channels](#web-push-channels). Another user's device is a 404.
 - `/api/v1/scripts` (`GET` without sources, `POST`), `/api/v1/scripts/{id}` (`GET`, `PATCH`, `DELETE`),
   `POST /api/v1/scripts/{id}/dry-run` and `POST /api/v1/scripts/dry-run {source}`, each with
   `{event_id}` (an event of one of your watches) or `{sample: {type, payload, occurred_at, watch}}`: answers

@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/netguard"
@@ -130,5 +132,67 @@ func TestPushRefusals(t *testing.T) {
 	s.Client = g.Client(netguard.Options{Timeout: SendTimeout, HTTPHosts: s.HTTPHosts, NoRedirects: true})
 	if err := s.Push(ctx, sub, []byte("x"), UrgencyNormal); !errors.Is(err, netguard.ErrBlocked) {
 		t.Errorf("private address: %v", err)
+	}
+}
+
+// 010-AC10: silent wins over a high priority rule; no rule (a test) or a normal one is normal.
+func TestPushUrgency(t *testing.T) {
+	for _, tt := range []struct {
+		silent bool
+		rule   *Rule
+		want   string
+	}{
+		{false, nil, UrgencyNormal},
+		{false, &Rule{Priority: "normal"}, UrgencyNormal},
+		{false, &Rule{Priority: "high"}, UrgencyHigh},
+		{true, nil, UrgencyLow},
+		{true, &Rule{Priority: "high"}, UrgencyLow},
+	} {
+		if got := PushUrgency(tt.silent, tt.rule); got != tt.want {
+			t.Errorf("silent %v rule %+v: %s, want %s", tt.silent, tt.rule, got, tt.want)
+		}
+	}
+}
+
+// The rule priority stays out of the webhook and script JSON.
+func TestRulePriorityNotInJSON(t *testing.T) {
+	b, _ := json.Marshal(Rule{ID: "r", Name: "n", Priority: "high"})
+	if string(b) != `{"id":"r","name":"n"}` {
+		t.Fatal(string(b))
+	}
+}
+
+func TestPushPayload(t *testing.T) {
+	d := Delivery{ID: 7, Event: Event{ID: 42, Type: "release.published", Payload: map[string]any{"tag": "v1", "name": "Big <release> & co"}}, Watch: Watch{Name: "cli/cli"}}
+	var m PushMessage
+	if err := json.Unmarshal(PushPayload(d, true), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m != (PushMessage{Title: "cli/cli: v1 published", Body: "Big <release> & co", URL: "/inbox?event=42", Tag: "gedour-event-42", Silent: true}) {
+		t.Fatalf("%+v", m)
+	}
+	if err := json.Unmarshal(PushPayload(TestDelivery(time.Now()), false), &m); err != nil || m.URL != "/inbox" || m.Tag != "gedour-test" || m.Silent {
+		t.Fatalf("test delivery: %+v %v", m, err)
+	}
+	// Over the limit: the body is cut first, then the title, on rune boundaries; quotes double when escaped.
+	for _, tt := range []struct {
+		name, title, detail string
+		keepTitle           bool
+	}{
+		{"long body", "w", strings.Repeat("é", 3000), true},
+		{"escaped body", "w", strings.Repeat(`"`, 3000), true},
+		{"long title", strings.Repeat("ü", 3000), strings.Repeat("x", 100), false},
+	} {
+		d := Delivery{Event: Event{Type: "release.published", Payload: map[string]any{"tag": tt.title, "name": tt.detail}}, Watch: Watch{Name: "w"}}
+		b := PushPayload(d, false)
+		if len(b) > webpush.MaxPayload || !utf8.Valid(b) {
+			t.Fatalf("%s: %d bytes, valid %v", tt.name, len(b), utf8.Valid(b))
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if full := Format(d).Title; (m.Title == full) != tt.keepTitle || (!tt.keepTitle && m.Body != "") || m.Body == tt.detail {
+			t.Errorf("%s: title kept %v, body %d bytes", tt.name, m.Title == full, len(m.Body))
+		}
 	}
 }

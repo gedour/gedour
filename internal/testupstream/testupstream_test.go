@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -160,5 +161,18 @@ func TestPush(t *testing.T) {
 	got := up.Received()
 	if got[0].Endpoint != "push-dev" || got[0].Body != "hello" || got[1].Endpoint != "push-gone-1-rejected" || got[len(got)-1].Body != "" {
 		t.Fatalf("received: %+v", got)
+	}
+	// hang* never answers: the sender's deadline ends the request, and nothing is recorded.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/push/hang-1", bytes.NewReader(body))
+	if resp, err := http.DefaultClient.Do(req); !errors.Is(err, context.DeadlineExceeded) { //nolint:gosec // test server
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		t.Fatalf("hang: %v", err)
+	}
+	if n := len(up.Received()); n != len(got) {
+		t.Fatalf("hang recorded: %d entries, want %d", n, len(got))
 	}
 }

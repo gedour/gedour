@@ -2,12 +2,14 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify/webpush"
@@ -78,4 +80,73 @@ func (s *Sender) Push(ctx context.Context, sub webpush.Subscription, payload []b
 		return permanentError{statusError(label, code, "")}
 	}
 	return statusError(label, code, "")
+}
+
+// AllDevices is the web_push devices value that targets every device of the owner, later ones included.
+const AllDevices = "all"
+
+// WebPushConfig is the config of a web_push channel. Devices is AllDevices or a list of the owner's device
+// ids; stored, a list lives in channel_push_devices and Devices is left out.
+type WebPushConfig struct {
+	Devices any  `json:"devices,omitempty"`
+	Silent  bool `json:"silent"`
+}
+
+// PushUrgency is low for a silent channel, high for an event of a high priority rule, normal otherwise.
+func PushUrgency(silent bool, r *Rule) string {
+	switch {
+	case silent:
+		return UrgencyLow
+	case r != nil && r.Priority == "high":
+		return UrgencyHigh
+	}
+	return UrgencyNormal
+}
+
+// PushMessage is the JSON the service worker gets.
+type PushMessage struct {
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	URL    string `json:"url"`
+	Tag    string `json:"tag"`
+	Silent bool   `json:"silent"`
+}
+
+// PushPayload is the message of d for the service worker, cut to fit one push record: body first, then
+// title, on rune boundaries. url is the gedour path the notification opens.
+func PushPayload(d Delivery, silent bool) []byte {
+	msg := Format(d)
+	m := PushMessage{Title: msg.Title, Body: msg.Detail, URL: "/inbox", Tag: "gedour-test", Silent: silent}
+	if d.Event.ID != 0 {
+		m.URL = "/inbox?event=" + strconv.FormatInt(d.Event.ID, 10)
+		m.Tag = "gedour-event-" + strconv.FormatInt(d.Event.ID, 10)
+	}
+	for {
+		b := pushJSON(m)
+		over := len(b) - webpush.MaxPayload
+		switch {
+		case over <= 0:
+			return b
+		case m.Body != "":
+			m.Body = cutBytes(m.Body, len(m.Body)-over)
+		default:
+			m.Title = cutBytes(m.Title, len(m.Title)-over)
+		}
+	}
+}
+
+func pushJSON(m PushMessage) []byte {
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(m) // strings and a bool always encode
+	return []byte(strings.TrimSuffix(b.String(), "\n"))
+}
+
+// cutBytes keeps at most n bytes of s, dropping a rune the cut split.
+func cutBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.ToValidUTF8(s[:min(n, len(s))], "")
 }

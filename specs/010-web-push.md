@@ -50,8 +50,9 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 ## Acceptance criteria
 
 - [ ] **AC1** A signed-in user registers the current browser as a named device; the API refuses a
-  subscription endpoint that is not `https`, or that resolves to a private address unless
-  `GEDOUR_ALLOW_PRIVATE_NETS` allows it (400).
+  subscription endpoint that is not `https`, or whose host is a literal private IP unless
+  `GEDOUR_ALLOW_PRIVATE_NETS` allows it (400); a hostname resolving to a private address is refused by
+  the dial-time guard at send, as for webhooks.
 - [ ] **AC2** A user lists, renames and removes only their own devices; another user's device id is a 404.
 - [ ] **AC3** Registering the same endpoint twice updates the existing device, never makes a second one.
 - [ ] **AC4** A Web Push channel with `devices: "all"` delivers to every device of its owner, including one

@@ -336,7 +336,8 @@ func PushSubscription(endpoint string) webpush.Subscription {
 }
 
 // pushStatus answers like a push service (RFC 8030, RFC 8292): ids starting with gone answer 410, fail
-// 500; a VAPID token that does not verify for this origin is 403, a body that does not decrypt 400.
+// 500 (push holds hang ones until the sender gives up); a VAPID token that does not verify for this
+// origin is 403, a body that does not decrypt 400.
 func pushStatus(r *http.Request, id string, body []byte) (int, []byte) {
 	switch {
 	case strings.HasPrefix(id, "gone"):
@@ -363,6 +364,12 @@ func pushStatus(r *http.Request, id string, body []byte) (int, []byte) {
 
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if strings.HasPrefix(id, "hang") {
+		// The server notices the client leave only once the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		return
+	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	code, plain := pushStatus(r, id, body)
 	name := "push-" + id

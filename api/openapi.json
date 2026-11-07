@@ -417,7 +417,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent",
             "type": "object"
           },
           "created_at": {
@@ -461,7 +461,8 @@
               "nextcloud_talk",
               "email",
               "webhook",
-              "script"
+              "script",
+              "web_push"
             ],
             "type": "string"
           },
@@ -527,7 +528,8 @@
               "nextcloud_talk",
               "email",
               "webhook",
-              "script"
+              "script",
+              "web_push"
             ],
             "type": "string"
           }
@@ -685,7 +687,7 @@
             "type": "string"
           },
           "secret": {
-            "description": "Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script: none",
+            "description": "Write-only. telegram: bot token (required); nextcloud_talk: bot shared secret, 40 to 128 characters (required); webhook: HMAC key, generated when empty; email, script, web_push: none",
             "maxLength": 512,
             "type": "string"
           },
@@ -695,7 +697,8 @@
               "nextcloud_talk",
               "email",
               "webhook",
-              "script"
+              "script",
+              "web_push"
             ],
             "type": "string"
           }
@@ -855,7 +858,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent",
             "type": "object"
           },
           "created_at": {
@@ -903,7 +906,8 @@
               "nextcloud_talk",
               "email",
               "webhook",
-              "script"
+              "script",
+              "web_push"
             ],
             "type": "string"
           },
@@ -1431,6 +1435,26 @@
         ],
         "type": "object"
       },
+      "KeysStruct": {
+        "additionalProperties": false,
+        "properties": {
+          "auth": {
+            "description": "base64url 16-byte auth secret; write-only",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "p256dh": {
+            "description": "base64url P-256 public key; write-only",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "type": "object"
+      },
       "Limits": {
         "additionalProperties": false,
         "properties": {
@@ -1646,6 +1670,25 @@
           "next_cursor": {
             "description": "Absent on the last page",
             "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ListPushDevicesOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Sorted by name",
+            "items": {
+              "$ref": "#/components/schemas/PushDevice"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1972,6 +2015,55 @@
         ],
         "type": "object"
       },
+      "PushDevice": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "last_push_at": {
+            "description": "When a push service last accepted a message for it",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_agent": {
+            "description": "The browser's user agent at registration",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "user_agent",
+          "created_at",
+          "last_push_at"
+        ],
+        "type": "object"
+      },
+      "PushKeyOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "public_key": {
+            "description": "VAPID public key, base64url: the browser's applicationServerKey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_key"
+        ],
+        "type": "object"
+      },
       "Ref": {
         "additionalProperties": false,
         "properties": {
@@ -2034,6 +2126,49 @@
           "cost",
           "rules",
           "summary"
+        ],
+        "type": "object"
+      },
+      "RegisterPushDeviceInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "endpoint": {
+            "description": "PushSubscription.endpoint; write-only",
+            "maxLength": 2048,
+            "minLength": 1,
+            "type": "string"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/KeysStruct"
+          },
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          "user_agent": {
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys",
+          "name"
+        ],
+        "type": "object"
+      },
+      "RenamePushDeviceInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -2323,8 +2458,13 @@
       "TestResultBody": {
         "additionalProperties": false,
         "properties": {
+          "accepted": {
+            "description": "Web Push channels: how many devices accepted the test",
+            "format": "int64",
+            "type": "integer"
+          },
           "error": {
-            "description": "Why the test message was not sent; for a script, why the run failed",
+            "description": "Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it",
             "type": "string"
           },
           "logs": {
@@ -4158,6 +4298,192 @@
         "summary": "The signed-in user and the session's CSRF token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/push/devices": {
+      "get": {
+        "operationId": "list-push-devices",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListPushDevicesOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The caller's push devices; endpoints and keys are never returned",
+        "tags": [
+          "push"
+        ]
+      },
+      "post": {
+        "operationId": "register-push-device",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushDeviceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushDevice"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Register a browser's push subscription; a known endpoint updates its device",
+        "tags": [
+          "push"
+        ]
+      }
+    },
+    "/api/v1/push/devices/{id}": {
+      "delete": {
+        "operationId": "delete-push-device",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Remove a push device; channels that listed it stop sending to it",
+        "tags": [
+          "push"
+        ]
+      },
+      "patch": {
+        "operationId": "rename-push-device",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenamePushDeviceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushDevice"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Rename one of the caller's push devices",
+        "tags": [
+          "push"
+        ]
+      }
+    },
+    "/api/v1/push/key": {
+      "get": {
+        "operationId": "get-push-key",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushKeyOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The VAPID public key browsers subscribe with; 503 while Web Push is off",
+        "tags": [
+          "push"
         ]
       }
     },

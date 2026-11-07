@@ -215,21 +215,10 @@ test("the Silent switch by keyboard", async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-// 010-AC15: rename a push device, then pick it in a Web Push channel, by keyboard only.
-test("Web Push devices and form by keyboard", async ({ page }) => {
+// 010-AC15, 010-AC18: in the Web Push channel form, rename a device, pick it, then remove it, by keyboard only.
+test("Web Push form and its devices by keyboard", async ({ page }) => {
   const device = await addDevice(page, "Keyboard");
   await page.goto("/channels");
-  const rename = page.getByRole("button", { name: `Rename ${device}` });
-  await tabTo(page, rename);
-  await page.keyboard.press("Enter");
-  const dialog = page.getByRole("dialog", { name: `Rename ${device}` });
-  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.type(`${device} 2`);
-  await page.keyboard.press("Enter");
-  await expect(dialog).toBeHidden();
-  await expect(page.getByRole("list", { name: "Push devices" })).toContainText(`${device} 2`);
-
   const open = page.getByRole("button", { name: "New channel" }).first();
   await open.focus();
   await page.keyboard.press("Enter");
@@ -238,10 +227,23 @@ test("Web Push devices and form by keyboard", async ({ page }) => {
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
   await expect(form.getByRole("radio", { name: "Web Push" })).toBeChecked();
+  const devices = form.getByRole("list", { name: "My devices" });
+
+  await tabTo(page, devices.getByRole("button", { name: `Rename ${device}` }));
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: `Rename ${device}` });
+  await expect(dialog.getByLabel("Name", { exact: true })).toBeFocused();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.type(`${device} 2`);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(devices).toContainText(`${device} 2`);
+  await expect(form).toBeVisible();
+
   await tabTo(page, form.getByRole("radio", { name: /All my devices/ }));
   await page.keyboard.press("ArrowDown");
   await expect(form.getByRole("radio", { name: /Pick devices/ })).toBeChecked();
-  const box = form.getByRole("checkbox", { name: `${device} 2` });
+  const box = devices.getByRole("checkbox", { name: `${device} 2` });
   await tabTo(page, box);
   await page.keyboard.press("Space");
   await expect(box).toBeChecked();
@@ -249,17 +251,29 @@ test("Web Push devices and form by keyboard", async ({ page }) => {
   await tabTo(page, silent);
   await page.keyboard.press("Space");
   await expect(silent).toBeChecked();
-  await page.keyboard.press("Escape");
-  await expect(form).toBeHidden();
 
-  // Removal asks first; its confirm button by keyboard.
-  await tabTo(page, page.getByRole("button", { name: `Remove ${device} 2` }));
+  // Removal asks first; its confirm button by keyboard, then the focus stays in the form: on a neighbour
+  // device, else on the devices group (this headless browser cannot be added).
+  const renames = await devices
+    .getByRole("button", { name: /^Rename / })
+    .evaluateAll((els) => els.map((e) => e.getAttribute("aria-label") ?? ""));
+  const at = renames.indexOf(`Rename ${device} 2`);
+  const next = renames[at + 1] ?? renames[at - 1];
+  await tabTo(page, devices.getByRole("button", { name: `Remove ${device} 2` }), true);
   await page.keyboard.press("Enter");
   const confirm = page.getByRole("dialog", { name: `Remove ${device} 2?` });
   await tabTo(page, confirm.getByRole("button", { name: "Remove" }));
   await page.keyboard.press("Enter");
   await expect(confirm).toBeHidden();
-  await expect(page.getByRole("button", { name: `Rename ${device} 2` })).toHaveCount(0);
+  await expect(devices.getByRole("button", { name: `Rename ${device} 2` })).toHaveCount(0);
+  await expect(
+    next
+      ? devices.getByRole("button", { name: next, exact: true })
+      : form.getByRole("group", { name: "Devices" }),
+  ).toBeFocused();
+  await expect(form).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(form).toBeHidden();
 });
 
 test.describe("without a session", () => {

@@ -8,6 +8,8 @@ const sidebar = (page: Page) => page.getByRole("complementary", { name: "Sidebar
 test.describe("session lost mid-session", () => {
   // 002-AC3: the session cookie goes away; the next API call answers 401 and the gate replaces the app.
   test("the next API call after the session is gone shows the gate", async ({ page, context }) => {
+    // A stream left unanswered: its first event, or its drop, would refetch and take the 401 before Watches does.
+    await page.route("**/api/v1/inbox/stream", () => {});
     await page.goto("/inbox");
     await expect(page.getByRole("button", { name: `Account: ${ALICE.name}` })).toBeVisible();
     await context.clearCookies();

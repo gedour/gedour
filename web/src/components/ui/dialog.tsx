@@ -32,10 +32,12 @@ export function Dialog({
     <dialog
       ref={ref}
       aria-labelledby={titleId}
+      // React bubbles cancel and close up the component tree: a nested dialog's must not close this one.
       onCancel={(e) => {
-        if (!dismissible) e.preventDefault();
+        if (e.target === e.currentTarget && !dismissible) e.preventDefault();
       }}
-      onClose={() => {
+      onClose={(e) => {
+        if (e.target !== e.currentTarget) return;
         // A browser may close it despite the cancelled Escape: put it back while it must stay.
         if (!dismissible && open) ref.current?.showModal();
         else onClose();

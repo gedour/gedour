@@ -26,8 +26,8 @@ import {
   updateChannel,
 } from "@/api/client";
 import { ChannelIcon, DeliveryBadge } from "@/components/ChannelBits";
-import { PushDevicesSection } from "@/components/PushDevices";
 import { EmptyState } from "@/components/EmptyState";
+import { PushDeviceDialogs, PushDeviceList } from "@/components/PushDevices";
 import { ErrorState } from "@/components/ErrorState";
 import { Timestamp } from "@/components/Timestamp";
 import { Button } from "@/components/ui/button";
@@ -60,6 +60,7 @@ import type {
   Delivery,
   DeliveryFilters,
   DeliveryStatus,
+  PushDevice,
 } from "@/types/api";
 
 const sectionClass = "flex flex-col gap-4";
@@ -73,6 +74,8 @@ function useScriptNames(): Map<string, string> {
 export function ChannelsPage({ item }: { item: NavItem }) {
   const query = useQuery({ queryKey: ["channels"], queryFn: listChannels });
   const scriptNames = useScriptNames();
+  // Loaded with the page: picking Web Push must already know whether this browser is a device (010-AC17).
+  usePushDevices();
   const [editing, setEditing] = useState<Channel | "new" | null>(null);
   const [deleting, setDeleting] = useState<Channel | null>(null);
   const newButton = (
@@ -132,7 +135,6 @@ export function ChannelsPage({ item }: { item: NavItem }) {
           </ul>
         )}
       </section>
-      <PushDevicesSection />
       <DeliveriesSection channels={query.data ?? []} />
       <ChannelDialog editing={editing} onClose={() => setEditing(null)} />
       <DeleteDialog channel={deleting} onClose={() => setDeleting(null)} />
@@ -330,6 +332,22 @@ function ChannelForm({
     tick(d.id);
   });
   const here = push.thisId ?? added;
+  const [renaming, setRenaming] = useState<PushDevice | null>(null);
+  const [removing, setRemoving] = useState<PushDevice | null>(null);
+  const devicesBox = useRef<HTMLFieldSetElement>(null);
+  // A removed device's row took the focus with it: once the list drops it, focus a neighbour row, else the fallbacks.
+  const refocus = useRef<{ gone: string; next?: string } | null>(null);
+  useEffect(() => {
+    const r = refocus.current;
+    const box = devicesBox.current;
+    if (!r || !box || push.devices.data?.some((d) => d.id === r.gone)) return;
+    refocus.current = null;
+    (
+      (r.next && box.querySelector<HTMLElement>(`[data-rename="${r.next}"]`)) ||
+      box.querySelector<HTMLElement>("[data-add-browser]") ||
+      box
+    ).focus();
+  }, [push.devices.data]);
   const pushOff = usePushUnavailable();
   // 010-AC17: picking Web Push is the gesture that asks for permission, when this browser is not a device yet.
   const pick = (k: ChannelKind) => {
@@ -427,364 +445,370 @@ function ChannelForm({
     "tz",
   ];
   return (
-    <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
-      {unplaced(errors, [
-        ...shown,
-        ...Object.keys(errors).filter(
-          (k) => k.startsWith("to[") || k.startsWith("devices[") || k.startsWith("at["),
-        ),
-      ]).map((m) => (
-        <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
-          {m}
-        </p>
-      ))}
-      {!channel && (
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="mb-1.5 text-sm font-medium">Type</legend>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {CHANNEL_KINDS.map((k) => {
-              const t = types.data?.find((x) => x.type === k.type);
-              const off = t ? !t.available : false;
-              return (
-                <label
-                  key={k.type}
-                  title={t?.hint}
-                  className={cn(
-                    "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-line px-2 py-3 text-center text-sm has-checked:border-beacon has-checked:bg-beacon-soft/50",
-                    off && "cursor-not-allowed opacity-50",
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="channel-type"
-                    value={k.type}
-                    checked={type === k.type}
-                    disabled={off}
-                    onChange={() => pick(k.type)}
-                    className="sr-only"
-                  />
-                  <k.icon aria-hidden className="size-5" />
-                  {k.label}
-                </label>
-              );
-            })}
-          </div>
-          {types.data?.some((t) => !t.available) && (
-            <p className="text-xs text-muted">
-              {types.data
-                .filter((t) => !t.available)
-                .map((t) => t.hint)
-                .join(" ")}
-            </p>
-          )}
-          {errors.type && <p className="text-sm text-rose-700 dark:text-rose-300">{errors.type}</p>}
-        </fieldset>
-      )}
-      <Field label="Name" error={errors.name}>
-        {(p) => (
-          <input
-            {...p}
-            value={name}
-            maxLength={200}
-            onChange={(e) => setName(e.target.value)}
-            className={inputClass}
-          />
+    <>
+      <form noValidate onSubmit={submit} aria-label="Channel" className="flex flex-col gap-4">
+        {unplaced(errors, [
+          ...shown,
+          ...Object.keys(errors).filter(
+            (k) => k.startsWith("to[") || k.startsWith("devices[") || k.startsWith("at["),
+          ),
+        ]).map((m) => (
+          <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+            {m}
+          </p>
+        ))}
+        {!channel && (
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm font-medium">Type</legend>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {CHANNEL_KINDS.map((k) => {
+                const t = types.data?.find((x) => x.type === k.type);
+                const off = t ? !t.available : false;
+                return (
+                  <label
+                    key={k.type}
+                    title={t?.hint}
+                    className={cn(
+                      "flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-line px-2 py-3 text-center text-sm has-checked:border-beacon has-checked:bg-beacon-soft/50",
+                      off && "cursor-not-allowed opacity-50",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="channel-type"
+                      value={k.type}
+                      checked={type === k.type}
+                      disabled={off}
+                      onChange={() => pick(k.type)}
+                      className="sr-only"
+                    />
+                    <k.icon aria-hidden className="size-5" />
+                    {k.label}
+                  </label>
+                );
+              })}
+            </div>
+            {types.data?.some((t) => !t.available) && (
+              <p className="text-xs text-muted">
+                {types.data
+                  .filter((t) => !t.available)
+                  .map((t) => t.hint)
+                  .join(" ")}
+              </p>
+            )}
+            {errors.type && (
+              <p className="text-sm text-rose-700 dark:text-rose-300">{errors.type}</p>
+            )}
+          </fieldset>
         )}
-      </Field>
-      {type === "telegram" && (
-        <Field
-          label="Chat ID"
-          error={errors.chat_id}
-          hint="Numeric id (e.g. -1001234567890) or @channelname; the bot must be in the chat."
-        >
+        <Field label="Name" error={errors.name}>
           {(p) => (
             <input
               {...p}
-              value={chatId}
-              onChange={(e) => setChatId(e.target.value)}
-              className={cn(inputClass, "font-mono")}
+              value={name}
+              maxLength={200}
+              onChange={(e) => setName(e.target.value)}
+              className={inputClass}
             />
           )}
         </Field>
-      )}
-      {type === "nextcloud_talk" && (
-        <>
-          <p className="text-xs text-muted">
-            On the Nextcloud server, create the bot:{" "}
-            <code className="font-mono break-all">
-              occ talk:bot:create -s &lt;secret&gt; gedour
-            </code>{" "}
-            (Talk 22.0.1 and later) or{" "}
-            <code className="font-mono break-all">
-              occ talk:bot:install --feature response &lt;name&gt; &lt;secret&gt; &lt;url&gt;
-            </code>{" "}
-            (older servers). Then enable it in the conversation:{" "}
-            <code className="font-mono break-all">
-              occ talk:bot:setup &lt;bot-id&gt; &lt;token&gt;
-            </code>
-            .
-          </p>
+        {type === "telegram" && (
           <Field
-            label="Nextcloud URL"
+            label="Chat ID"
+            error={errors.chat_id}
+            hint="Numeric id (e.g. -1001234567890) or @channelname; the bot must be in the chat."
+          >
+            {(p) => (
+              <input
+                {...p}
+                value={chatId}
+                onChange={(e) => setChatId(e.target.value)}
+                className={cn(inputClass, "font-mono")}
+              />
+            )}
+          </Field>
+        )}
+        {type === "nextcloud_talk" && (
+          <>
+            <p className="text-xs text-muted">
+              On the Nextcloud server, create the bot:{" "}
+              <code className="font-mono break-all">
+                occ talk:bot:create -s &lt;secret&gt; gedour
+              </code>{" "}
+              (Talk 22.0.1 and later) or{" "}
+              <code className="font-mono break-all">
+                occ talk:bot:install --feature response &lt;name&gt; &lt;secret&gt; &lt;url&gt;
+              </code>{" "}
+              (older servers). Then enable it in the conversation:{" "}
+              <code className="font-mono break-all">
+                occ talk:bot:setup &lt;bot-id&gt; &lt;token&gt;
+              </code>
+              .
+            </p>
+            <Field
+              label="Nextcloud URL"
+              error={errors.url}
+              hint="The base URL of the Nextcloud server. Redirects are not followed."
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  type="url"
+                  placeholder="https://cloud.example.com"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  className={cn(inputClass, "font-mono")}
+                />
+              )}
+            </Field>
+            <Field
+              label="Conversation token"
+              error={errors.conversation}
+              hint="The end of the conversation's link: /call/<token>."
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  value={conversation}
+                  spellCheck={false}
+                  onChange={(e) => setConversation(e.target.value)}
+                  className={cn(inputClass, "font-mono")}
+                />
+              )}
+            </Field>
+          </>
+        )}
+        {type === "email" && (
+          <Field
+            label="Recipients"
+            error={errors.to ?? Object.entries(errors).find(([k]) => k.startsWith("to["))?.[1]}
+            hint="Up to 10 addresses, one per line or comma-separated."
+          >
+            {(p) => (
+              <textarea
+                {...p}
+                rows={3}
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className={cn(inputClass, "h-auto py-2")}
+              />
+            )}
+          </Field>
+        )}
+        {type === "webhook" && (
+          <Field
+            label="URL"
             error={errors.url}
-            hint="The base URL of the Nextcloud server. Redirects are not followed."
+            hint="gedour POSTs JSON signed with X-Gedour-Signature (HMAC-SHA256). Redirects are not followed."
           >
             {(p) => (
               <input
                 {...p}
                 type="url"
-                placeholder="https://cloud.example.com"
+                placeholder="https://hooks.example.com/gedour"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 className={cn(inputClass, "font-mono")}
               />
             )}
           </Field>
+        )}
+        {type === "script" && (
           <Field
-            label="Conversation token"
-            error={errors.conversation}
-            hint="The end of the conversation's link: /call/<token>."
+            label="Script"
+            error={errors.script_id}
+            hint="Runs in the sandbox for each event: 5 s, log and http.fetch only."
+          >
+            {(p) =>
+              scripts.data?.length === 0 ? (
+                <p className="text-sm">
+                  No scripts yet.{" "}
+                  <Link to="/scripts/new" className="font-medium underline underline-offset-4">
+                    Write one
+                  </Link>{" "}
+                  first.
+                </p>
+              ) : (
+                <select
+                  {...p}
+                  value={scriptId}
+                  onChange={(e) => setScriptId(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">Pick a script…</option>
+                  {(scripts.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              )
+            }
+          </Field>
+        )}
+        {type === "web_push" && (
+          // min-w-0: a fieldset's min-content width would let a device row widen the dialog at 375 px.
+          <fieldset ref={devicesBox} tabIndex={-1} className="flex min-w-0 flex-col gap-2">
+            <legend className="mb-1.5 text-sm font-medium">Devices</legend>
+            {[
+              { all: true, label: "All my devices", hint: "Devices added later included." },
+              { all: false, label: "Pick devices", hint: "Only the ones ticked below." },
+            ].map((o) => (
+              <label key={o.label} className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="push-devices"
+                  checked={(picked === null) === o.all}
+                  onChange={() => setPicked(o.all ? null : here ? [here] : [])}
+                  className="mt-0.5 accent-beacon"
+                />
+                <span>
+                  {o.label} <span className="text-xs text-muted">{o.hint}</span>
+                </span>
+              </label>
+            ))}
+            <PushDeviceList
+              devices={push.devices}
+              here={here}
+              picked={picked}
+              onPick={setPicked}
+              onRename={setRenaming}
+              onRemove={setRemoving}
+              blocked={pushOff !== null}
+            />
+            {deviceError && (
+              <p className="text-sm text-rose-700 dark:text-rose-300">{deviceError}</p>
+            )}
+            {pushOff ? (
+              <p className="text-sm text-muted">{pushOff}</p>
+            ) : (
+              push.thisId === null &&
+              here === null && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="self-start"
+                  data-add-browser
+                  disabled={browser.busy}
+                  onClick={() => browser.add(defaultDeviceName())}
+                >
+                  <BellPlus aria-hidden />
+                  {browser.busy ? "Adding…" : "Add this browser"}
+                </Button>
+              )
+            )}
+            {browser.error && (
+              <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
+                {browser.error}
+              </p>
+            )}
+          </fieldset>
+        )}
+        {type !== "email" && type !== "script" && type !== "web_push" && (
+          <Field
+            label={
+              type === "telegram"
+                ? "Bot token"
+                : type === "nextcloud_talk"
+                  ? "Bot secret"
+                  : "Signing secret"
+            }
+            error={errors.secret}
+            hint={secretHint}
           >
             {(p) => (
               <input
                 {...p}
-                value={conversation}
-                spellCheck={false}
-                onChange={(e) => setConversation(e.target.value)}
+                type="password"
+                autoComplete="new-password"
+                value={secret}
+                placeholder={channel?.last4 ? `••••${channel.last4}` : undefined}
+                onChange={(e) => setSecret(e.target.value)}
                 className={cn(inputClass, "font-mono")}
               />
             )}
           </Field>
-        </>
-      )}
-      {type === "email" && (
-        <Field
-          label="Recipients"
-          error={errors.to ?? Object.entries(errors).find(([k]) => k.startsWith("to["))?.[1]}
-          hint="Up to 10 addresses, one per line or comma-separated."
-        >
-          {(p) => (
-            <textarea
-              {...p}
-              rows={3}
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              className={cn(inputClass, "h-auto py-2")}
-            />
-          )}
-        </Field>
-      )}
-      {type === "webhook" && (
-        <Field
-          label="URL"
-          error={errors.url}
-          hint="gedour POSTs JSON signed with X-Gedour-Signature (HMAC-SHA256). Redirects are not followed."
-        >
-          {(p) => (
-            <input
-              {...p}
-              type="url"
-              placeholder="https://hooks.example.com/gedour"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              className={cn(inputClass, "font-mono")}
-            />
-          )}
-        </Field>
-      )}
-      {type === "script" && (
-        <Field
-          label="Script"
-          error={errors.script_id}
-          hint="Runs in the sandbox for each event: 5 s, log and http.fetch only."
-        >
-          {(p) =>
-            scripts.data?.length === 0 ? (
-              <p className="text-sm">
-                No scripts yet.{" "}
-                <Link to="/scripts/new" className="font-medium underline underline-offset-4">
-                  Write one
-                </Link>{" "}
-                first.
-              </p>
-            ) : (
-              <select
+        )}
+        {(type === "telegram" || type === "nextcloud_talk" || type === "web_push") && (
+          <Field
+            label="Silent"
+            hint={
+              type === "nextcloud_talk"
+                ? "Posts without a notification."
+                : "Notifies without sound."
+            }
+          >
+            {(p) => (
+              <button
                 {...p}
-                value={scriptId}
-                onChange={(e) => setScriptId(e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Pick a script…</option>
-                {(scripts.data ?? []).map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            )
-          }
-        </Field>
-      )}
-      {type === "web_push" && (
-        <fieldset className="flex flex-col gap-2">
-          <legend className="mb-1.5 text-sm font-medium">Devices</legend>
-          {[
-            { all: true, label: "All my devices", hint: "Devices added later included." },
-            { all: false, label: "Pick devices", hint: "Only the ones ticked below." },
-          ].map((o) => (
-            <label key={o.label} className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="push-devices"
-                checked={(picked === null) === o.all}
-                onChange={() => setPicked(o.all ? null : here ? [here] : [])}
-                className="mt-0.5 accent-beacon"
-              />
-              <span>
-                {o.label} <span className="text-xs text-muted">{o.hint}</span>
-              </span>
-            </label>
-          ))}
-          {picked !== null &&
-            (push.devices.data?.length ? (
-              <ul aria-label="Devices to notify" className="flex flex-col gap-1.5 pl-6">
-                {push.devices.data.map((d) => (
-                  <li key={d.id}>
-                    <label className="flex items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={picked.includes(d.id)}
-                        onChange={(e) =>
-                          setPicked(
-                            e.target.checked ? [...picked, d.id] : picked.filter((x) => x !== d.id),
-                          )
-                        }
-                        className="accent-beacon"
-                      />
-                      <span className="min-w-0 wrap-anywhere">{d.name}</span>
-                      {d.id === here && <span className="text-xs text-muted">(this browser)</span>}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="pl-6 text-sm text-muted">
-                No device yet: add this browser, or add others from the Channels page in their own
-                browser.
-              </p>
-            ))}
-          {deviceError && <p className="text-sm text-rose-700 dark:text-rose-300">{deviceError}</p>}
-          {pushOff ? (
-            <p className="text-sm text-muted">{pushOff}</p>
-          ) : (
-            push.thisId === null &&
-            here === null && (
-              <Button
                 type="button"
-                variant="outline"
-                className="self-start"
-                disabled={browser.busy}
-                onClick={() => browser.add(defaultDeviceName())}
-              >
-                <BellPlus aria-hidden />
-                {browser.busy ? "Adding…" : "Add this browser"}
-              </Button>
-            )
-          )}
-          {browser.error && (
-            <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">
-              {browser.error}
-            </p>
-          )}
-        </fieldset>
-      )}
-      {type !== "email" && type !== "script" && type !== "web_push" && (
-        <Field
-          label={
-            type === "telegram"
-              ? "Bot token"
-              : type === "nextcloud_talk"
-                ? "Bot secret"
-                : "Signing secret"
-          }
-          error={errors.secret}
-          hint={secretHint}
-        >
-          {(p) => (
-            <input
-              {...p}
-              type="password"
-              autoComplete="new-password"
-              value={secret}
-              placeholder={channel?.last4 ? `••••${channel.last4}` : undefined}
-              onChange={(e) => setSecret(e.target.value)}
-              className={cn(inputClass, "font-mono")}
-            />
-          )}
-        </Field>
-      )}
-      {(type === "telegram" || type === "nextcloud_talk" || type === "web_push") && (
-        <Field
-          label="Silent"
-          hint={
-            type === "nextcloud_talk" ? "Posts without a notification." : "Notifies without sound."
-          }
-        >
-          {(p) => (
-            <button
-              {...p}
-              type="button"
-              role="switch"
-              aria-checked={silent}
-              onClick={() => setSilent(!silent)}
-              className={cn(
-                "relative h-6 w-11 shrink-0 self-start rounded-full transition-colors",
-                silent ? "bg-beacon" : "bg-muted",
-              )}
-            >
-              <span
-                aria-hidden
+                role="switch"
+                aria-checked={silent}
+                onClick={() => setSilent(!silent)}
                 className={cn(
-                  "absolute top-0.5 left-0.5 size-5 rounded-full bg-surface shadow transition-transform motion-reduce:transition-none",
-                  silent && "translate-x-5",
+                  "relative h-6 w-11 shrink-0 self-start rounded-full transition-colors",
+                  silent ? "bg-beacon" : "bg-muted",
                 )}
-              />
-            </button>
-          )}
-        </Field>
-      )}
-      {DIGEST_TYPES.includes(type) && (
-        <DeliveryFields
-          digest={digest}
-          setDigest={setDigest}
-          times={times}
-          setTimes={(v) => {
-            setTimes(v);
-            // A schedule error is about the rows that were there: it goes when they change.
-            setErrors((e) =>
-              Object.fromEntries(
-                Object.entries(e).filter(([k]) => k !== "at" && !k.startsWith("at[")),
-              ),
-            );
-          }}
-          tz={tz}
-          setTz={setTz}
-          errors={errors}
-        />
-      )}
-      <DialogActions>
-        <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={save.isPending || available?.available === false}
-        >
-          {save.isPending ? "Saving…" : channel ? "Save channel" : "Create channel"}
-        </Button>
-      </DialogActions>
-    </form>
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute top-0.5 left-0.5 size-5 rounded-full bg-surface shadow transition-transform motion-reduce:transition-none",
+                    silent && "translate-x-5",
+                  )}
+                />
+              </button>
+            )}
+          </Field>
+        )}
+        {DIGEST_TYPES.includes(type) && (
+          <DeliveryFields
+            digest={digest}
+            setDigest={setDigest}
+            times={times}
+            setTimes={(v) => {
+              setTimes(v);
+              // A schedule error is about the rows that were there: it goes when they change.
+              setErrors((e) =>
+                Object.fromEntries(
+                  Object.entries(e).filter(([k]) => k !== "at" && !k.startsWith("at[")),
+                ),
+              );
+            }}
+            tz={tz}
+            setTz={setTz}
+            errors={errors}
+          />
+        )}
+        <DialogActions>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={save.isPending || available?.available === false}
+          >
+            {save.isPending ? "Saving…" : channel ? "Save channel" : "Create channel"}
+          </Button>
+        </DialogActions>
+      </form>
+      <PushDeviceDialogs
+        renaming={renaming}
+        removing={removing}
+        onClose={() => {
+          setRenaming(null);
+          setRemoving(null);
+        }}
+        onRemoved={(d) => {
+          const list = push.devices.data ?? [];
+          const i = list.findIndex((x) => x.id === d.id);
+          refocus.current = { gone: d.id, next: (list[i + 1] ?? list[i - 1])?.id };
+          setPicked((p) => p && p.filter((x) => x !== d.id));
+          if (d.id === added) setAdded(null);
+        }}
+      />
+    </>
   );
 }
 

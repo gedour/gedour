@@ -32,7 +32,10 @@
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
   runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005). The a11y, 375 px, keyboard,
   priority, push, api-keys and mcp specs run as bob (channels and watches in part). Specs open (mark read) the newest
-  or a high item, only the keyboard spec touches the rc promotion item; a11y, 375 px and keyboard add push devices for bob.
+  or a high item, only the keyboard spec touches the rc promotion item. Push devices for bob: a11y adds two and
+  keeps them, 375 px and keyboard remove the one they add, push registers its browser. Push also creates, then
+  deletes, a bob rule on the seeded watch targeting its Web Push channel. The last activity test creates, then
+  deletes, alice's Web Push device, channel, rule and watch.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Notifications need `test.use({ channel: "chromium" })`: the default headless shell reports them denied
   even when granted (`push.spec.ts`, which also stubs `PushManager.subscribe` to point at the fake push service).

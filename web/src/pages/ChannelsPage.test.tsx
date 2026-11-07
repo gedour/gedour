@@ -658,6 +658,54 @@ describe("ChannelsPage", () => {
     });
   });
 
+  // 010-AC5, 012-AC11: a Web Push channel with picked devices and a digest sends both parts of its config.
+  it("sends picked devices and a digest for Web Push", async () => {
+    const fn = mockApi({
+      "/api/v1/push/devices": {
+        items: [
+          {
+            id: "d1",
+            name: "Work laptop",
+            user_agent: "Firefox/140",
+            endpoint_sha256: "00",
+            created_at: "2026-11-01T00:00:00Z",
+            last_push_at: null,
+          },
+        ],
+      },
+      "/api/v1/channels": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(channel({ type: "web_push", config: { devices: ["d1"] } }), {
+              status: 201,
+            })
+          : Response.json({ items: [] }),
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    const dialog = screen.getByRole("dialog", { name: "New channel" });
+    await userEvent.click(within(dialog).getByText("Web Push"));
+    await userEvent.click(within(dialog).getByLabelText(/Pick devices/));
+    await userEvent.click(await within(dialog).findByRole("checkbox", { name: "Work laptop" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: /^Digest/ }));
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Pushes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+        name: "Pushes",
+        type: "web_push",
+        config: {
+          devices: ["d1"],
+          silent: false,
+          delivery: "digest",
+          at: ["09:00"],
+          tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
+      }),
+    );
+  });
+
   // 012-AC11: an empty zone is sent as UTC, 24 rows is the cap, and a server error lands on its row.
   it("caps the digest times and places the server's schedule errors", async () => {
     const fn = mockApi({

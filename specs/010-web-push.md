@@ -1,6 +1,6 @@
 # 010 — Web Push channel
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-07
 
@@ -49,39 +49,39 @@ ones picked in the channel form. Clicking a notification opens gedour on the eve
 
 ## Acceptance criteria
 
-- [ ] **AC1** A signed-in user registers the current browser as a named device; the API refuses a
+- [x] **AC1** A signed-in user registers the current browser as a named device; the API refuses a
   subscription endpoint that is not `https`, or whose host is a literal private IP unless
   `GEDOUR_ALLOW_PRIVATE_NETS` allows it (400); a hostname resolving to a private address is refused by
   the dial-time guard at send, as for webhooks.
-- [ ] **AC2** A user lists, renames and removes only their own devices; another user's device id is a 404.
-- [ ] **AC3** Registering the same endpoint twice updates the existing device, never makes a second one.
-- [ ] **AC4** A Web Push channel with `devices: "all"` delivers to every device of its owner, including one
+- [x] **AC2** A user lists, renames and removes only their own devices; another user's device id is a 404.
+- [x] **AC3** Registering the same endpoint twice updates the existing device, never makes a second one.
+- [x] **AC4** A Web Push channel with `devices: "all"` delivers to every device of its owner, including one
   registered after the channel was created.
-- [ ] **AC5** A channel with a device list delivers only to those devices; a list naming a device that is
+- [x] **AC5** A channel with a device list delivers only to those devices; a list naming a device that is
   not the owner's is a 400; removing a device drops it from every list that names it.
-- [ ] **AC6** The pushed payload decrypts with the subscription's keys (RFC 8291 test vector, and a
+- [x] **AC6** The pushed payload decrypts with the subscription's keys (RFC 8291 test vector, and a
   round trip against the fake push service), and the VAPID JWT verifies against the served public key.
-- [ ] **AC7** A delivery where one device accepts and another fails retries only the failed device; it is
+- [x] **AC7** A delivery where one device accepts and another fails retries only the failed device; it is
   `sent` once every targeted device has accepted or been removed.
-- [ ] **AC8** A 404 or 410 from the push service removes the device and writes an audit entry; the delivery
+- [x] **AC8** A 404 or 410 from the push service removes the device and writes an audit entry; the delivery
   does not retry that device.
-- [ ] **AC9** A channel with no device to send to (none registered, or every listed device removed) makes its
+- [x] **AC9** A channel with no device to send to (none registered, or every listed device removed) makes its
   deliveries `dead` with the error "no device", shown as the channel's last status.
-- [ ] **AC10** Urgency is `low` for a silent channel, `high` for an event of a high priority rule, `normal`
+- [x] **AC10** Urgency is `low` for a silent channel, `high` for an event of a high priority rule, `normal`
   otherwise; silent wins when both apply.
-- [ ] **AC11** The VAPID key pair survives a restart and is stored sealed, never in clear in the database.
-- [ ] **AC12** `/sw.js` is served with a JavaScript content type, not the SPA fallback; the CSP allows it and
+- [x] **AC11** The VAPID key pair survives a restart and is stored sealed, never in clear in the database.
+- [x] **AC12** `/sw.js` is served with a JavaScript content type, not the SPA fallback; the CSP allows it and
   e2e sees no CSP violation.
-- [ ] **AC13** In Chromium with notifications granted, an e2e test registers a device, creates a channel,
+- [x] **AC13** In Chromium with notifications granted, an e2e test registers a device, creates a channel,
   sends a test that the fake push service decrypts, and the real service worker shows the delivered
   notification; its click handler opens gedour on the item. The browser's subscribe call is stubbed (headless
   Chromium cannot reach a real push service) and the OS click is replaced by the worker's own handler.
-- [ ] **AC14** A browser that refuses permission, or has no Push API, shows why in the form and registers
+- [x] **AC14** A browser that refuses permission, or has no Push API, shows why in the form and registers
   nothing.
-- [ ] **AC15** The device list and channel form pass the a11y (light and dark), 375 px, keyboard and CSP checks.
-- [ ] **AC16** Device registration, rename and removal, and Web Push channel changes, are in the audit log;
+- [x] **AC15** The device list and channel form pass the a11y (light and dark), 375 px, keyboard and CSP checks.
+- [x] **AC16** Device registration, rename and removal, and Web Push channel changes, are in the audit log;
   the endpoint and keys never appear in it or in the API's channel output.
-- [ ] **AC17** In the new channel form, picking the Web Push type asks for permission when the current browser
+- [x] **AC17** In the new channel form, picking the Web Push type asks for permission when the current browser
   is not a device and its permission is `default` (already `granted`: it registers without a prompt);
   "Add this browser" stays as the fallback. No prompt on page load or on save. Once granted, the new device is
   registered and selected in the form.

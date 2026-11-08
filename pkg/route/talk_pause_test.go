@@ -27,6 +27,8 @@ type talkEnv struct {
 	alice string
 	watch string
 	d     *Deliverer
+	// digest makes the rule of events a 07:00 UTC digest.
+	digest bool
 }
 
 func newTalkEnv(t *testing.T) *talkEnv {
@@ -64,6 +66,9 @@ func (e *talkEnv) setSecret(t *testing.T, id, sec string) {
 func (e *talkEnv) events(t *testing.T, n int, channels ...string) {
 	t.Helper()
 	rule := e.rule(t, e.alice, nil, "", channels...)
+	if e.digest {
+		e.setSchedule(t, rule, "07:00", "UTC")
+	}
 	for i := range n {
 		e.event(t, e.watch, "release.published", fmt.Sprintf("v%d", i))
 	}

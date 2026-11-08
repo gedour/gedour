@@ -417,7 +417,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery (\"immediate\", the default, or \"digest\"), at (digest: 1 to 24 local times \"HH:MM\"), tz (digest: IANA time zone, default UTC)",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent.",
             "type": "object"
           },
           "created_at": {
@@ -749,6 +749,16 @@
       "CreateRuleInputBody": {
         "additionalProperties": false,
         "properties": {
+          "at": {
+            "description": "Digest only: 1 to 24 local times HH:MM",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "channel_ids": {
             "description": "The caller's channels",
             "items": {
@@ -759,6 +769,15 @@
               "array",
               "null"
             ]
+          },
+          "delivery": {
+            "default": "immediate",
+            "description": "digest needs at, and priority normal",
+            "enum": [
+              "immediate",
+              "digest"
+            ],
+            "type": "string"
           },
           "enabled": {
             "description": "Defaults to true",
@@ -779,6 +798,10 @@
               "normal",
               "high"
             ],
+            "type": "string"
+          },
+          "tz": {
+            "description": "Digest only: IANA time zone, default UTC",
             "type": "string"
           },
           "watch_id": {
@@ -860,7 +883,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery (\"immediate\", the default, or \"digest\"), at (digest: 1 to 24 local times \"HH:MM\"), tz (digest: IANA time zone, default UTC)",
+            "description": "telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent.",
             "type": "object"
           },
           "created_at": {
@@ -2184,6 +2207,16 @@
       "Rule": {
         "additionalProperties": false,
         "properties": {
+          "at": {
+            "description": "Digest: the local times of day, HH:MM, sorted; empty when immediate",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "channel_ids": {
             "description": "Channels besides the inbox, which is always on",
             "items": {
@@ -2196,6 +2229,14 @@
           },
           "created_at": {
             "format": "date-time",
+            "type": "string"
+          },
+          "delivery": {
+            "description": "digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once",
+            "enum": [
+              "immediate",
+              "digest"
+            ],
             "type": "string"
           },
           "enabled": {
@@ -2218,6 +2259,10 @@
               "normal",
               "high"
             ],
+            "type": "string"
+          },
+          "tz": {
+            "description": "Digest: the IANA time zone of at; empty when immediate",
             "type": "string"
           },
           "updated_at": {
@@ -2249,6 +2294,9 @@
           "enabled",
           "priority",
           "channel_ids",
+          "delivery",
+          "at",
+          "tz",
           "created_at",
           "updated_at"
         ],
@@ -2566,6 +2614,16 @@
       "UpdateRuleInputBody": {
         "additionalProperties": false,
         "properties": {
+          "at": {
+            "description": "Digest only: replaces the times",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "channel_ids": {
             "description": "Replaces the list; [] keeps the inbox only",
             "items": {
@@ -2576,6 +2634,14 @@
               "array",
               "null"
             ]
+          },
+          "delivery": {
+            "description": "immediate clears at and tz",
+            "enum": [
+              "immediate",
+              "digest"
+            ],
+            "type": "string"
           },
           "enabled": {
             "type": "boolean"
@@ -2594,6 +2660,10 @@
               "normal",
               "high"
             ],
+            "type": "string"
+          },
+          "tz": {
+            "description": "Digest only: empty string for UTC",
             "type": "string"
           },
           "watch_id": {

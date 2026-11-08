@@ -107,7 +107,7 @@ func TestDigestFormat(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), "<br>") {
 		t.Errorf("mail html: %v", err)
 	}
-	if s := SampleDigest(time.Now()); len(s.Deliveries) != 2 || !strings.Contains(TelegramDigest(s, ""), "2 unread events") {
+	if s := sampleDigest(time.Now()); len(s.Deliveries) != 2 || !strings.Contains(TelegramDigest(s, ""), "2 unread events") {
 		t.Errorf("sample: %q", TelegramDigest(s, ""))
 	}
 }
@@ -157,7 +157,7 @@ func TestSendDigest(t *testing.T) {
 	s := newSender(t, "127.0.0.0/8")
 	ch := talkChannel(srv.URL, "abcd", true)
 	ch.Secret = testupstream.TalkSecret
-	dg := SampleDigest(time.Now())
+	dg := sampleDigest(time.Now())
 	if err := s.SendDigest(context.Background(), ch, dg); err != nil {
 		t.Fatal(err)
 	}
@@ -187,4 +187,13 @@ func TestSendDigest(t *testing.T) {
 			t.Errorf("%s: bad config sent", typ)
 		}
 	}
+}
+
+// sampleDigest is two events, no real watch behind them.
+func sampleDigest(now time.Time) Digest {
+	w := Watch{Name: "gedour (sample)"}
+	return Digest{Deliveries: []Delivery{
+		{Event: Event{Type: "release.published", ObservedAt: now, Payload: map[string]any{"tag": "v1.0.0"}}, Watch: w},
+		{Event: Event{Type: "pr.opened", ObservedAt: now, Payload: map[string]any{"number": 1.0, "author": "gedour"}}, Watch: w},
+	}}
 }

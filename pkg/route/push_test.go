@@ -594,25 +594,3 @@ func TestPushMoveEntryOwnContext(t *testing.T) {
 		}
 	}
 }
-
-// 012-AC11, 012-AC12: "Send test" on a Web Push digest channel pushes the sample digest, tagged per channel.
-func TestPushTestSendDigest(t *testing.T) {
-	p := newPushEnv(t)
-	alice := p.user(t, "alice")
-	p.device(t, alice, "ok", false)
-	ch := p.channel(t, alice, false)
-	if _, err := p.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"delivery": "digest", "at": ["07:00"], "tz": "UTC"}' WHERE id = $1`, ch); err != nil {
-		t.Fatal(err)
-	}
-	s := New(p.pool, zap.NewNop(), p.box, pushSender(t), nil, nil, nil, p.m)
-	s.viewer = func(context.Context) (string, bool) { return alice, true }
-	res, err := s.testChannel(context.Background(), &idPath{ID: ch})
-	if err != nil || !res.Body.OK || deref2(res.Body.Accepted) != 1 {
-		t.Fatalf("%+v, %v", res, err)
-	}
-	var m notify.PushMessage
-	if got := p.up.Received(); len(got) != 1 || json.Unmarshal([]byte(got[0].Body), &m) != nil ||
-		m.Title != "2 unread events" || m.Tag != "gedour-digest-"+ch || m.URL != "/inbox" {
-		t.Fatalf("pushed %+v", m)
-	}
-}

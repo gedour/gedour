@@ -21,7 +21,8 @@ import {
   updateRule,
 } from "@/api/client";
 import { ChannelIcon } from "@/components/ChannelBits";
-import { channelTarget } from "@/lib/channels";
+import { DeliveryFields } from "@/components/DeliveryFields";
+import { browserTimeZone, channelTarget, digestErrors } from "@/lib/channels";
 import { ErrorState } from "@/components/ErrorState";
 import { FilterReference } from "@/components/FilterReference";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,11 @@ function RuleForm({ initial }: { initial?: Rule }) {
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [priority, setPriority] = useState<Rule["priority"]>(initial?.priority ?? "normal");
   const [channelIds, setChannelIds] = useState<string[]>(initial?.channel_ids ?? []);
+  const [digest, setDigest] = useState(initial?.delivery === "digest");
+  const [times, setTimes] = useState<string[]>(initial?.at?.length ? initial.at : ["09:00"]);
+  const [tz, setTz] = useState(initial?.tz || browserTimeZone);
+  // 012-AC14: high priority already sends at once, so it locks the rule to immediate.
+  const digestOn = digest && priority !== "high";
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPreview, setShowPreview] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -130,7 +136,16 @@ function RuleForm({ initial }: { initial?: Rule }) {
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { name, filter, enabled, priority, channel_ids: channelIds };
+      const body = {
+        name,
+        filter,
+        enabled,
+        priority,
+        channel_ids: channelIds,
+        ...(digestOn
+          ? { delivery: "digest" as const, at: times, tz: tz.trim() || "UTC" }
+          : { delivery: "immediate" as const }),
+      };
       return initial
         ? updateRule(initial.id, { ...body, watch_id: watchId })
         : createRule({ ...body, watch_id: watchId || undefined });
@@ -175,8 +190,9 @@ function RuleForm({ initial }: { initial?: Rule }) {
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    setErrors({});
-    save.mutate();
+    const local = digestOn ? digestErrors(times, tz.trim()) : {};
+    setErrors(local);
+    if (Object.keys(local).length === 0) save.mutate();
   };
   const saveProblem = filterProblem(save.error);
   const problem = live ?? saveProblem;
@@ -185,7 +201,17 @@ function RuleForm({ initial }: { initial?: Rule }) {
   return (
     <Page title={initial ? `Edit ${initial.name}` : "New rule"}>
       <form noValidate onSubmit={submit} aria-label="Rule" className="flex flex-col gap-6">
-        {unplaced(errors, ["name", "watch_id", "priority", "filter", "channel_ids"]).map((m) => (
+        {unplaced(errors, [
+          "name",
+          "watch_id",
+          "priority",
+          "filter",
+          "channel_ids",
+          "delivery",
+          "at",
+          "tz",
+          ...Object.keys(errors).filter((k) => k.startsWith("at[")),
+        ]).map((m) => (
           <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
             {m}
           </p>
@@ -363,6 +389,28 @@ function RuleForm({ initial }: { initial?: Rule }) {
               ))}
             </fieldset>
           )}
+          <DeliveryFields
+            locked={
+              priority === "high"
+                ? "High priority sends each event at once: set priority to normal for a digest."
+                : undefined
+            }
+            digest={digest}
+            setDigest={setDigest}
+            times={times}
+            setTimes={(v) => {
+              setTimes(v);
+              // A schedule error is about the rows that were there: it goes when they change.
+              setErrors((e) =>
+                Object.fromEntries(
+                  Object.entries(e).filter(([k]) => k !== "at" && !k.startsWith("at[")),
+                ),
+              );
+            }}
+            tz={tz}
+            setTz={setTz}
+            errors={errors}
+          />
         </section>
 
         <div className="flex flex-wrap items-center gap-2">

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"html"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -16,15 +15,6 @@ type Digest struct {
 	// ID is the lead delivery, Talk's reference; 0 for a test.
 	ID         int64
 	Deliveries []Delivery
-}
-
-// SampleDigest is what "Send test" sends on a digest channel: two events, no real watch behind them.
-func SampleDigest(now time.Time) Digest {
-	w := Watch{Name: "gedour (sample)"}
-	return Digest{Deliveries: []Delivery{
-		{Event: Event{Type: "release.published", ObservedAt: now, Payload: map[string]any{"tag": "v1.0.0"}}, Watch: w},
-		{Event: Event{Type: "pr.opened", ObservedAt: now, Payload: map[string]any{"number": 1.0, "author": "gedour"}}, Watch: w},
-	}}
 }
 
 type digestGroup struct {

@@ -993,7 +993,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery ("immediate", the default, or "digest"), at (digest: 1 to 24 local times "HH:MM"), tz (digest: IANA time zone, default UTC) */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. */
       config: {
         [key: string]: unknown;
       };
@@ -1127,8 +1127,16 @@ export interface components {
       username?: string;
     };
     CreateRuleInputBody: {
+      /** @description Digest only: 1 to 24 local times HH:MM */
+      at?: string[] | null;
       /** @description The caller's channels */
       channel_ids?: string[] | null;
+      /**
+       * @description digest needs at, and priority normal
+       * @default immediate
+       * @enum {string}
+       */
+      delivery: "immediate" | "digest";
       /** @description Defaults to true */
       enabled?: boolean;
       filter?: string;
@@ -1138,6 +1146,8 @@ export interface components {
        * @enum {string}
        */
       priority: "normal" | "high";
+      /** @description Digest only: IANA time zone, default UTC */
+      tz?: string;
       /** @description One of the caller's watches; empty for all of them */
       watch_id?: string;
     };
@@ -1170,7 +1180,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery ("immediate", the default, or "digest"), at (digest: 1 to 24 local times "HH:MM"), tz (digest: IANA time zone, default UTC) */
+      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. */
       config: {
         [key: string]: unknown;
       };
@@ -1633,10 +1643,17 @@ export interface components {
       name: string;
     };
     Rule: {
+      /** @description Digest: the local times of day, HH:MM, sorted; empty when immediate */
+      at: string[] | null;
       /** @description Channels besides the inbox, which is always on */
       channel_ids: string[] | null;
       /** Format: date-time */
       created_at: string;
+      /**
+       * @description digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once
+       * @enum {string}
+       */
+      delivery: "immediate" | "digest";
       enabled: boolean;
       /** @description expr expression over event and watch; empty matches every event */
       filter: string;
@@ -1648,6 +1665,8 @@ export interface components {
        * @enum {string}
        */
       priority: "normal" | "high";
+      /** @description Digest: the IANA time zone of at; empty when immediate */
+      tz: string;
       /** Format: date-time */
       updated_at: string;
       /**
@@ -1774,13 +1793,22 @@ export interface components {
       secret?: string;
     };
     UpdateRuleInputBody: {
+      /** @description Digest only: replaces the times */
+      at?: string[] | null;
       /** @description Replaces the list; [] keeps the inbox only */
       channel_ids?: string[] | null;
+      /**
+       * @description immediate clears at and tz
+       * @enum {string}
+       */
+      delivery?: "immediate" | "digest";
       enabled?: boolean;
       filter?: string;
       name?: string;
       /** @enum {string} */
       priority?: "normal" | "high";
+      /** @description Digest only: empty string for UTC */
+      tz?: string;
       /** @description Empty string: all the caller's watches */
       watch_id?: string;
     };

@@ -3,7 +3,9 @@ package route
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,79 +15,81 @@ import (
 	"github.com/gedour/gedour/pkg/notify"
 )
 
-// 012-AC1: a digest needs 1 to 24 HH:MM times and a known zone, and only on types that can list events.
-func TestDigestConfig(t *testing.T) {
-	s := &Service{}
-	tg := func(extra map[string]any) map[string]any {
-		c := map[string]any{"chat_id": "-100123"}
-		for k, v := range extra {
-			c[k] = v
-		}
-		return c
-	}
-	many := make([]any, 25)
+// 012-AC1, 012-AC13, 012-AC14: a digest rule needs 1 to 24 HH:MM times and a known zone, and priority normal;
+// times are sorted and deduplicated, the zone defaults to UTC.
+func TestRuleSchedule(t *testing.T) {
+	many := make([]string, 25)
 	for i := range many {
 		many[i] = time.Date(0, 1, 1, i%24, i/24, 0, 0, time.UTC).Format("15:04")
 	}
 	for _, tt := range []struct {
-		name  string
-		typ   string
-		cfg   map[string]any
-		field string // "" when valid
-		want  map[string]any
+		name               string
+		delivery, priority string
+		at                 []string
+		tz                 string
+		field              string // "" when valid
+		want               *schedule
 	}{
-		{name: "digest", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{"18:00", "09:00", "09:00"}, "tz": "Europe/Paris"}),
-			want: map[string]any{"delivery": "digest", "at": []any{"09:00", "18:00"}, "tz": "Europe/Paris"}},
-		{name: "default tz", typ: notify.TypeEmail, cfg: map[string]any{"to": []any{"a@x.test"}, "delivery": "digest", "at": []any{"07:30"}},
-			want: map[string]any{"tz": "UTC"}},
-		{name: "web push", typ: notify.TypeWebPush, cfg: map[string]any{"devices": "all", "delivery": "digest", "at": []any{"00:00", "23:59"}}},
-		{name: "immediate", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "immediate"})},
-		{name: "no at", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest"}), field: "at"},
-		{name: "empty at", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{}}), field: "at"},
-		{name: "25 times", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": many}), field: "at"},
-		{name: "not HH:MM", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{"9:00"}}), field: "at[0]"},
-		{name: "24:00", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{"09:00", "24:00"}}), field: "at[1]"},
-		{name: "not a string", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{900}}), field: "at[0]"},
-		{name: "unknown tz", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{"09:00"}, "tz": "Europe/Atlantis"}), field: "tz"},
-		{name: "server tz", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "digest", "at": []any{"09:00"}, "tz": "Local"}), field: "tz"},
-		{name: "unknown mode", typ: notify.TypeTelegram, cfg: tg(map[string]any{"delivery": "weekly"}), field: "delivery"},
-		{name: "at without digest", typ: notify.TypeTelegram, cfg: tg(map[string]any{"at": []any{"09:00"}}), field: "at"},
-		{name: "webhook", typ: notify.TypeWebhook, cfg: map[string]any{"url": "https://hooks.example.com/x", "delivery": "digest", "at": []any{"09:00"}}, field: "delivery"},
-		{name: "script", typ: notify.TypeScript, cfg: map[string]any{"script_id": "6f1c0f5e-7d43-4a39-9b0e-2b8f5d8e0c11", "delivery": "digest", "at": []any{"09:00"}}, field: "delivery"},
+		{name: "digest", delivery: deliveryDigest, at: []string{"18:00", "09:00", "09:00"}, tz: "Europe/Paris",
+			want: &schedule{At: []string{"09:00", "18:00"}, TZ: "Europe/Paris"}},
+		{name: "default tz", delivery: deliveryDigest, at: []string{"07:30"}, want: &schedule{At: []string{"07:30"}, TZ: "UTC"}},
+		{name: "immediate", delivery: deliveryImmediate},
+		{name: "immediate high", delivery: deliveryImmediate, priority: priorityHigh},
+		{name: "empty means immediate", delivery: ""},
+		{name: "no at", delivery: deliveryDigest, field: "at"},
+		{name: "25 times", delivery: deliveryDigest, at: many, field: "at"},
+		{name: "not HH:MM", delivery: deliveryDigest, at: []string{"9:00"}, field: "at[0]"},
+		{name: "24:00", delivery: deliveryDigest, at: []string{"09:00", "24:00"}, field: "at[1]"},
+		{name: "unknown tz", delivery: deliveryDigest, at: []string{"09:00"}, tz: "Europe/Atlantis", field: "tz"},
+		{name: "server tz", delivery: deliveryDigest, at: []string{"09:00"}, tz: "Local", field: "tz"},
+		{name: "high priority", delivery: deliveryDigest, priority: priorityHigh, at: []string{"09:00"}, field: "delivery"},
+		{name: "at without digest", delivery: deliveryImmediate, at: []string{"09:00"}, field: "at"},
+		{name: "tz without digest", delivery: deliveryImmediate, tz: "UTC", field: "tz"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			out, errs := s.validateConfig(tt.typ, tt.cfg)
+			got, errs := ruleSchedule(tt.delivery, tt.priority, tt.at, tt.tz)
 			if tt.field == "" {
-				if len(errs) > 0 {
-					t.Fatalf("refused: %v", errs)
-				}
-				for k, v := range tt.want {
-					if !jsonEqual(out[k], v) {
-						t.Errorf("%s = %v, want %v", k, out[k], v)
-					}
+				if len(errs) > 0 || !reflect.DeepEqual(got, tt.want) {
+					t.Fatalf("%+v, %v; want %+v", got, errs, tt.want)
 				}
 				return
 			}
-			var hit bool
-			for _, err := range errs {
-				var d *huma.ErrorDetail
-				if errors.As(err, &d) && d.Location == "body.config."+tt.field {
-					hit = true
-				}
+			if !hasField(errs, "body."+tt.field) {
+				t.Fatalf("errors %v, want one on body.%s", errs, tt.field)
 			}
-			if !hit {
+		})
+	}
+}
+
+// 012-AC13: a channel config still sending delivery, at or tz is refused, on every type.
+func TestChannelRefusesDelivery(t *testing.T) {
+	s := &Service{}
+	for _, tt := range []struct {
+		typ   string
+		cfg   map[string]any
+		field string
+	}{
+		{notify.TypeTelegram, map[string]any{"chat_id": "-100123", "delivery": "digest", "at": []any{"09:00"}}, "delivery"},
+		{notify.TypeEmail, map[string]any{"to": []any{"a@x.test"}, "delivery": "immediate"}, "delivery"},
+		{notify.TypeWebPush, map[string]any{"devices": "all", "at": []any{"09:00"}}, "at"},
+		{notify.TypeWebhook, map[string]any{"url": "https://hooks.example.com/x", "tz": "UTC"}, "tz"},
+	} {
+		t.Run(tt.typ, func(t *testing.T) {
+			if _, errs := s.validateConfig(tt.typ, tt.cfg); !hasField(errs, "body.config."+tt.field) {
 				t.Fatalf("errors %v, want one on body.config.%s", errs, tt.field)
 			}
 		})
 	}
 }
 
-func jsonEqual(a, b any) bool {
-	if l, ok := a.([]string); ok {
-		r, _ := b.([]any)
-		return slices.EqualFunc(l, r, func(s string, x any) bool { return s == x })
+func hasField(errs []error, loc string) bool {
+	for _, err := range errs {
+		var d *huma.ErrorDetail
+		if errors.As(err, &d) && d.Location == loc {
+			return true
+		}
 	}
-	return a == b
+	return false
 }
 
 // 012-AC2: the next scheduled instant keeps the local wall time across both Europe/Paris DST changes.
@@ -153,12 +157,28 @@ func TestScheduleNext(t *testing.T) {
 	}
 }
 
-func (e *env) digestChannel(t *testing.T, owner, at, tz string) string {
+// tgChannel is a Telegram channel: a digest rule makes its deliveries wait (012-AC15).
+func (e *env) tgChannel(t *testing.T, owner string) string {
 	t.Helper()
 	var id string
-	e.scalar(t, &id, `INSERT INTO channels (owner_id, name, type, config) VALUES ($1, gen_random_uuid()::text, 'telegram',
-		jsonb_build_object('chat_id', '-100123', 'delivery', 'digest', 'at', jsonb_build_array($2::text), 'tz', $3::text)) RETURNING id::text`, owner, at, tz)
+	e.scalar(t, &id, `INSERT INTO channels (owner_id, name, type, config) VALUES ($1, gen_random_uuid()::text, 'telegram', '{"chat_id": "-100123"}') RETURNING id::text`, owner)
 	return id
+}
+
+// digestRule is e.rule with a 07:00 UTC digest.
+func (e *env) digestRule(t *testing.T, owner string, watch *string, filter string, channels ...string) string {
+	t.Helper()
+	id := e.rule(t, owner, watch, filter, channels...)
+	e.setSchedule(t, id, "07:00", "UTC")
+	return id
+}
+
+// setSchedule writes a rule's digest schedule behind the API, which reschedules nothing.
+func (e *env) setSchedule(t *testing.T, rule, at, tz string) {
+	t.Helper()
+	if _, err := e.pool.Exec(context.Background(), `UPDATE rules SET delivery = 'digest', digest_at = ARRAY[$2], digest_tz = $3 WHERE id = $1`, rule, at, tz); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type queued struct {
@@ -170,71 +190,147 @@ type queued struct {
 func (e *env) queued(t *testing.T, event int64, channel string) queued {
 	t.Helper()
 	var q queued
-	if err := e.pool.QueryRow(context.Background(), `SELECT next_attempt_at, digest, rule_id::text FROM deliveries WHERE event_id = $1 AND channel_id = $2`,
+	if err := e.pool.QueryRow(context.Background(), `SELECT next_attempt_at, digest, COALESCE(rule_id::text, '') FROM deliveries WHERE event_id = $1 AND channel_id = $2`,
 		event, channel).Scan(&q.due, &q.digest, &q.rule); err != nil {
 		t.Fatal(err)
 	}
 	return q
 }
 
-// 012-AC2, 012-AC6: a digest channel's delivery waits for the next scheduled time; one taken by a high
-// priority rule, even after a normal one, is due now and outside the digest; an immediate channel is unchanged.
+func (q queued) now() bool { return !q.digest && time.Until(q.due) <= 0 }
+
+// 012-AC2, 012-AC15: a digest rule's delivery to a Telegram channel waits for the rule's next scheduled time; to a
+// webhook or script channel it goes at once; an immediate rule is unchanged.
 func TestRoutingDigest(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user(t, "alice")
 	w := e.watch(t, alice)
-	dig := e.digestChannel(t, alice, "07:00", "Europe/Paris")
-	hook := e.webhook(t, alice, "https://hooks.example.com/x")
-	normal := e.rule(t, alice, &w, `event.type == "release.published"`, dig, hook)
-	ev := e.event(t, w, "release.published", "v1")
+	tg, hook, other := e.tgChannel(t, alice), e.webhook(t, alice, "https://hooks.example.com/x"), e.tgChannel(t, alice)
+	script := e.scriptChannel(t, alice, "function main() {}")
+	rule := e.rule(t, alice, &w, "", tg, hook, script)
+	e.setSchedule(t, rule, "07:00", "Europe/Paris")
+	w2 := e.watch(t, alice)
+	e.rule(t, alice, &w2, "", other)
+	ev, ev2 := e.event(t, w, "release.published", "v1"), e.event(t, w2, "release.published", "v1")
 	routeAll(t, e.router())
 	paris, _ := time.LoadLocation("Europe/Paris")
-	q := e.queued(t, ev, dig)
+	q := e.queued(t, ev, tg)
 	if local := q.due.In(paris); !q.digest || local.Hour() != 7 || local.Minute() != 0 || time.Until(q.due) <= 0 || time.Until(q.due) > 25*time.Hour {
 		t.Errorf("digest delivery due %s (Paris), digest %v", q.due.In(paris), q.digest)
 	}
-	if q := e.queued(t, ev, hook); q.digest || time.Until(q.due) > 0 {
-		t.Errorf("immediate delivery due %s, digest %v", q.due, q.digest)
-	}
-
-	high := e.ruleAt(t, alice, &w, `event.type == "tag.created"`, priorityHigh)
-	if _, err := e.pool.Exec(context.Background(), `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, high, dig); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.pool.Exec(context.Background(), `UPDATE rules SET filter = '' WHERE id = $1`, normal); err != nil {
-		t.Fatal(err)
-	}
-	ev = e.event(t, w, "tag.created", "v2")
-	routeAll(t, e.router())
-	if q := e.queued(t, ev, dig); q.digest || time.Until(q.due) > 0 || q.rule != high {
-		t.Errorf("high priority delivery due %s, digest %v, rule %s", q.due, q.digest, q.rule)
-	}
-
-	// 012-AC6: a second normal rule leaves the first one's waiting delivery as it is.
-	w2 := e.watch(t, alice)
-	first := e.rule(t, alice, &w2, "", dig)
-	e.rule(t, alice, &w2, "", dig)
-	ev = e.event(t, w2, "release.published", "v3")
-	routeAll(t, e.router())
-	if q := e.queued(t, ev, dig); !q.digest || time.Until(q.due) <= 0 || q.rule != first {
-		t.Errorf("two normal rules: due %s, digest %v, rule %s, want rule %s", q.due, q.digest, q.rule, first)
-	}
-
-	// 012-AC6: a normal rule after a high one neither puts the delivery back in the digest nor takes an immediate one.
-	w3 := e.watch(t, alice)
-	high = e.ruleAt(t, alice, &w3, "", priorityHigh)
-	for _, c := range []string{dig, hook} {
-		if _, err := e.pool.Exec(context.Background(), `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, high, c); err != nil {
-			t.Fatal(err)
+	for name, c := range map[string]string{"webhook": hook, "script": script} {
+		if q := e.queued(t, ev, c); !q.now() {
+			t.Errorf("%s under a digest rule: due %s, digest %v; want at once", name, q.due, q.digest)
 		}
 	}
-	e.rule(t, alice, &w3, "", dig, hook)
-	ev = e.event(t, w3, "release.published", "v4")
+	if q := e.queued(t, ev2, other); !q.now() {
+		t.Errorf("immediate rule: due %s, digest %v", q.due, q.digest)
+	}
+}
+
+// 012-AC6, 012-AC16: an event matched by a rule sending at once (immediate or high priority) and a digest rule on
+// one channel makes one delivery, due now, whichever rule runs first; two digest rules keep the first one's.
+func TestRoutingDigestMerge(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name        string
+		first, then string // "digest", "immediate", "high"
+	}{
+		{"immediate then digest", "immediate", "digest"},
+		{"digest then immediate", "digest", "immediate"},
+		{"high then digest", "high", "digest"},
+		{"digest then high", "digest", "high"},
+		{"digest then digest", "digest", "digest"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user(t, "alice")
+			w := e.watch(t, alice)
+			ch := e.tgChannel(t, alice)
+			var ids []string
+			// created_at orders the rules the router runs.
+			for i, kind := range []string{tt.first, tt.then} {
+				id := e.rule(t, alice, &w, "", ch)
+				if _, err := e.pool.Exec(ctx, `UPDATE rules SET created_at = now() - make_interval(mins => $2) WHERE id = $1`, id, 10-i); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "digest":
+					e.setSchedule(t, id, "07:00", "UTC")
+				case "high":
+					e.setPriority(t, id, priorityHigh)
+				}
+				ids = append(ids, id)
+			}
+			ev := e.event(t, w, "release.published", "v1")
+			routeAll(t, e.router())
+			if n := e.count(t, `SELECT count(*) FROM deliveries WHERE event_id = $1`, ev); n != 1 {
+				t.Fatalf("%d deliveries, want 1", n)
+			}
+			q := e.queued(t, ev, ch)
+			if tt.first == "digest" && tt.then == "digest" {
+				if !q.digest || q.rule != ids[0] {
+					t.Errorf("due %s, digest %v, rule %s; want the first rule's digest", q.due, q.digest, q.rule)
+				}
+				return
+			}
+			want := ids[0]
+			if tt.first == "digest" {
+				want = ids[1]
+			}
+			if !q.now() || q.rule != want {
+				t.Errorf("due %s, digest %v, rule %s; want at once by rule %s", q.due, q.digest, q.rule, want)
+			}
+		})
+	}
+}
+
+// 012-AC19: two digest rules with different schedules on one channel keep the earlier due time and its rule,
+// whichever rule runs first.
+func TestRoutingDigestEarliest(t *testing.T) {
+	ctx := context.Background()
+	hm := func(h int) string { return time.Date(0, 1, 1, h%24, 0, 0, 0, time.UTC).Format("15:04") }
+	now := time.Now().UTC()
+	soon, later := hm(now.Hour()+1), hm(now.Hour()+2)
+	for _, first := range []string{"soon", "later"} {
+		t.Run(first+" first", func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user(t, "alice")
+			w := e.watch(t, alice)
+			ch := e.tgChannel(t, alice)
+			ids := map[string]string{}
+			for i, name := range map[string][]string{"soon": {"soon", "later"}, "later": {"later", "soon"}}[first] {
+				id := e.rule(t, alice, &w, "", ch)
+				if _, err := e.pool.Exec(ctx, `UPDATE rules SET created_at = now() - make_interval(mins => $2) WHERE id = $1`, id, 10-i); err != nil {
+					t.Fatal(err)
+				}
+				e.setSchedule(t, id, map[string]string{"soon": soon, "later": later}[name], "UTC")
+				ids[name] = id
+			}
+			ev := e.event(t, w, "release.published", "v1")
+			routeAll(t, e.router())
+			q := e.queued(t, ev, ch)
+			if want := nextAt([]string{soon}, time.UTC, now); !q.digest || q.rule != ids["soon"] || q.due.Sub(want).Abs() > time.Minute {
+				t.Errorf("due %s, digest %v, rule %s; want %s by rule %s", q.due.UTC(), q.digest, q.rule, want, ids["soon"])
+			}
+		})
+	}
+}
+
+// 012-AC17: two digest rules on one channel make one message at the scheduled time.
+func TestDigestAcrossRules(t *testing.T) {
+	e := newDigestEnv(t)
+	ch := e.tgChannel(t, e.alice)
+	a, b := e.namedWatch(t, "org/alpha"), e.namedWatch(t, "org/beta")
+	e.digestRule(t, e.alice, &a, "", ch)
+	e.digestRule(t, e.alice, &b, "", ch)
+	e.event(t, a, "release.published", "v1")
+	e.event(t, b, "release.published", "v2")
 	routeAll(t, e.router())
-	for _, c := range []string{dig, hook} {
-		if q := e.queued(t, ev, c); q.digest || time.Until(q.due) > 0 || q.rule != high {
-			t.Errorf("high then normal on %s: due %s, digest %v, rule %s, want rule %s", c, q.due, q.digest, q.rule, high)
-		}
+	e.round(t, e.deliverer(t, e.pool))
+	if got := e.messages(); len(got) != 1 || !strings.Contains(got[0].Text, "2 unread events") ||
+		!strings.Contains(got[0].Text, "org/alpha") || !strings.Contains(got[0].Text, "org/beta") {
+		t.Fatalf("messages %+v, want one digest of both rules' events", got)
 	}
 }
 
@@ -243,36 +339,38 @@ func TestRoutingDigestBadSchedule(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	alice := e.user(t, "alice")
-	for name, cfg := range map[string]string{
-		"no at":      `{"chat_id": "-100123", "delivery": "digest", "at": [], "tz": "UTC"}`,
-		"unknown tz": `{"chat_id": "-100123", "delivery": "digest", "at": ["07:00"], "tz": "Europe/Atlantis"}`,
+	for name, set := range map[string]string{
+		"no at":      `digest_at = '{}'`,
+		"null at":    `digest_at = NULL`,
+		"unknown tz": `digest_tz = 'Europe/Atlantis'`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			w := e.watch(t, alice)
-			ch := e.digestChannel(t, alice, "07:00", "UTC")
-			if _, err := e.pool.Exec(ctx, `UPDATE channels SET config = $2::jsonb WHERE id = $1`, ch, cfg); err != nil {
+			ch := e.tgChannel(t, alice)
+			r := e.digestRule(t, alice, &w, "", ch)
+			if _, err := e.pool.Exec(ctx, `UPDATE rules SET `+set+` WHERE id = $1`, r); err != nil {
 				t.Fatal(err)
 			}
-			e.rule(t, alice, &w, "", ch)
 			ev := e.event(t, w, "release.published", "v1")
 			if _, err := e.router().RouteOnce(ctx); err != nil {
 				t.Fatalf("route: %v", err)
 			}
-			if q := e.queued(t, ev, ch); q.digest || time.Until(q.due) > 0 {
+			if q := e.queued(t, ev, ch); !q.now() {
 				t.Errorf("delivery due %s, digest %v; want due now, out of the digest", q.due, q.digest)
 			}
 		})
 	}
 }
 
-// 012-AC9: routing waits out a channel edit in flight that leaves digest mode, and queues the delivery due now, out of the digest.
+// 012-AC18: routing waits out a rule edit in flight and reads the schedule it commits: switching to immediate
+// queues the delivery due now, out of the digest.
 func TestRoutingDigestEditInFlight(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	alice := e.user(t, "alice")
 	w := e.watch(t, alice)
-	ch := e.digestChannel(t, alice, "07:00", "UTC")
-	e.rule(t, alice, &w, "", ch)
+	ch := e.tgChannel(t, alice)
+	r := e.digestRule(t, alice, &w, "", ch)
 	ev := e.event(t, w, "release.published", "v1")
 
 	tx, err := e.pool.Begin(ctx)
@@ -280,11 +378,11 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	// As updateChannel does: FOR UPDATE, then the config write.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, ch); err != nil {
+	// As updateRule does: FOR UPDATE, then the write.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE channels SET config = config - 'delivery' - 'at' - 'tz' WHERE id = $1`, ch); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE rules SET delivery = 'immediate', digest_at = NULL, digest_tz = NULL WHERE id = $1`, r); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -292,7 +390,7 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for e.count(t, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("the router never waited on the channel lock")
+			t.Fatal("the router never waited on the rule lock")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -302,21 +400,25 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if q := e.queued(t, ev, ch); q.digest || time.Until(q.due) > 0 {
+	if q := e.queued(t, ev, ch); !q.now() {
 		t.Errorf("delivery due %s, digest %v; want due now, out of the digest", q.due.UTC(), q.digest)
 	}
 }
 
-// 012-AC9: a schedule edit moves only the pending, unleased digest deliveries; switching to immediate takes
-// every waiting one out of the digest, due now unless it is leased or failed (its backoff stays).
+// 012-AC9, 012-AC18: a rule schedule edit moves only that rule's pending, unleased digest deliveries; switching
+// it to immediate takes every waiting one out of the digest, due now unless it is leased or failed (its backoff
+// stays). Another rule's deliveries on the same channel stay as they are.
 func TestDigestReschedule(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	alice := e.user(t, "alice")
-	w := e.watch(t, alice)
-	dig := e.digestChannel(t, alice, "07:00", "Europe/Paris")
-	e.rule(t, alice, &w, "", dig)
+	w, w2 := e.watch(t, alice), e.watch(t, alice)
+	dig := e.tgChannel(t, alice)
+	rule := e.digestRule(t, alice, &w, "", dig)
+	e.setSchedule(t, rule, "07:00", "Europe/Paris")
+	e.digestRule(t, alice, &w2, "", dig)
 	waiting, leased, failed := e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2"), e.event(t, w, "release.published", "v3")
+	other := e.event(t, w2, "release.published", "v4")
 	routeAll(t, e.router())
 	if _, err := e.pool.Exec(ctx, `UPDATE deliveries SET leased_until = now() + interval '1 minute' WHERE event_id = $1`, leased); err != nil {
 		t.Fatal(err)
@@ -324,41 +426,148 @@ func TestDigestReschedule(t *testing.T) {
 	if _, err := e.pool.Exec(ctx, `UPDATE deliveries SET status = 'failed', attempts = 1, next_attempt_at = now() + interval '3 hours' WHERE event_id = $1`, failed); err != nil {
 		t.Fatal(err)
 	}
-	beforeLeased, beforeFailed := e.queued(t, leased, dig), e.queued(t, failed, dig)
+	beforeLeased, beforeFailed, beforeOther := e.queued(t, leased, dig), e.queued(t, failed, dig), e.queued(t, other, dig)
 	s := New(e.pool, zap.NewNop(), e.box, nil, nil, nil, nil, e.m)
 	s.viewer = func(context.Context) (string, bool) { return alice, true }
-	update := func(cfg map[string]any) {
+	update := func(delivery string, at []string, tz *string) {
 		t.Helper()
-		in := &updateChannelInput{ID: dig}
-		in.Body.Config = cfg
-		if _, err := s.updateChannel(ctx, in); err != nil {
+		in := &updateRuleInput{ID: rule}
+		in.Body.Delivery, in.Body.At, in.Body.TZ = &delivery, at, tz
+		if _, err := s.updateRule(ctx, in); err != nil {
 			t.Fatal(err)
 		}
 	}
+	unchanged := func(step string, want queued, event int64, digest bool) {
+		t.Helper()
+		if q := e.queued(t, event, dig); !q.due.Equal(want.due) || q.digest != digest {
+			t.Errorf("%s: event %d due %s, digest %v; want due %s, digest %v", step, event, q.due, q.digest, want.due, digest)
+		}
+	}
 
-	update(map[string]any{"chat_id": "-100123", "delivery": "digest", "at": []any{"21:15"}, "tz": "UTC"})
+	utc := "UTC"
+	update(deliveryDigest, []string{"21:15"}, &utc)
 	if q := e.queued(t, waiting, dig); !q.digest || q.due.UTC().Hour() != 21 || q.due.UTC().Minute() != 15 || time.Until(q.due) <= 0 {
 		t.Errorf("rescheduled delivery due %s, digest %v", q.due.UTC(), q.digest)
 	}
-	for name, x := range map[string]struct {
-		event int64
-		was   queued
-	}{"leased": {leased, beforeLeased}, "failed": {failed, beforeFailed}} {
-		if q := e.queued(t, x.event, dig); !q.due.Equal(x.was.due) || !q.digest {
-			t.Errorf("schedule edit: %s delivery due %s, digest %v", name, q.due, q.digest)
-		}
-	}
+	unchanged("schedule edit", beforeLeased, leased, true)
+	unchanged("schedule edit", beforeFailed, failed, true)
+	unchanged("schedule edit", beforeOther, other, true)
 
-	update(map[string]any{"chat_id": "-100123"})
-	if q := e.queued(t, waiting, dig); q.digest || time.Until(q.due) > 0 {
+	update(deliveryImmediate, nil, nil)
+	if q := e.queued(t, waiting, dig); !q.now() {
 		t.Errorf("after immediate: due %s, digest %v", q.due, q.digest)
 	}
-	for name, x := range map[string]struct {
-		event int64
-		was   queued
-	}{"leased": {leased, beforeLeased}, "failed": {failed, beforeFailed}} {
-		if q := e.queued(t, x.event, dig); !q.due.Equal(x.was.due) || q.digest {
-			t.Errorf("after immediate: %s delivery due %s, digest %v; want due %s, out of the digest", name, q.due, q.digest, x.was.due)
+	unchanged("after immediate", beforeLeased, leased, false)
+	unchanged("after immediate", beforeFailed, failed, false)
+	unchanged("after immediate", beforeOther, other, true)
+}
+
+// 012-AC18: a rule read as a digest by the rule query but disabled by the time its schedule is locked queues
+// nothing for the digest: the event goes at once, after the disable's flush.
+func TestRoutingDigestDisabledInFlight(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	ch := e.tgChannel(t, alice)
+	rule := e.digestRule(t, alice, &w, "", ch)
+	ev := e.event(t, w, "release.published", "v1")
+	if _, err := e.pool.Exec(ctx, `UPDATE rules SET enabled = false WHERE id = $1`, rule); err != nil {
+		t.Fatal(err)
+	}
+	// What routeEvent read before the disable committed.
+	hits := []matchRule{{id: rule, owner: alice, priority: priorityNormal, delivery: deliveryDigest, channels: []string{ch}}}
+	r := e.router()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if due, _, err := r.digestDue(ctx, tx, hits); err != nil || len(due) != 0 {
+		t.Fatalf("due %v, %v; want none for a disabled rule", due, err)
+	}
+	if err := r.insertDeliveries(ctx, tx, ev, hits); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q := e.queued(t, ev, ch); !q.now() {
+		t.Errorf("due %s, digest %v; want at once", q.due, q.digest)
+	}
+}
+
+// 012-AC18: deleting or disabling a digest rule sends what it holds at once; another digest rule's deliveries wait.
+func TestDigestRuleGone(t *testing.T) {
+	ctx := context.Background()
+	for _, how := range []string{"delete", "disable"} {
+		t.Run(how, func(t *testing.T) {
+			e := newEnv(t)
+			alice := e.user(t, "alice")
+			w, w2 := e.watch(t, alice), e.watch(t, alice)
+			ch := e.tgChannel(t, alice)
+			rule := e.digestRule(t, alice, &w, "", ch)
+			e.digestRule(t, alice, &w2, "", ch)
+			held, other := e.event(t, w, "release.published", "v1"), e.event(t, w2, "release.published", "v2")
+			routeAll(t, e.router())
+			s := New(e.pool, zap.NewNop(), e.box, nil, nil, nil, nil, e.m)
+			s.viewer = func(context.Context) (string, bool) { return alice, true }
+			var err error
+			if how == "delete" {
+				_, err = s.deleteRule(ctx, &idPath{ID: rule})
+			} else {
+				in := &updateRuleInput{ID: rule}
+				off := false
+				in.Body.Enabled = &off
+				_, err = s.updateRule(ctx, in)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if q := e.queued(t, held, ch); !q.now() {
+				t.Errorf("held delivery due %s, digest %v; want at once", q.due, q.digest)
+			}
+			if q := e.queued(t, other, ch); !q.digest || time.Until(q.due) <= 0 {
+				t.Errorf("other rule's delivery due %s, digest %v; want still waiting", q.due, q.digest)
+			}
+		})
+	}
+}
+
+// 012-AC18: a disable that also edits the times sends what the rule holds at once and stores the times; once
+// enabled again, the next event waits for them.
+func TestDigestRuleDisableWithEdit(t *testing.T) {
+	ctx := context.Background()
+	e := newEnv(t)
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	ch := e.tgChannel(t, alice)
+	rule := e.digestRule(t, alice, &w, "", ch)
+	held := e.event(t, w, "release.published", "v1")
+	routeAll(t, e.router())
+	s := New(e.pool, zap.NewNop(), e.box, nil, nil, nil, nil, e.m)
+	s.viewer = func(context.Context) (string, bool) { return alice, true }
+	patch := func(enabled bool, at []string) Rule {
+		t.Helper()
+		in := &updateRuleInput{ID: rule}
+		// The watch is sent again, as the rule form does.
+		in.Body.Enabled, in.Body.At, in.Body.WatchID = &enabled, at, &w
+		out, err := s.updateRule(ctx, in)
+		if err != nil {
+			t.Fatal(err)
 		}
+		return out.Body
+	}
+	if r := patch(false, []string{"21:15"}); r.Enabled || r.Delivery != deliveryDigest || !slices.Equal(r.At, []string{"21:15"}) {
+		t.Errorf("after disable with an edit: %+v", r)
+	}
+	if q := e.queued(t, held, ch); !q.now() {
+		t.Errorf("held delivery due %s, digest %v; want at once", q.due, q.digest)
+	}
+	patch(true, nil)
+	next := e.event(t, w, "release.published", "v2")
+	routeAll(t, e.router())
+	if q := e.queued(t, next, ch); !q.digest || q.due.UTC().Hour() != 21 || q.due.UTC().Minute() != 15 || time.Until(q.due) <= 0 {
+		t.Errorf("after enable: due %s, digest %v; want the next 21:15 UTC", q.due.UTC(), q.digest)
 	}
 }

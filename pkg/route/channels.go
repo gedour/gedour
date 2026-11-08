@@ -12,7 +12,6 @@ import (
 	"net/mail"
 	"net/netip"
 	"net/url"
-	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -63,7 +62,7 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. telegram, nextcloud_talk, email, web_push also: delivery (\"immediate\", the default, or \"digest\"), at (digest: 1 to 24 local times \"HH:MM\"), tz (digest: IANA time zone, default UTC)"`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent."`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -247,7 +246,16 @@ const (
 // validateConfig normalizes a channel config; it returns field errors, never a server error.
 func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any, []error) {
 	var norm any
-	raw, sched, errs := splitDelivery(typ, raw)
+	var errs []error
+	for _, k := range []string{"delivery", "at", "tz"} {
+		if v, ok := raw[k]; ok {
+			// 012-AC13: named, rather than the decoder's unknown field, as these keys were valid before.
+			errs = append(errs, configError(k, "a digest is set on the rule now, not on the channel", v))
+		}
+	}
+	if len(errs) > 0 {
+		return nil, errs
+	}
 	switch typ {
 	case notify.TypeTelegram:
 		var c notify.TelegramConfig
@@ -328,9 +336,6 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 	b, _ := json.Marshal(norm)
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
-	if sched != nil {
-		out["delivery"], out["at"], out["tz"] = deliveryDigest, sched.At, sched.TZ
-	}
 	return out, errs
 }
 
@@ -611,11 +616,6 @@ func (s *Service) updateChannel(ctx context.Context, in *updateChannelInput) (*c
 				return err
 			}
 		}
-		if old, now := scheduleOf(before.Config), scheduleOf(next.Config); b.Config != nil && !reflect.DeepEqual(old, now) {
-			if err := reschedule(ctx, tx, in.ID, now); err != nil {
-				return err
-			}
-		}
 		if sec != "" {
 			ct, nonce := s.box.Seal([]byte(sec), []byte(in.ID))
 			if _, err := tx.Exec(ctx, `UPDATE channels SET secret_ciphertext = $2, secret_nonce = $3, key_version = $4, last4 = $5 WHERE id = $1`,
@@ -739,25 +739,16 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 	}
 	out := &testResult{}
 	var sendErr error
-	// 012-AC11: a digest channel's test is a sample digest of two events; the config read under the audit row decides.
-	var cfg map[string]any
-	_ = json.Unmarshal(ch.Config, &cfg) // a stored config is always an object
-	digest, now := scheduleOf(cfg) != nil, time.Now()
-	switch {
-	case ch.Type == notify.TypeWebPush:
+	now := time.Now()
+	if ch.Type == notify.TypeWebPush {
 		tctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
 		defer cancel()
 		var n int
 		n, sendErr = pushFanOut(tctx, s.pool, s.box, s.sender, ch, nil, func(silent bool) ([]byte, string) {
-			if digest {
-				return notify.PushDigestPayload(notify.SampleDigest(now), ch.ID, silent), notify.PushUrgency(silent, nil)
-			}
 			return notify.PushPayload(notify.TestDelivery(now), silent), notify.PushUrgency(silent, nil)
 		})
 		out.Body.Accepted = &n
-	case digest:
-		sendErr = s.sender.SendDigest(ctx, ch, notify.SampleDigest(now))
-	default:
+	} else {
 		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(now), true)
 	}
 	if refusals, ok := partlySent(sendErr); ok {

@@ -107,12 +107,12 @@ func (e *digestEnv) of(t *testing.T, event int64) delivery {
 // every delivery sent with the same sent_at.
 func TestDigestSendGrouped(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"silent": true}' WHERE id = $1`, ch); err != nil {
 		t.Fatal(err)
 	}
 	a, b := e.namedWatch(t, "org/alpha"), e.namedWatch(t, "org/beta")
-	e.rule(t, e.alice, nil, "", ch)
+	e.digestRule(t, e.alice, nil, "", ch)
 	e.event(t, a, "release.published", "v1")
 	e.event(t, b, "release.published", "v2")
 	e.event(t, a, "release.published", "v3")
@@ -147,9 +147,9 @@ func TestDigestSendGrouped(t *testing.T) {
 // unread again is listed; a digest with nothing left sends nothing.
 func TestDigestSkipsRead(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	read, archived, unread, again := e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2"),
 		e.event(t, w, "release.published", "v3"), e.event(t, w, "release.published", "v4")
 	routeAll(t, e.router())
@@ -193,9 +193,9 @@ func TestDigestSkipsRead(t *testing.T) {
 // it; the rows that shared every attempt die together after MaxAttempts, one that joined late on its own count.
 func TestDigestRetry(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	evs := []int64{e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2"), e.event(t, w, "release.published", "v3")}
 	routeAll(t, e.router())
 	e.failing.Store(true)
@@ -246,14 +246,14 @@ func TestDigestTwoDeliverers(t *testing.T) {
 	w := e.namedWatch(t, "org/alpha")
 	var ids []string
 	for i := range channels {
-		ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+		ch := e.tgChannel(t, e.alice)
 		if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config || jsonb_build_object('chat_id', $2::text) WHERE id = $1`,
 			ch, fmt.Sprint(-1000-i)); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, ch)
 	}
-	e.rule(t, e.alice, &w, "", ids...)
+	e.digestRule(t, e.alice, &w, "", ids...)
 	ds := []*Deliverer{e.deliverer(t, connect(t, e.url)), e.deliverer(t, connect(t, e.url))}
 	for wave := range waves {
 		for i := range events {
@@ -305,11 +305,8 @@ func TestDigestWebPush(t *testing.T) {
 	ok := p.device(t, alice, "ok", false)
 	p.device(t, alice, "flaky", false)
 	ch := p.channel(t, alice, true)
-	if _, err := p.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"delivery": "digest", "at": ["07:00"], "tz": "UTC"}' WHERE id = $1`, ch); err != nil {
-		t.Fatal(err)
-	}
 	w := p.watch(t, alice)
-	p.rule(t, alice, &w, "", ch)
+	p.digestRule(t, alice, &w, "", ch)
 	p.event(t, w, "release.published", "v1")
 	p.event(t, w, "release.published", "v2")
 	routeAll(t, p.router())
@@ -357,9 +354,7 @@ func TestDigestWebPush(t *testing.T) {
 func TestDigestTalkPause(t *testing.T) {
 	e := newTalkEnv(t)
 	ch := e.channel(t, "bad", wrongTalkSecret)
-	if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"delivery": "digest", "at": ["07:00"], "tz": "UTC"}' WHERE id = $1`, ch); err != nil {
-		t.Fatal(err)
-	}
+	e.digest = true
 	e.events(t, 3, ch)
 	e.rounds(t, 1)
 	if n, dead := e.requests("talk-bad-rejected"), e.status(t, ch, "dead"); n != 1 || dead != 3 {
@@ -379,9 +374,9 @@ func TestDigestTalkPause(t *testing.T) {
 // 012-AC10: a channel held by an edit in flight is passed over at once, nothing claimed; the claim does not wait on it.
 func TestDigestClaimSkipsHeldChannel(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	e.event(t, w, "release.published", "v1")
 	routeAll(t, e.router())
 	e.makeDue(t)
@@ -413,13 +408,10 @@ func TestDigestClaimSkipsHeldChannel(t *testing.T) {
 // 012-AC3: a full backlog of single deliveries still leaves one slot of the poll to a due digest.
 func TestDigestThroughBacklog(t *testing.T) {
 	e := newDigestEnv(t)
-	dig := e.digestChannel(t, e.alice, "07:00", "UTC")
-	now := e.digestChannel(t, e.alice, "07:00", "UTC")
-	if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config - 'delivery' - 'at' - 'tz' WHERE id = $1`, now); err != nil {
-		t.Fatal(err)
-	}
+	dig, now := e.tgChannel(t, e.alice), e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", dig, now)
+	e.digestRule(t, e.alice, &w, "", dig)
+	e.rule(t, e.alice, &w, "", now)
 	for i := range 10 {
 		e.event(t, w, "release.published", fmt.Sprint("v", i))
 	}
@@ -443,9 +435,9 @@ func TestDigestThroughBacklog(t *testing.T) {
 // attempt count is not its own.
 func TestDigestManualRetry(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	old, fresh := e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2")
 	routeAll(t, e.router())
 	var id int64
@@ -471,13 +463,13 @@ func TestDigestManualRetry(t *testing.T) {
 func TestDigestDeadBranches(t *testing.T) {
 	e := newDigestEnv(t)
 	bob, carol := e.user(t, "bob"), e.user(t, "carol")
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w, moved := e.namedWatch(t, "org/alpha"), e.namedWatch(t, "org/moved")
-	e.rule(t, e.alice, nil, "", ch)
+	e.digestRule(t, e.alice, nil, "", ch)
 	kept, gone := e.event(t, w, "release.published", "v1"), e.event(t, moved, "release.published", "v2")
 	cw := e.watch(t, carol)
-	cch := e.digestChannel(t, carol, "07:00", "UTC")
-	e.rule(t, carol, &cw, "", cch)
+	cch := e.tgChannel(t, carol)
+	e.digestRule(t, carol, &cw, "", cch)
 	off := e.event(t, cw, "release.published", "v3")
 	routeAll(t, e.router())
 	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET owner_id = $2 WHERE id = $1`, moved, bob); err != nil {
@@ -499,9 +491,9 @@ func TestDigestDeadBranches(t *testing.T) {
 // claim took over mid-send is left to that claim.
 func TestDigestDrainAndTakeover(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	ev := e.event(t, w, "release.published", "v1")
 	routeAll(t, e.router())
 	e.makeDue(t)
@@ -545,10 +537,10 @@ func TestDigestDrainAndTakeover(t *testing.T) {
 // poll, without waiting; the next poll sends the digest whole.
 func TestDigestClaimSkipsHeldRow(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	a, b := e.namedWatch(t, "org/alpha"), e.namedWatch(t, "org/beta")
-	ra := e.rule(t, e.alice, &a, "", ch)
-	e.rule(t, e.alice, &b, "", ch)
+	ra := e.digestRule(t, e.alice, &a, "", ch)
+	e.digestRule(t, e.alice, &b, "", ch)
 	e.event(t, a, "release.published", "v1")
 	e.event(t, b, "release.published", "v2")
 	routeAll(t, e.router())
@@ -582,9 +574,9 @@ func TestDigestClaimSkipsHeldRow(t *testing.T) {
 // 012-AC7: a fresh delivery joining rows at their last attempt keeps its own count: they die, it retries.
 func TestDigestRetryOwnAttempts(t *testing.T) {
 	e := newDigestEnv(t)
-	ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+	ch := e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
-	e.rule(t, e.alice, &w, "", ch)
+	e.digestRule(t, e.alice, &w, "", ch)
 	old, fresh := e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2")
 	routeAll(t, e.router())
 	if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET status = 'failed', attempts = $2 WHERE event_id = $1`, old, MaxAttempts-1); err != nil {
@@ -608,18 +600,14 @@ func TestDigestRetryOwnAttempts(t *testing.T) {
 // 012-AC3: with one send slot, a digest due before a backlog of single deliveries goes out first.
 func TestDigestOneSlot(t *testing.T) {
 	e := newDigestEnv(t)
-	dig := e.digestChannel(t, e.alice, "07:00", "UTC")
-	now := e.digestChannel(t, e.alice, "07:00", "UTC")
-	if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config - 'delivery' - 'at' - 'tz' WHERE id = $1`, now); err != nil {
-		t.Fatal(err)
-	}
+	dig, now := e.tgChannel(t, e.alice), e.tgChannel(t, e.alice)
 	w := e.namedWatch(t, "org/alpha")
 	e.rule(t, e.alice, &w, "", now)
 	for i := range 5 {
 		e.event(t, w, "release.published", fmt.Sprint("v", i))
 	}
 	routeAll(t, e.router())
-	e.rule(t, e.alice, &w, "", dig)
+	e.digestRule(t, e.alice, &w, "", dig)
 	e.event(t, w, "release.published", "d1")
 	routeAll(t, e.router())
 	if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET next_attempt_at = now() - CASE WHEN digest THEN interval '1 minute' ELSE interval '0' END`); err != nil {
@@ -646,11 +634,11 @@ func TestDigestOldestChannelFirst(t *testing.T) {
 	e := newDigestEnv(t)
 	w := e.namedWatch(t, "org/alpha")
 	for i, age := range []string{"1 minute", "2 minutes", "30 seconds"} {
-		ch := e.digestChannel(t, e.alice, "07:00", "UTC")
+		ch := e.tgChannel(t, e.alice)
 		if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config || jsonb_build_object('chat_id', $2::text) WHERE id = $1`, ch, fmt.Sprint(-1000-i)); err != nil {
 			t.Fatal(err)
 		}
-		e.rule(t, e.alice, &w, "", ch)
+		e.digestRule(t, e.alice, &w, "", ch)
 		e.event(t, w, "release.published", fmt.Sprint("v", i))
 		routeAll(t, e.router())
 		if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET next_attempt_at = now() - $2::interval WHERE channel_id = $1`, ch, age); err != nil {

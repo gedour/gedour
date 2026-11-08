@@ -264,6 +264,53 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
   }
 }
 
+/** The GitHub web root behind an API URL: api.<host> → <host> (github.com, ghe.com), GHES <host>/api/v3 → <host>. */
+function githubWeb(api: string): string {
+  return api.replace(/^(https?:\/\/)api\./i, "$1").replace(/\/api\/v3$/i, "");
+}
+
+/** The upstream web page of a watch (normalized config), or null when the target has no known page. */
+export function upstreamPage(w: Pick<Watch, "kind" | "config">): string | null {
+  const c = w.config as Record<string, string | number | boolean | undefined>;
+  const s = (k: string) => String(c[k] ?? "");
+  let url: string | null;
+  switch (w.kind) {
+    case "github_repo":
+      url = `${githubWeb(s("api_url"))}/${s("repo")}`;
+      break;
+    case "github_pr":
+      url = `${githubWeb(s("api_url"))}/${s("repo")}/pull/${s("number")}`;
+      break;
+    case "github_issue":
+      url = `${githubWeb(s("api_url"))}/${s("repo")}/issues/${s("number")}`;
+      break;
+    case "github_discussion":
+      url = `${githubWeb(s("api_url"))}/${s("repo")}/discussions/${s("number")}`;
+      break;
+    case "gitlab_release":
+      url = `${s("base_url")}/${s("project")}/-/releases`;
+      break;
+    case "gitlab_mr":
+      url = `${s("base_url")}/${s("project")}/-/merge_requests/${s("iid")}`;
+      break;
+    case "oci_tags": {
+      const repo = s("repository");
+      const registry = s("registry");
+      if (registry === "docker.io") {
+        url = repo.startsWith("library/")
+          ? `https://hub.docker.com/_/${repo.slice("library/".length)}`
+          : `https://hub.docker.com/r/${repo}`;
+      } else if (registry === "quay.io") url = `https://quay.io/repository/${repo}`;
+      // A browser GET on ghcr.io/<repo> redirects to the package page.
+      else if (registry === "ghcr.io") url = `https://ghcr.io/${repo}`;
+      else url = null;
+      break;
+    }
+  }
+  // Security: the config is user input; only http(s) may become an href.
+  return url && /^https?:\/\//i.test(url) ? url : null;
+}
+
 const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
   github_repo: ["api_url", "https://api.github.com"],
   github_pr: ["api_url", "https://api.github.com"],

@@ -65,6 +65,22 @@ fail() {
   exit 1
 }
 
+# Pod state for a CI failure: who is unready, restarted or killed, and the probe events saying why.
+# dump_pods: pod and container state, events and the logs of restarted containers, for a failure report.
+dump_pods() {
+  local pod
+  kubectl get pods -o wide --request-timeout=20s >&2 || true
+  kubectl get pods -o json --request-timeout=20s | jq -r '.items[] | .metadata.name as $p | .status.containerStatuses[]?
+    | "\($p) ready=\(.ready) restarts=\(.restartCount) state=\(.state // {} | keys[0]) last=\(.lastState | tojson)"' >&2 || true
+  # events.k8s.io events have no lastTimestamp: sort on creation so the newest 40 are kept.
+  kubectl get events --sort-by=.metadata.creationTimestamp --request-timeout=20s | tail -n 40 >&2 || true
+  # A container that exited left its last words in the previous instance's log.
+  for pod in $(kubectl get pods -o json --request-timeout=20s | jq -r '.items[] | select(any(.status.containerStatuses[]?; .restartCount > 0)) | .metadata.name' 2>/dev/null); do
+    echo "== previous logs of ${pod}" >&2
+    kubectl logs "${pod}" --previous --tail 30 --request-timeout=20s >&2 || true
+  done
+}
+
 for cmd in kubectl docker jq curl go; do
   command -v "${cmd}" >/dev/null || fail "missing ${cmd}"
 done
@@ -123,13 +139,12 @@ db_wait || fail "gedour-web never logged db_unreachable with postgres stopped"
 echo "gedour waits for postgres: db_unreachable logged after $((SECONDS - start)) s"
 kubectl scale deployment/postgres --replicas 1 >/dev/null || fail "could not start postgres"
 if ! kubectl rollout status deployment/postgres --timeout 180s >/dev/null; then
-  kubectl get pods -o wide >&2
-  kubectl get events --field-selector involvedObject.kind=Pod --sort-by=.lastTimestamp >&2 || true
+  dump_pods
   fail "postgres not ready"
 fi
 for d in fakeupstream gedour-web gedour-worker; do
   if ! kubectl rollout status "deployment/${d}" --timeout 300s >/dev/null; then
-    kubectl get pods -o wide >&2
+    dump_pods
     kubectl logs "deployment/${d}" --tail 50 >&2 || true
     fail "deployment ${d} not ready"
   fi
@@ -137,7 +152,11 @@ done
 echo "ready after $((SECONDS - start)) s"
 for d in gedour-web gedour-worker; do
   ready="$(kubectl get "deployment/${d}" -o jsonpath='{.status.readyReplicas}')"
-  [[ "${ready}" == "2" ]] || fail "${d}: ${ready:-0} ready replicas, want 2"
+  if [[ "${ready}" != "2" ]]; then
+    dump_pods
+    kubectl logs -l "app.kubernetes.io/component=${d#gedour-}" --prefix --tail 30 >&2 || true
+    fail "${d}: ${ready:-0} ready replicas, want 2"
+  fi
 done
 kubectl get pods -o wide
 if [[ -n "${OUT}" ]]; then

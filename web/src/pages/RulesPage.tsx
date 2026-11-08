@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { PriorityBadge } from "@/components/PriorityBadge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/toast";
+import { digestSummary } from "@/lib/channels";
 import { problemText } from "@/lib/problems";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
@@ -88,6 +89,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
     },
     onError: (err) => toast(`Could not change the rule: ${problemText(err)}`, "error"),
   });
+  const digest = digestSummary(rule);
   return (
     <li
       className={cn(
@@ -103,6 +105,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
           {rule.name}
         </Link>
         {rule.priority === "high" && <PriorityBadge />}
+        {digest && <span className="text-xs text-muted">{digest}</span>}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
           <span>
             {rule.watch_id ? (rule.watch_name ?? "A watch you no longer own") : "All watches"}

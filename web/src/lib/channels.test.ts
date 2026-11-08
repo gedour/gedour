@@ -40,15 +40,16 @@ describe("channelTarget", () => {
 describe("digest helpers", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  // 012-AC11: a digest channel's summary names its times and zone; immediate has none.
+  // 012-AC13: a digest rule's summary names its times and zone; immediate has none.
   it("summarizes a digest schedule", () => {
     expect(digestSummary({ delivery: "digest", at: ["09:00", "18:00"], tz: "Europe/Paris" })).toBe(
       "Digest at 09:00, 18:00 (Europe/Paris)",
     );
-    expect(digestSummary({ delivery: "digest", at: ["07:30"] })).toBe("Digest at 07:30 (UTC)");
-    expect(digestSummary({ delivery: "immediate" })).toBeNull();
-    expect(digestSummary({ delivery: "digest" })).toBeNull();
-    expect(digestSummary({})).toBeNull();
+    expect(digestSummary({ delivery: "digest", at: ["07:30"], tz: "" })).toBe(
+      "Digest at 07:30 (UTC)",
+    );
+    expect(digestSummary({ delivery: "immediate", at: [], tz: "" })).toBeNull();
+    expect(digestSummary({ delivery: "digest", at: [], tz: "UTC" })).toBeNull();
   });
 
   // 012-AC11: the form refuses what the server refuses (012-AC1), keyed like its field errors.

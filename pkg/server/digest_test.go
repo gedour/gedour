@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +17,9 @@ import (
 	"github.com/gedour/gedour/pkg/secret"
 )
 
-// 012-AC11: the deliveries list filters on skipped and shows its reason, the channel's last status reads
-// skipped, and "Send test" on a digest channel sends a sample digest of two events.
+// 012-AC13, 012-AC14, 012-AC11: a channel config with delivery, at or tz is a 400; a rule carries the digest,
+// refused with high priority whether set on create or by an edit; "Send test" sends one event, no sample digest;
+// the deliveries list filters on skipped and shows its reason, the channel's last status reads skipped.
 func TestDigestAPI(t *testing.T) {
 	a := newDevApp(t)
 	up := testupstream.New()
@@ -30,8 +31,52 @@ func TestDigestAPI(t *testing.T) {
 		ID                 string  `json:"id"`
 		LastDeliveryStatus *string `json:"last_delivery_status"`
 	}
-	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Digest", "type": "telegram", "secret": "123456:" + strings.Repeat("a", 30),
-		"config": map[string]any{"chat_id": "-100123", "delivery": "digest", "at": []string{"09:00"}, "tz": "Europe/Paris"}}, http.StatusCreated, &ch)
+	tg := map[string]any{"name": "Chat", "type": "telegram", "secret": "123456:" + strings.Repeat("a", 30), "config": map[string]any{"chat_id": "-100123"}}
+	for _, key := range []string{"delivery", "at", "tz"} {
+		bad := maps.Clone(tg)
+		bad["config"] = map[string]any{"chat_id": "-100123", key: "digest"}
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", bad, http.StatusBadRequest, nil)
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", tg, http.StatusCreated, &ch)
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"config": map[string]any{"chat_id": "-100123", "delivery": "immediate"}},
+		http.StatusBadRequest, nil)
+
+	type rule struct {
+		ID       string   `json:"id"`
+		Delivery string   `json:"delivery"`
+		At       []string `json:"at"`
+		TZ       string   `json:"tz"`
+	}
+	var r rule
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "plain", "channel_ids": []string{ch.ID}}, http.StatusCreated, &r)
+	if r.Delivery != "immediate" || len(r.At) != 0 || r.TZ != "" {
+		t.Errorf("default rule %+v, want immediate", r)
+	}
+	for name, body := range map[string]map[string]any{
+		"no at":        {"name": "x", "delivery": "digest"},
+		"bad time":     {"name": "x", "delivery": "digest", "at": []string{"9h"}},
+		"unknown tz":   {"name": "x", "delivery": "digest", "at": []string{"09:00"}, "tz": "Mars/Base"},
+		"unknown mode": {"name": "x", "delivery": "weekly"},
+		"high":         {"name": "x", "delivery": "digest", "at": []string{"09:00"}, "priority": "high"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", body, http.StatusBadRequest, nil)
+		})
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "digest", "channel_ids": []string{ch.ID},
+		"delivery": "digest", "at": []string{"18:00", "09:00"}, "tz": "Europe/Paris"}, http.StatusCreated, &r)
+	if r.Delivery != "digest" || strings.Join(r.At, ",") != "09:00,18:00" || r.TZ != "Europe/Paris" {
+		t.Errorf("digest rule %+v", r)
+	}
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": "high"}, http.StatusBadRequest, nil)
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"at": []string{"07:00"}}, http.StatusOK, &r)
+	if r.Delivery != "digest" || strings.Join(r.At, ",") != "07:00" || r.TZ != "Europe/Paris" {
+		t.Errorf("after an at edit %+v, want the zone kept", r)
+	}
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"delivery": "immediate", "priority": "high"}, http.StatusOK, &r)
+	if r.Delivery != "immediate" || len(r.At) != 0 || r.TZ != "" {
+		t.Errorf("after immediate %+v, want the schedule cleared", r)
+	}
 
 	var res struct {
 		OK    bool   `json:"ok"`
@@ -42,14 +87,8 @@ func TestDigestAPI(t *testing.T) {
 	if !res.OK || len(got) != 1 {
 		t.Fatalf("test: %+v, received %d", res, len(got))
 	}
-	var msg struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(got[0].Body), &msg); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(msg.Text, "2 unread events") || strings.Count(msg.Text, "\n• ") != 2 {
-		t.Errorf("sample digest %q", msg.Text)
+	if strings.Contains(got[0].Body, "unread event") {
+		t.Errorf("test sent a sample digest: %s", got[0].Body)
 	}
 
 	var w string
@@ -86,10 +125,10 @@ func TestPurgeRacingDigestClaim(t *testing.T) {
 	a.mustCall(t, dave, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	var ch, rule string
 	if err := a.pool.QueryRow(ctx, `INSERT INTO channels (owner_id, name, type, config) VALUES ($1, 'd', 'telegram',
-		'{"chat_id": "-100123", "delivery": "digest", "at": ["07:00"], "tz": "UTC"}') RETURNING id::text`, dave.id).Scan(&ch); err != nil {
+		'{"chat_id": "-100123"}') RETURNING id::text`, dave.id).Scan(&ch); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name) VALUES ($1, 'r') RETURNING id::text`, dave.id).Scan(&rule); err != nil {
+	if err := a.pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, delivery, digest_at, digest_tz) VALUES ($1, 'r', 'digest', '{07:00}', 'UTC') RETURNING id::text`, dave.id).Scan(&rule); err != nil {
 		t.Fatal(err)
 	}
 	a.exec(t, `WITH e AS (INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{"tag": "v1"}', 'k') RETURNING id)

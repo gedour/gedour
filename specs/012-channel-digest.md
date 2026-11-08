@@ -18,6 +18,11 @@ watch. Only the events still unread in the owner's inbox at that time are listed
 read or archived in gedour is not sent again. A high priority event skips the wait and goes out at once.
 A digest with nothing left to list sends nothing.
 
+Update (2026-11-07, phase 4): the delivery mode and schedule move from the channel to the rule. A channel
+says where a message goes, a rule says which events and when: one Telegram chat or one set of browsers
+serves an immediate rule and a digest rule without a second channel. Phases 1-3 describe the first,
+channel-level version; phase 4 and AC13-AC19 supersede them where they differ.
+
 ## Scope
 
 - Channel setting `delivery`: `immediate` (today's behaviour, the default) or `digest`.
@@ -81,6 +86,25 @@ A digest with nothing left to list sends nothing.
 - [x] **AC12** A Web Push digest channel sends one notification per scheduled time to its devices, titled
   with the unread count, opening the inbox on click; a retry reaches only the devices that have not
   accepted it (spec 010).
+- [x] **AC13** A rule is saved with `delivery` (`immediate`, the default, or `digest`), `at` and `tz`, with the
+  AC1 validation (400 on no `at`, more than 24 times, a bad time or an unknown `tz`); the channel API and
+  form no longer take `delivery`, `at` or `tz` (400 on a channel config that still sends them).
+- [x] **AC14** A high priority rule with `delivery: digest` is a 400: high priority already means at once.
+- [x] **AC15** An event routed by a digest rule to a Telegram, Nextcloud Talk, email or Web Push channel
+  waits for the rule's next scheduled time; to a webhook or script channel it goes at once, as those types
+  have no batch format; the rule form says so.
+- [x] **AC16** An event matched by an immediate rule and a digest rule of the same user on the same channel
+  makes one delivery, sent at once, whatever the order the rules run in.
+- [x] **AC17** At a scheduled time, every due digest delivery of a channel goes out in one message, whichever
+  digest rules routed them to it (AC3, AC4, AC7, AC8, AC10 and AC12 hold unchanged).
+- [x] **AC18** Changing a rule's schedule moves the waiting deliveries it holds (a delivery shared by two
+  digest rules is held by the one due sooner at routing) to the new next time; switching it to
+  `immediate` makes them due at once (AC9 per rule).
+- [x] **AC19** The migration moves an existing digest channel's schedule to each rule targeting it when every
+  digest channel of that rule shares one schedule and the rule has no immediate Telegram, Nextcloud Talk,
+  email or Web Push channel; it leaves the rule immediate otherwise, with a warning log line per rule left
+  immediate; two digest rules with different schedules on one channel keep the earliest due time; channel configs lose `delivery`, `at` and `tz`; waiting digest deliveries keep
+  their due time.
 
 ## Phases
 
@@ -109,11 +133,23 @@ A digest with nothing left to list sends nothing.
 - **Data model impact**: none
 - **DoD**: vitest and the channels e2e spec green; `make` lint target green.
 
+### Phase 4 — Digest on rules
+- Work: `delivery`, `at`, `tz` on rules (API, validation, form) and off channels; router takes the schedule
+  from the rule, with the immediate-wins merge and the webhook/script exception; reschedule on rule edit;
+  data migration; channel "Send test" no longer sends a sample digest; OpenAPI, README.
+- **Covers**: AC13, AC14, AC15, AC16, AC17, AC18, AC19
+- **Data model impact**: new migration: `rules.delivery` (text, check `immediate`/`digest`, default
+  `immediate`), `rules.digest_at` (text[]), `rules.digest_tz` (text); data step moving channel schedules to
+  rules (AC19) and stripping the keys from `channels.config`.
+- **DoD**: `make coverage` green (Go and web not below develop's); route tests for AC14-AC18 and a migration
+  test for AC19 on a populated DB; full e2e green through the bounded runner.
+
 ## Data model impact (summary)
 
 - `deliveries.status` CHECK: add `skipped`.
 - `deliveries.digest`: new boolean, true when the delivery goes out in its channel's digest; set at routing, cleared by a high-priority bypass or a switch to `immediate`.
-- `channels.config`: new keys `delivery`, `at`, `tz` (no migration).
+- `channels.config`: new keys `delivery`, `at`, `tz` (no migration); removed again in phase 4.
+- Phase 4: `rules.delivery`, `rules.digest_at`, `rules.digest_tz`.
 
 ## Open questions
 
@@ -121,8 +157,14 @@ A digest with nothing left to list sends nothing.
 
 ## Decisions
 
-- Digest is a channel setting, not a rule setting — a user keeps an immediate and a digest channel side by
-  side and each rule picks; no change to rules.
+- ~~Digest is a channel setting, not a rule setting.~~ Superseded by phase 4: digest is a rule setting — the
+  channel is the destination, the rule picks the events and their timing, as high priority already does.
+- Same event, immediate and digest rule, same channel: immediate wins — one delivery per event and channel,
+  like high priority.
+- Digest and high priority on one rule is refused rather than one silently winning.
+- Webhook and script channels stay immediate under a digest rule — they still have no batch format.
+- The migration copies a schedule only when unambiguous; an ambiguous rule stays immediate and is logged —
+  guessing would change when someone's messages arrive.
 - Read state is checked at send time, not at routing — that is when "already handled" is known.
 - `skipped` is a new delivery status rather than `dead` with an error — `dead` reads as a failure in the UI.
 - Time zone per channel, default UTC — there is no user time zone today.

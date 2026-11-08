@@ -86,9 +86,15 @@ describe("RulesPage", () => {
     const second = renderApp("/rules");
     expect(await screen.findByRole("region", { name: "No rules yet" })).toBeInTheDocument();
     second.unmount();
-    mockApi({ "/api/v1/rules": () => new Response("", { status: 500 }) });
+    let calls = 0;
+    mockApi({
+      "/api/v1/rules": () =>
+        calls++ ? Response.json({ items: [rule()] }) : new Response("", { status: 500 }),
+    });
     renderApp("/rules");
     expect(await screen.findByRole("alert")).toHaveTextContent("Rules could not be loaded.");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("link", { name: "Releases" })).toBeInTheDocument();
   });
 
   it("says when a toggle fails", async () => {
@@ -223,6 +229,7 @@ describe("RuleFormPage", () => {
       enabled: true,
       priority: "normal",
       channel_ids: ["c2"],
+      delivery: "immediate",
     });
   });
 
@@ -319,6 +326,7 @@ describe("RuleFormPage", () => {
         enabled: false,
         priority: "normal",
         channel_ids: ["c1"],
+        delivery: "immediate",
         watch_id: "",
       }),
     );
@@ -344,9 +352,16 @@ describe("RuleFormPage", () => {
     const second = renderApp("/rules/r9");
     expect(screen.getByText("Loading…")).toBeInTheDocument();
     second.unmount();
-    mockApi({ "/api/v1/rules/r9": () => problem(500, "boom") });
+    let calls = 0;
+    mockApi({
+      "/api/v1/rules/r9": () =>
+        calls++ ? Response.json(rule({ id: "r9" })) : problem(500, "boom"),
+      "/api/v1/rules/preview": { items: [] },
+    });
     renderApp("/rules/r9");
     expect(await screen.findByRole("alert")).toHaveTextContent("The rule could not be loaded.");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: "Edit Releases" })).toBeInTheDocument();
   });
 
   it("says when a delete fails", async () => {
@@ -381,5 +396,179 @@ describe("RuleFormPage", () => {
     expect(await screen.findByText("stale on save (line 1, column 1)")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Expression"), "x");
     expect(screen.queryByText("stale on save (line 1, column 1)")).not.toBeInTheDocument();
+  });
+
+  // 012-AC13, 012-AC15: Digest shows its times and zone and says webhook and script channels stay immediate;
+  // the schedule is checked before sending, as the server would.
+  it("creates a digest rule with its times and time zone, checked before sending", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(rule({ name: "New" }), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    const { router } = renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "New");
+    expect(screen.getByRole("radio", { name: /^Immediate/ })).toBeChecked();
+    expect(screen.queryByRole("list", { name: "Digest times" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    expect(
+      screen.getByText(
+        "Webhook and script channels still get each event at once: they have no digest format.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Time 1")).toHaveValue("09:00");
+    expect(screen.getByRole("button", { name: "Remove time 1" })).toBeDisabled();
+    const zone = screen.getByLabelText("Time zone");
+    expect(zone).toHaveValue(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(zone).toHaveAccessibleDescription("The times are local to this zone.");
+
+    // A duplicate, an empty row and an unknown zone are refused here, as the server would.
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    await userEvent.type(screen.getByLabelText("Time 2"), "09:00");
+    await userEvent.clear(zone);
+    await userEvent.type(zone, "Mars/Olympus");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    expect(screen.getByText("09:00 is already listed")).toBeInTheDocument();
+    expect(screen.getByLabelText("Time 2")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Time 3")).toHaveAttribute("aria-invalid", "true");
+    // Each row is described by its own error only.
+    expect(screen.getByLabelText("Time 1")).not.toHaveAttribute("aria-describedby");
+    expect(screen.getByLabelText("Time 2")).toHaveAccessibleDescription("09:00 is already listed");
+    expect(screen.getByLabelText("Time 3")).toHaveAccessibleDescription(
+      "a local time as HH:MM, e.g. 09:00",
+    );
+    expect(screen.getByText("an IANA time zone, e.g. Europe/Paris")).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/rules", "POST")).toBeUndefined();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove time 3" }));
+    // The rows changed: their errors go with them.
+    expect(screen.queryByText("09:00 is already listed")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Time 2")).not.toHaveAttribute("aria-invalid");
+    const second = screen.getByLabelText("Time 2");
+    await userEvent.clear(second);
+    await userEvent.type(second, "18:00");
+    await userEvent.clear(zone);
+    await userEvent.type(zone, "Europe/Paris");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
+    expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
+      name: "New",
+      delivery: "digest",
+      at: ["09:00", "18:00"],
+      tz: "Europe/Paris",
+    });
+  });
+
+  // 012-AC13: an empty zone is sent as UTC, 24 rows is the cap, and a server error lands on its row.
+  it("caps the digest times and places the server's schedule errors", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? problem(400, "invalid rule", [
+              { location: "body.at[0]", message: "server says no" },
+              { location: "body.delivery", message: "digest refused" },
+            ])
+          : Response.json({ items: [] }),
+    });
+    renderApp("/rules/new");
+    await userEvent.click(await screen.findByRole("radio", { name: /^Digest/ }));
+    await userEvent.clear(screen.getByLabelText("Time zone"));
+    const add = screen.getByRole("button", { name: "Add a time" });
+    for (let i = 1; i < 24; i++) await userEvent.click(add);
+    expect(add).toBeDisabled();
+    for (let i = 24; i > 1; i--)
+      await userEvent.click(screen.getByRole("button", { name: `Remove time ${i}` }));
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    expect(await screen.findByText("server says no")).toBeInTheDocument();
+    expect(screen.getByText("digest refused")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    for (const radio of ["Immediate", "Digest"])
+      expect(
+        screen.getByRole("radio", { name: new RegExp(`^${radio}`) }),
+      ).toHaveAccessibleDescription("digest refused");
+    expect(screen.getByLabelText("Time 1")).toHaveAccessibleDescription("server says no");
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    expect(screen.queryByText("server says no")).not.toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
+      delivery: "digest",
+      at: ["09:00"],
+      tz: "UTC",
+    });
+  });
+
+  // 012-AC13, 012-AC18: the list names the schedule; editing shows it back, and Immediate drops at and tz.
+  it("shows and edits a digest rule's schedule", async () => {
+    const digest = rule({ delivery: "digest", at: ["09:00", "18:00"], tz: "Europe/Paris" });
+    const fn = mockApi({
+      "/api/v1/rules": { items: [digest] },
+      "/api/v1/rules/r1": () => Response.json(digest),
+      "/api/v1/rules/preview": { items: [] },
+    });
+    const { router } = renderApp("/rules");
+    const list = await screen.findByRole("list", { name: "Rules" });
+    expect(within(list).getByText("Digest at 09:00, 18:00 (Europe/Paris)")).toBeInTheDocument();
+    await router.navigate("/rules/r1");
+    expect(await screen.findByRole("radio", { name: /^Digest/ })).toBeChecked();
+    expect(screen.getByLabelText("Time 1")).toHaveValue("09:00");
+    expect(screen.getByLabelText("Time 2")).toHaveValue("18:00");
+    expect(screen.getByLabelText("Time zone")).toHaveValue("Europe/Paris");
+    await userEvent.click(screen.getByRole("radio", { name: /^Immediate/ }));
+    expect(screen.queryByLabelText("Time zone")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/rules/r1", "PATCH")).toBeDefined());
+    const body = lastCall(fn, "/api/v1/rules/r1", "PATCH")?.body as Record<string, unknown>;
+    expect(body.delivery).toBe("immediate");
+    expect(body).not.toHaveProperty("at");
+    expect(body).not.toHaveProperty("tz");
+  });
+
+  // 012-AC14: high priority locks the delivery to immediate, says why, and sends immediate.
+  it("locks the delivery while the priority is high", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(rule({ priority: "high" }), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    const { router } = renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "Urgent");
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Priority" }), "high");
+    const why = "High priority sends each event at once: set priority to normal for a digest.";
+    for (const radio of ["Immediate", "Digest"]) {
+      const r = screen.getByRole("radio", { name: new RegExp(`^${radio}`) });
+      expect(r).toBeDisabled();
+      expect(r).toHaveAccessibleDescription(why);
+    }
+    expect(screen.getByRole("radio", { name: /^Immediate/ })).toBeChecked();
+    expect(screen.queryByLabelText("Time zone")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
+    const body = lastCall(fn, "/api/v1/rules", "POST")?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ priority: "high", delivery: "immediate" });
+    expect(body).not.toHaveProperty("at");
+  });
+
+  // 012-AC13: focus follows the rows: a new row takes it, a removed one hands it back.
+  it("moves focus as digest times are added and removed", async () => {
+    mockApi({ "/api/v1/rules/preview": { items: [] } });
+    renderApp("/rules/new");
+    await userEvent.click(await screen.findByRole("radio", { name: /^Digest/ }));
+    const add = screen.getByRole("button", { name: "Add a time" });
+    await userEvent.click(add);
+    await userEvent.click(add);
+    expect(document.activeElement).toBe(screen.getByLabelText("Time 3"));
+    await userEvent.click(screen.getByRole("button", { name: "Remove time 3" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("Time 2"));
+    await userEvent.click(screen.getByRole("button", { name: "Remove time 1" }));
+    expect(document.activeElement).toBe(add);
+    expect(
+      within(screen.getByRole("list", { name: "Digest times" })).getAllByRole("listitem"),
+    ).toHaveLength(1);
   });
 });

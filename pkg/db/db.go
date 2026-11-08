@@ -54,6 +54,12 @@ func migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (int, error) {
 	// parameter is also what RESET returns to, should a file SET its own wait.
 	cfg := pool.Config().ConnConfig
 	cfg.RuntimeParams["lock_timeout"] = migrationLockTimeout
+	// A data migration reports what it could not move with RAISE WARNING; NOTICEs (IF EXISTS skips) are noise.
+	cfg.OnNotice = func(_ *pgconn.PgConn, n *pgconn.Notice) {
+		if n.SeverityUnlocalized == "WARNING" {
+			zap.L().Warn("migration_warning", zap.String("message", n.Message))
+		}
+	}
 	sqlDB := stdlib.OpenDB(*cfg)
 	defer func() { _ = sqlDB.Close() }()
 	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys, goose.WithSessionLocker(locker))

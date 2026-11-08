@@ -54,38 +54,48 @@ test("create, test, edit and delete a Nextcloud Talk channel", async ({ page }) 
   await expect(card).toHaveCount(0);
 });
 
-// 012-AC11: a digest channel from the UI: times and zone saved, summarized on its card and shown back on edit.
-test("create a digest channel and see its schedule", async ({ page }) => {
+// 012-AC13, 012-AC14: the digest lives on the rule: times and zone saved, summarized in the list, shown back on
+// edit, locked while the priority is high; the channel form has no delivery settings.
+test("create a digest rule and see its schedule", async ({ page }) => {
   const name = `Digest ${tag()}`;
   await page.goto("/channels");
   await page.getByRole("button", { name: "New channel" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New channel" });
   await dialog.getByText("Telegram", { exact: true }).click();
-  await dialog.getByLabel("Name").fill(name);
-  await dialog.getByLabel("Chat ID").fill(`-100${Date.now()}`);
-  await dialog.getByLabel("Bot token").fill("123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-  await dialog.getByRole("radio", { name: /^Digest/ }).check();
-  await dialog.getByRole("button", { name: "Add a time" }).click();
-  await dialog.getByLabel("Time 2", { exact: true }).fill("18:00");
-  await dialog.getByLabel("Time zone").fill("Europe/Paris");
-  await dialog.getByRole("button", { name: "Create channel" }).click();
-  await expect(dialog).toBeHidden();
+  await expect(dialog.getByRole("radio", { name: /^Digest/ })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Cancel" }).click();
 
-  const card = page.getByRole("listitem").filter({ hasText: name });
-  await expect(card).toContainText("Digest at 09:00, 18:00 (Europe/Paris)");
-  await card.getByRole("button", { name: `Edit ${name}` }).click();
-  const edit = page.getByRole("dialog", { name: /^Edit/ });
-  await expect(edit.getByRole("radio", { name: /^Digest/ })).toBeChecked();
-  await expect(edit.getByLabel("Time 2", { exact: true })).toHaveValue("18:00");
-  await expect(edit.getByLabel("Time zone")).toHaveValue("Europe/Paris");
-  await edit.getByRole("button", { name: "Cancel" }).click();
+  await page.goto("/rules/new");
+  await page.getByLabel("Name").fill(name);
+  // Matches nothing: no inbox item nor delivery for the other specs.
+  await page.getByLabel("Expression").fill('event.type == "none"');
+  await page.getByRole("radio", { name: /^Digest/ }).check();
+  await expect(
+    page.getByText("Webhook and script channels still get each event at once"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Add a time" }).click();
+  await page.getByLabel("Time 2", { exact: true }).fill("18:00");
+  await page.getByLabel("Time zone").fill("Europe/Paris");
+  await page.getByRole("button", { name: "Create rule" }).click();
+  await expect(page).toHaveURL(/\/rules$/);
 
-  await card.getByRole("button", { name: `Delete ${name}` }).click();
+  const item = page.getByRole("listitem").filter({ hasText: name });
+  await expect(item).toContainText("Digest at 09:00, 18:00 (Europe/Paris)");
+  await item.getByRole("link", { name }).click();
+  await expect(page.getByRole("radio", { name: /^Digest/ })).toBeChecked();
+  await expect(page.getByLabel("Time 2", { exact: true })).toHaveValue("18:00");
+  await expect(page.getByLabel("Time zone")).toHaveValue("Europe/Paris");
+  await page.getByLabel("Priority").selectOption("high");
+  await expect(page.getByRole("radio", { name: /^Digest/ })).toBeDisabled();
+  await expect(page.getByText("High priority sends each event at once")).toBeVisible();
+
+  await page.getByRole("button", { name: "Delete rule" }).click();
   await page
     .getByRole("dialog", { name: /^Delete/ })
     .getByRole("button", { name: /^Delete/ })
     .click();
-  await expect(card).toHaveCount(0);
+  await expect(page).toHaveURL(/\/rules$/);
+  await expect(page.getByRole("listitem").filter({ hasText: name })).toHaveCount(0);
 });
 
 test.describe("as bob", () => {

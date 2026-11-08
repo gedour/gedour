@@ -2,15 +2,14 @@ package route
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"regexp"
 	"slices"
 	"strconv"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
@@ -26,51 +25,24 @@ const (
 
 var digestTimeRe = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
-// digestTypes are the channel types whose message can list several events.
+// digestTypes are the channel types whose message can list several events; a digest rule's other channels get
+// its events at once (012-AC15).
 var digestTypes = []string{notify.TypeTelegram, notify.TypeNextcloudTalk, notify.TypeEmail, notify.TypeWebPush}
 
-// schedule is a digest channel's daily send times, as stored in its config.
+// schedule is a digest rule's daily send times.
 type schedule struct {
-	At []string `json:"at"`
-	TZ string   `json:"tz"`
+	At []string
+	TZ string
 }
 
-// splitDelivery takes the delivery keys out of raw, so the type's strict decoder never sees them, and
-// validates them; a nil schedule means immediate.
-func splitDelivery(typ string, raw map[string]any) (map[string]any, *schedule, []error) {
-	mode, hasMode := raw["delivery"]
-	at, hasAt := raw["at"]
-	tz, hasTZ := raw["tz"]
-	if !hasMode && !hasAt && !hasTZ {
-		return raw, nil, nil
-	}
-	rest := maps.Clone(raw)
-	delete(rest, "delivery")
-	delete(rest, "at")
-	delete(rest, "tz")
+// checkSchedule validates a rule's digest times and zone, normalized: sorted, deduplicated, UTC by default
+// (012-AC13). Error locations are the rule body's.
+func checkSchedule(at []string, tz string) (*schedule, []error) {
 	var errs []error
-	switch mode {
-	case nil, deliveryImmediate:
-		if hasAt {
-			errs = append(errs, configError("at", "only with delivery digest", at))
-		}
-		if hasTZ {
-			errs = append(errs, configError("tz", "only with delivery digest", tz))
-		}
-		return rest, nil, errs
-	case deliveryDigest:
-	default:
-		return rest, nil, []error{configError("delivery", "immediate or digest", mode)}
-	}
-	if !slices.Contains(digestTypes, typ) {
-		errs = append(errs, configError("delivery", "digest is offered on Telegram, Nextcloud Talk, email and Web Push channels", mode))
-	}
-	s := &schedule{TZ: "UTC"}
-	list, _ := at.([]any)
-	for i, x := range list {
-		v, _ := x.(string)
+	s := &schedule{TZ: "UTC", At: []string{}}
+	for i, v := range at {
 		if !digestTimeRe.MatchString(v) {
-			errs = append(errs, configError("at["+strconv.Itoa(i)+"]", "a local time as HH:MM, e.g. 09:00", x))
+			errs = append(errs, &huma.ErrorDetail{Location: "body.at[" + strconv.Itoa(i) + "]", Message: "a local time as HH:MM, e.g. 09:00", Value: v})
 			continue
 		}
 		if !slices.Contains(s.At, v) {
@@ -79,36 +51,24 @@ func splitDelivery(typ string, raw map[string]any) (map[string]any, *schedule, [
 	}
 	slices.Sort(s.At)
 	switch {
-	case len(list) == 0:
-		errs = append(errs, configError("at", "at least one time of day, e.g. [\"09:00\"]", at))
+	case len(at) == 0:
+		errs = append(errs, &huma.ErrorDetail{Location: "body.at", Message: "at least one time of day, e.g. [\"09:00\"]", Value: at})
 	case len(s.At) > maxDigestTimes:
-		errs = append(errs, configError("at", fmt.Sprintf("at most %d times", maxDigestTimes), len(s.At)))
+		errs = append(errs, &huma.ErrorDetail{Location: "body.at", Message: fmt.Sprintf("at most %d times", maxDigestTimes), Value: len(s.At)})
 	}
-	if hasTZ && tz != "" {
-		name, _ := tz.(string)
+	if tz != "" {
 		// "Local" is the server's zone, not a place the user picked.
-		if _, err := time.LoadLocation(name); err != nil || name == "" || name == "Local" {
-			errs = append(errs, configError("tz", "an IANA time zone, e.g. Europe/Paris", tz))
+		if _, err := time.LoadLocation(tz); err != nil || tz == "Local" {
+			errs = append(errs, &huma.ErrorDetail{Location: "body.tz", Message: "an IANA time zone, e.g. Europe/Paris", Value: tz})
 		} else {
-			s.TZ = name
+			s.TZ = tz
 		}
 	}
-	return rest, s, errs
+	return s, errs
 }
 
-// scheduleOf reads the schedule of a stored or normalized config; nil means immediate.
-func scheduleOf(cfg map[string]any) *schedule {
-	if cfg["delivery"] != deliveryDigest {
-		return nil
-	}
-	b, _ := json.Marshal(cfg)
-	s := &schedule{}
-	_ = json.Unmarshal(b, s)
-	return s
-}
-
-// next is the first scheduled instant strictly after t, in the zone load returns for s.TZ. A stored config is
-// checked again: one written outside validateConfig must not panic the router nor queue for year 1.
+// next is the first scheduled instant strictly after t, in the zone load returns for s.TZ. A stored schedule is
+// checked again: one written outside checkSchedule must not panic the router nor queue for year 1.
 func (s schedule) next(t time.Time, load func(string) (*time.Location, error)) (time.Time, error) {
 	if len(s.At) == 0 {
 		return time.Time{}, errors.New("digest schedule: no time of day")
@@ -170,13 +130,13 @@ func wallTime(y int, mo time.Month, d, h, m int, loc *time.Location) time.Time {
 	return t
 }
 
-// reschedule moves the channel's pending, unleased digest deliveries to s's next time (012-AC9). When s is nil
+// reschedule moves the rule's pending, unleased digest deliveries to s's next time (012-AC9, 012-AC18). When s is nil
 // it takes every waiting one out of the digest, due now unless a send holds it or a failure set its backoff.
-func reschedule(ctx context.Context, tx pgx.Tx, channel string, s *schedule) error {
+func reschedule(ctx context.Context, tx pgx.Tx, rule string, s *schedule) error {
 	if s == nil {
 		if _, err := tx.Exec(ctx, `UPDATE deliveries SET digest = false, next_attempt_at = CASE
 				WHEN status = 'pending' AND (leased_until IS NULL OR leased_until <= now()) THEN now() ELSE next_attempt_at END
-			WHERE channel_id = $1 AND status IN ('pending', 'failed') AND digest`, channel); err != nil {
+			WHERE rule_id = $1 AND status IN ('pending', 'failed') AND digest`, rule); err != nil {
 			return fmt.Errorf("reschedule digest: %w", err)
 		}
 		return nil
@@ -190,7 +150,7 @@ func reschedule(ctx context.Context, tx pgx.Tx, channel string, s *schedule) err
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE deliveries SET next_attempt_at = $2
-		WHERE channel_id = $1 AND status = 'pending' AND digest AND (leased_until IS NULL OR leased_until <= now())`, channel, due); err != nil {
+		WHERE rule_id = $1 AND status = 'pending' AND digest AND (leased_until IS NULL OR leased_until <= now())`, rule, due); err != nil {
 		return fmt.Errorf("reschedule digest: %w", err)
 	}
 	return nil

@@ -8,7 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import type { Channel, ChannelKind, DeliveryStatus } from "@/types/api";
+import type { Channel, ChannelKind, DeliveryStatus, Rule } from "@/types/api";
 
 export const CHANNEL_KINDS: { type: ChannelKind; label: string; icon: LucideIcon }[] = [
   { type: "telegram", label: "Telegram", icon: Send },
@@ -58,14 +58,12 @@ export function channelTarget(
   }
 }
 
-/** Types whose message can list several events (012). */
-export const DIGEST_TYPES: ChannelKind[] = ["telegram", "nextcloud_talk", "email", "web_push"];
 export const MAX_DIGEST_TIMES = 24;
 
-/** "Digest at 09:00, 18:00 (Europe/Paris)" for a digest channel, null for an immediate one. */
-export function digestSummary(cfg: Channel["config"]): string | null {
-  if (cfg.delivery !== "digest" || !Array.isArray(cfg.at)) return null;
-  return `Digest at ${cfg.at.join(", ")} (${String(cfg.tz ?? "UTC")})`;
+/** "Digest at 09:00, 18:00 (Europe/Paris)" for a digest rule, null for an immediate one. */
+export function digestSummary(r: Pick<Rule, "delivery" | "at" | "tz">): string | null {
+  if (r.delivery !== "digest" || !r.at?.length) return null;
+  return `Digest at ${r.at.join(", ")} (${r.tz || "UTC"})`;
 }
 
 /** The browser's zone, the form's default for a new digest. */

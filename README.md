@@ -400,15 +400,23 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `disable_notification: true`, which notifies without sound. Email: multipart text + HTML through
   the instance's SMTP server, at most 10 recipients per channel.
 - Nextcloud Talk: see [below](#nextcloud-talk-channels).
-- Digest (Telegram, Nextcloud Talk, email, Web Push): config `delivery: digest` with `at`, 1 to 24 local
-  times (`HH:MM`), and `tz`, an IANA time zone (default `UTC`). Deliveries wait for the channel's next
-  time; then one message lists them, grouped by watch, oldest first, cut on a whole line past the type's cap
-  (Telegram 4096 bytes, Talk 31000 characters, email 256 KiB or 1000 events) with "+N more" and the inbox
-  link. Web Push sends one notification "N unread events" opening the inbox. Only events still unread in the
-  owner's inbox are listed: one read or archived meanwhile ends `skipped` (shown as Skipped) with the reason,
-  and an empty digest sends nothing. An event of a high priority rule goes out at once, alone. Silent
-  applies. Editing the times moves waiting deliveries to the new next time; switching to `immediate` sends
-  them at once. "Send test" sends a sample digest. The default `immediate` sends each event as it is routed.
+- Digest: a rule's `delivery` is `immediate` (default) or `digest`, with `at`, 1 to 24 local times (`HH:MM`),
+  and `tz`, an IANA time zone (default `UTC`). A digest rule's deliveries to Telegram, Nextcloud Talk, email
+  and Web Push channels wait for the rule's next time; its webhook and script channels still get each event
+  at once. At a scheduled time each channel sends one message listing its due deliveries, from every digest
+  rule, grouped by watch, oldest first, cut on a whole line past the type's cap (Telegram 4096 bytes, Talk
+  31000 characters, email 256 KiB or 1000 events) with "+N more" and the inbox link. Web Push sends one
+  notification "N unread events" opening the inbox. Only events still unread in the owner's inbox are
+  listed: one read or archived meanwhile ends `skipped` (shown as Skipped) with the reason, and an empty
+  digest sends nothing. Silent applies. A high priority rule cannot be a digest (400). An event matched by an
+  immediate (or high) rule and a digest rule on the same channel is sent once, at once; matched by two digest
+  rules, it waits for the earlier of their next times. Editing a rule's times moves its waiting deliveries
+  to the new next time; switching it to `immediate`, disabling it or deleting it sends them at once.
+  Channels carry no delivery setting (`delivery`, `at` or `tz` in a channel config is a 400) and "Send test"
+  sends one test event. Upgrading moves each digest channel's schedule to the rules targeting it, when all
+  the digest channels of a rule have one schedule and the rule has no immediate Telegram, Talk, email or Web
+  Push channel. Any other rule with a digest channel stays immediate and is named in a `migration_warning`
+  log line: its events then go out at once on every channel. Waiting digest deliveries keep their time.
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing

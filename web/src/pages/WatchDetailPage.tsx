@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, KeyRound, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, KeyRound, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
@@ -11,7 +11,7 @@ import { ActivityTabs, StatusCard } from "@/components/WatchActivity";
 import { DeleteWatchWarning, KindIcon, PausedBadge } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { problemText } from "@/lib/problems";
-import { describeSchedule, FIELDS, kindInfo, targetSummary } from "@/lib/watchKinds";
+import { describeSchedule, FIELDS, kindInfo, targetSummary, upstreamPage } from "@/lib/watchKinds";
 import { cn } from "@/lib/utils";
 import { NotFound } from "@/pages/NotFound";
 import type { Watch } from "@/types/api";
@@ -66,6 +66,7 @@ function WatchDetail({ watch }: { watch: Watch }) {
     onError: (err) => toast(`Could not change the paused state: ${problemText(err)}`, "error"),
   });
   const info = kindInfo(watch.kind);
+  const upstream = upstreamPage(watch);
 
   return (
     <>
@@ -78,7 +79,20 @@ function WatchDetail({ watch }: { watch: Watch }) {
           <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
             <span>{info.label}</span>
             <span aria-hidden>·</span>
-            <span className="font-mono">{targetSummary(watch)}</span>
+            {upstream ? (
+              <a
+                href={upstream}
+                target="_blank"
+                rel="noreferrer noopener"
+                aria-label={`Open ${targetSummary(watch)} upstream`}
+                className="inline-flex items-center gap-1 font-mono underline-offset-2 hover:text-ink hover:underline"
+              >
+                {targetSummary(watch)}
+                <ExternalLink aria-hidden className="size-3.5" />
+              </a>
+            ) : (
+              <span className="font-mono">{targetSummary(watch)}</span>
+            )}
             {watch.paused && <PausedBadge />}
           </p>
         </div>

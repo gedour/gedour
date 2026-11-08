@@ -8,6 +8,7 @@ import {
   kindInfo,
   targetSummary,
   toConfig,
+  upstreamPage,
 } from "@/lib/watchKinds";
 
 describe("toConfig / fromConfig", () => {
@@ -85,6 +86,58 @@ describe("targetSummary", () => {
     );
     expect(credentialLabel("registry_basic")).toBe("Registry login");
     expect(credentialLabel("x" as "github_token")).toBe("x");
+  });
+});
+
+describe("upstreamPage", () => {
+  it.each([
+    ["github_repo", { repo: "o/r", api_url: "https://api.github.com" }, "https://github.com/o/r"],
+    [
+      "github_pr",
+      { repo: "o/r", number: 7, api_url: "https://ghe.example.com/api/v3" },
+      "https://ghe.example.com/o/r/pull/7",
+    ],
+    [
+      "github_repo",
+      { repo: "o/r", api_url: "https://api.acme.ghe.com" },
+      "https://acme.ghe.com/o/r",
+    ],
+    [
+      "github_issue",
+      { repo: "o/r", number: 3, api_url: "https://api.github.com" },
+      "https://github.com/o/r/issues/3",
+    ],
+    [
+      "github_discussion",
+      { repo: "o/r", number: 5, api_url: "https://api.github.com" },
+      "https://github.com/o/r/discussions/5",
+    ],
+    [
+      "gitlab_release",
+      { project: "g/p", base_url: "https://gitlab.com" },
+      "https://gitlab.com/g/p/-/releases",
+    ],
+    [
+      "gitlab_mr",
+      { project: "g/s/p", iid: 4, base_url: "https://git.example.com" },
+      "https://git.example.com/g/s/p/-/merge_requests/4",
+    ],
+    [
+      "oci_tags",
+      { registry: "docker.io", repository: "library/postgres" },
+      "https://hub.docker.com/_/postgres",
+    ],
+    [
+      "oci_tags",
+      { registry: "docker.io", repository: "bitnami/redis" },
+      "https://hub.docker.com/r/bitnami/redis",
+    ],
+    ["oci_tags", { registry: "quay.io", repository: "a/b" }, "https://quay.io/repository/a/b"],
+    ["oci_tags", { registry: "ghcr.io", repository: "a/b" }, "https://ghcr.io/a/b"],
+    ["oci_tags", { registry: "registry.example.com:5000", repository: "a/b" }, null],
+    ["gitlab_release", { project: "g/p", base_url: "javascript:alert(1)//" }, null],
+  ] as const)("%s %j", (kind, config, want) => {
+    expect(upstreamPage({ kind, config })).toBe(want);
   });
 });
 

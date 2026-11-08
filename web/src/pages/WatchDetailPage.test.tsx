@@ -27,6 +27,10 @@ describe("WatchDetailPage", () => {
     expect(screen.queryByRole("form", { name: "Share" })).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent(/shar/i);
     expect(screen.getByRole("link", { name: "Edit" })).toHaveAttribute("href", "/watches/w1/edit");
+    expect(screen.getByRole("link", { name: "Open golang/go releases upstream" })).toHaveAttribute(
+      "href",
+      "https://github.com/golang/go",
+    );
   });
 
   // 009-AC10: the owner is the only reader, so every control shows whatever the watch's state.

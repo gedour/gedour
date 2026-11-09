@@ -99,6 +99,14 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   await setFixture(page, "a");
   await page.goto("/inbox");
   const call = await api(page);
+  // The counts below take alice's whole inbox, and a retry reruns the serial group: archive what earlier attempts left.
+  const left = (await (await call("GET", "/api/v1/inbox?limit=200")).json()).items as {
+    id: number;
+  }[];
+  if (left.length > 0) {
+    const archived = await call("POST", "/api/v1/inbox/archive", { ids: left.map((i) => i.id) });
+    expect(archived.ok()).toBe(true);
+  }
   const res = await call("POST", "/api/v1/watches", {
     name: `Routed CLI ${t}`,
     kind: "github_repo",

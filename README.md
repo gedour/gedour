@@ -428,6 +428,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 ## Nextcloud Talk channels
 
 A Talk channel posts each delivery into a conversation as a bot. No Nextcloud user account is involved.
+Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throttling (see below).
 
 1. Pick a shared secret of 40 to 128 characters, e.g. `openssl rand -hex 32`.
 2. On the Nextcloud server, create the bot. Talk 22.0.1 and later has a command for a
@@ -459,12 +460,13 @@ A Talk channel posts each delivery into a conversation as a bot. No Nextcloud us
 - Only a 201 is sent: a proxy or SSO page answering 200 is not a post. 401, 404 and 413 are final at once
   (`dead`, shown as Failed) with the reason; fix the channel, then retry the delivery by hand. Anything else,
   other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.
-- Nextcloud throttles every bot of an IP after repeated 401s. A 401 pauses that channel for 2h15 or until
+- Nextcloud throttles every bot of an IP after repeated 401s. A 401 pauses that channel for 30 minutes or until
   it is edited: its deliveries wait without using an attempt. One Talk request per channel runs at a time, about
   one message per `GEDOUR_WORKER_POLL`. "Send test" and a manual retry of the refused delivery stay direct.
-  A repair made only on the Nextcloud side can wait up to 2h15 unless the channel is edited. One broken channel
-  stays under Nextcloud's limits; on 31 and older, two on one IP can still slow bot posts past gedour's timeout
-  after about 7 hours.
+  A repair made only on the Nextcloud side can wait up to 30 minutes unless the channel is edited.
+- Nextcloud 32 or later is required for this to hold: it answers 429 past 10 failures in 30 minutes, and it takes
+  11 broken channels on one IP to get there. Older servers slow bot posts past gedour's timeout at 7 failures in
+  12 hours, which one broken channel reaches in about 3 hours.
 - To exempt gedour's outgoing IP, add it to the Brute-force IP whitelist in Nextcloud's security settings; that
   removes the protection for this IP, for every login attempt from it.
 - https is required, and http only for hosts in `GEDOUR_ALLOW_HTTP_HOSTS`. Same SSRF guard as webhooks: a

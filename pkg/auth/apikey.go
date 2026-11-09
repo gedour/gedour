@@ -26,7 +26,7 @@ const (
 	maxActiveKeys = 10
 )
 
-// ErrInvalidKey is LookupKey's one answer for a malformed, unknown, revoked or expired key or a disabled or purged owner.
+// ErrInvalidKey is LookupKey's one answer for a malformed, unknown, revoked, expired or suspended key or a disabled or purged owner.
 var ErrInvalidKey = errors.New("invalid API key")
 
 // KeyPrincipal is who a valid key speaks for.
@@ -58,7 +58,7 @@ type APIKey struct {
 	LastUsedAt     *time.Time `json:"last_used_at" nullable:"true"`
 	RevokedAt      *time.Time `json:"revoked_at" nullable:"true"`
 	EffectiveUntil *time.Time `json:"effective_until" nullable:"true" doc:"The earlier of expires_at and the owner's last sign-in plus the max age; null only in dev mode without an end date"`
-	Status         string     `json:"status" enum:"active,dormant,expired,revoked"`
+	Status         string     `json:"status" enum:"active,dormant,suspended,expired,revoked"`
 }
 
 // APIKeyCreated is the only answer that holds the key.
@@ -107,6 +107,7 @@ const keySelectSQL = `SELECT k.id::text, k.name, k.scope, k.prefix, k.created_at
 		LEAST(k.expires_at, ` + keySigninEndSQL + `),
 		CASE WHEN k.revoked_at IS NOT NULL THEN 'revoked'
 			WHEN k.expires_at <= now() THEN 'expired'
+			WHEN k.suspended_at IS NOT NULL THEN 'suspended'
 			WHEN ` + keySigninEndSQL + ` <= now() THEN 'dormant'
 			ELSE 'active' END
 	FROM api_keys k JOIN users u ON u.id = k.user_id
@@ -259,6 +260,25 @@ func revokeActiveKeys(ctx context.Context, tx pgx.Tx, userID string) (int64, err
 	return tag.RowsAffected(), nil
 }
 
+// suspendActiveKeys needs the user row held by tx; a key already suspended keeps its date. The date is taken after
+// the row lock, so it follows any sign-in that held the row first (migration 24's Down compares the two).
+func suspendActiveKeys(ctx context.Context, tx pgx.Tx, userID string) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE api_keys SET suspended_at = statement_timestamp() WHERE user_id = $1 AND suspended_at IS NULL AND `+keyActiveSQL, userID)
+	if err != nil {
+		return 0, fmt.Errorf("suspend keys: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// resumeKeys lifts the suspension of the user's keys still alive, under the user row held by tx; a dead key stays dead.
+func resumeKeys(ctx context.Context, tx pgx.Tx, userID string) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE api_keys SET suspended_at = NULL WHERE user_id = $1 AND suspended_at IS NOT NULL AND `+keyActiveSQL, userID)
+	if err != nil {
+		return 0, fmt.Errorf("resume keys: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // LookupKey resolves a bearer string to its principal or ErrInvalidKey; any other error is a database failure.
 func (s *Service) LookupKey(ctx context.Context, raw string) (KeyPrincipal, error) {
 	if !strings.HasPrefix(raw, keyPrefix) {
@@ -270,7 +290,7 @@ func (s *Service) LookupKey(ctx context.Context, raw string) (KeyPrincipal, erro
 			COALESCE(`+keySigninEndSQL+` <= now(), false), LEAST(k.expires_at, `+keySigninEndSQL+`), k.expires_at,
 			k.last_used_at IS NULL OR k.last_used_at < now() - interval '1 minute'
 		FROM api_keys k JOIN users u ON u.id = k.user_id AND u.disabled_at IS NULL AND u.purged_at IS NULL
-		WHERE k.hash = $2 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())`, s.keySigninMaxAge, hashToken(raw)).
+		WHERE k.hash = $2 AND k.revoked_at IS NULL AND k.suspended_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())`, s.keySigninMaxAge, hashToken(raw)).
 		Scan(&p.KeyID, &p.Scope, &p.User.ID, &p.User.Email, &p.User.DisplayName, &p.Dormant, &p.EffectiveUntil, &p.ExpiresAt, &stale)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return KeyPrincipal{}, ErrInvalidKey

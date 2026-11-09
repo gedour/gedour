@@ -83,7 +83,7 @@ Spec 006 reads roles at sign-in only, and a key involves no sign-in. Each key lo
 |---|---|
 | Disable | Revoked in the disable tx, like sessions. Re-enabling does not revive them. |
 | Purge | Deleted in the purge tx, counted in the preview. |
-| Sign-in refused `missing_role` | Revoked at once and audited, and the account's sessions are deleted: a live session could otherwise mint a new key. The revocation outlives a dropped callback. |
+| Sign-in refused `missing_role` | Suspended at once and audited, and the account's sessions are deleted: a live session could otherwise mint a new key. The suspension outlives a dropped callback. The next successful sign-in lifts it, audited; a key that expired or was revoked meanwhile stays dead. |
 | Role removed in the IdP, no sign-in attempt | Any key, `never` included, goes dormant once the owner has no successful sign-in within `GEDOUR_API_KEY_SIGNIN_MAX_AGE`, default 720h. A sign-in wakes it. |
 | Admin flag | Never on a key. A key of an admin behaves as any user's: own data, no admin tool. |
 | Required role | No separate check: a successful sign-in, the only thing that moves `users.last_login_at`, already passed it. |
@@ -242,7 +242,7 @@ answer HTML with 200 to a client probing for OAuth. `GET /.well-known/` and `GET
 style. The e2e CSP guard covers it.
 
 **Failed lookups.** A database error answers 5xx, never 401, so a client does not drop a valid key during an outage.
-Every 401 has the same body, whether the key is unknown, revoked, expired or its owner is disabled.
+Every 401 has the same body, whether the key is unknown, revoked, expired, suspended or its owner is disabled.
 
 ### Prompt injection
 
@@ -309,7 +309,7 @@ Account state:
 
 - [x] **AC10** Disabling an account revokes its keys in the same tx (next call 401). Re-enabling leaves them revoked.
 - [x] **AC11** Purging deletes the keys in the purge tx and the preview counts them. Audit rows naming them stay.
-- [x] **AC12** A sign-in refused for `missing_role` revokes the user's active keys, deletes their sessions (the old session gets 401) and audits it, even when the request's context is cancelled. A refusal for a disabled account changes nothing more.
+- [x] **AC12** A sign-in refused for `missing_role` suspends the user's active keys (each gets 401), deletes their sessions (the old session gets 401) and audits it, even when the request's context is cancelled. The next successful sign-in lifts the suspension and audits it; a key revoked or expired meanwhile stays dead. The list reports `suspended`. A refusal for a disabled account changes nothing more.
 - [x] **AC13** A key whose owner has no successful sign-in within the max age goes dormant, a `never` key included: `tools/list` answers, each `tools/call` gets `isError` with the sign-in URL and reads no data. A new sign-in wakes it. The list reports `effective_until`. Dev mode skips the check.
 - [x] **AC14** An admin's key lists the same tools as a non-admin's and reads only the admin's data. Startup fails on a tool row naming an unknown operation or a path under `auth.AdminPrefix`.
 
@@ -319,7 +319,7 @@ Transport and auth:
 - [x] **AC16** A client at `2025-11-25` sending `initialize`, then `tools/list`, works without a session ID.
 - [x] **AC17** `GET` and `DELETE /mcp` get 405, never the SPA. A mismatched `Mcp-Name` gets 400 `-32020`. An unknown protocol version gets 400 `-32022`.
 - [x] **AC18** Absent Origin passes. A listed Origin passes. Any other gets 403 without touching the key table. In dev mode a non-loopback Host gets 403.
-- [x] **AC19** No key, a malformed key, an unknown, revoked or expired key, and a disabled owner's key all get an identical 401 with `WWW-Authenticate: Bearer` and no `resource_metadata`. A key in the query string is ignored. A valid session cookie on `/mcp` gets 401.
+- [x] **AC19** No key, a malformed key, an unknown, revoked, expired or suspended key, and a disabled owner's key all get an identical 401 with `WWW-Authenticate: Bearer` and no `resource_metadata`. A key in the query string is ignored. A valid session cookie on `/mcp` gets 401.
 - [x] **AC20** A database failure during lookup answers 5xx, never 401.
 - [x] **AC21** `GET /.well-known/oauth-protected-resource/mcp` `GET /.well-known/oauth-authorization-server` and `GET /mcp/.well-known/oauth-protected-resource` get 404, not HTML.
 - [x] **AC22** A session cookie on an `/api` mutation without CSRF still gets 403, with or without a bearer key beside it. A bearer key alone on any `/api` path but the public ones gets 401.
@@ -405,6 +405,8 @@ CREATE INDEX api_keys_user_id_idx ON api_keys (user_id);
 
 Migration `00014` (phase 3): `ALTER TABLE audit_log ADD COLUMN api_key_id uuid`. Instant, and no append-only trigger fires.
 
+Migration `00024`: `ALTER TABLE api_keys ADD COLUMN suspended_at timestamptz`, set by a `missing_role` refusal, cleared by the next sign-in. Its down revokes each live suspended key whose owner has not signed in since, then drops the column.
+
 - Locks: key creation takes the user `FOR NO KEY UPDATE`, for the cap and against a racing disable. Keys come after users in the lock order.
 - Personal data: only the key's name, chosen by the user. The row goes with the purge; the name stays in its audit rows, which are append-only.
 
@@ -432,8 +434,8 @@ None. Answered by babs:
 - Disable revokes rather than blocks: a key behaves as a session, and an operator re-enabling an account does not silently reopen a leak.
 - Limits are constants but the sign-in max age, which an operator's IdP policy decides.
 - A dormant key is not a 401, a deviation from the OAuth section's "expired tokens MUST receive 401". That section is optional and v1 does not follow it. A future OAuth path must revisit this.
-- A `missing_role` denial deletes sessions: a change from 006, where a removed role stays effective until the session ends. It only applies once gedour knows, at a refused sign-in, and it closes a live session minting a new key after the revocation.
-- A wrong roles claim revokes each user's keys at their next sign-in, irreversibly: accepted, as a revoked key is one new key away, and the audit shows the count.
+- A `missing_role` denial deletes sessions: a change from 006, where a removed role stays effective until the session ends. It only applies once gedour knows, at a refused sign-in, and it closes a live session minting a new key after the suspension.
+- A `missing_role` refusal suspends rather than revokes: a typo in `GEDOUR_OIDC_REQUIRED_ROLE` or the roles claim would otherwise destroy every user's keys. The keys stay unusable until a sign-in passes the role check, which is the same proof a new key would need. Disable still revokes.
 - Revoked keys count against no cap until cleaned up after 30 days: self-inflicted, it needs a session.
 - A 2026-07-28 request with a version below it that the SDK does not know gets its plain 400; only versions at or above 2026-07-28 get `-32022`.
 - Failed-key attempts get a metric, no IP limiter: guessing is infeasible and client IPs behind a proxy are not trustworthy.

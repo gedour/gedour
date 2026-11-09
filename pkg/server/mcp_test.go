@@ -545,6 +545,7 @@ func TestMCPUnauthorized(t *testing.T) {
 	live, _ := m.key(t, alice.id, "read", "")
 	revoked, _ := m.key(t, alice.id, "read", "revoked_at = now()")
 	expired, _ := m.key(t, alice.id, "read", "expires_at = now() - interval '1 second'")
+	suspended, _ := m.key(t, alice.id, "read", "suspended_at = now()")
 	disabled, purged := m.user(t, "disabled"), m.user(t, "purged")
 	disabledKey, _ := m.key(t, disabled.id, "read", "")
 	purgedKey, _ := m.key(t, purged.id, "read", "")
@@ -566,6 +567,7 @@ func TestMCPUnauthorized(t *testing.T) {
 		{"unknown", "gdr_" + strings.Repeat("A", 43), nil},
 		{"revoked", revoked, nil},
 		{"expired", expired, nil},
+		{"suspended", suspended, nil},
 		{"disabled owner", disabledKey, nil},
 		{"purged owner", purgedKey, nil},
 		{"key in the query string", "", func(r *http.Request) { r.URL.RawQuery = "key=" + live + "&api_key=" + live + "&token=" + live }},
@@ -766,7 +768,7 @@ func TestMCPDisable(t *testing.T) {
 	m.wantUnauthorized(t, key)
 }
 
-// 007-AC12: a real sign-in refused for missing_role kills the keys; the same flow with the role leaves others' alone.
+// 007-AC12: a real sign-in refused for missing_role suspends the keys, others' untouched; the role coming back lifts it.
 func TestMCPDeniedSignIn(t *testing.T) {
 	m := newMCPApp(t)
 	alice, bob := m.user(t, "alice"), m.user(t, "bob")
@@ -778,7 +780,23 @@ func TestMCPDeniedSignIn(t *testing.T) {
 	}
 	m.wantUnauthorized(t, key)
 	m.wantAwake(t, bobKey)
-	// The role coming back does not revive it.
+	if loc := m.signInAs(t, "alice", "gedour-user"); loc != "/" {
+		t.Fatalf("%q", loc)
+	}
+	m.wantAwake(t, key)
+}
+
+// 007-AC10, 007-AC12: a disable while suspended revokes for good: enabling and signing in with the role leave the key dead.
+func TestMCPDisableWhileSuspended(t *testing.T) {
+	m := newMCPApp(t)
+	alice, admin := m.user(t, "alice"), m.user(t, "admin")
+	m.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	key, _ := m.key(t, alice.id, "read", "")
+	if loc := m.signInAs(t, "alice", "other"); loc != "/?auth=forbidden" {
+		t.Fatalf("%q", loc)
+	}
+	m.mustCall(t, admin, http.MethodPost, auth.AdminPrefix+"users/"+alice.id+"/disable", nil, http.StatusNoContent, nil)
+	m.mustCall(t, admin, http.MethodPost, auth.AdminPrefix+"users/"+alice.id+"/enable", nil, http.StatusNoContent, nil)
 	if loc := m.signInAs(t, "alice", "gedour-user"); loc != "/" {
 		t.Fatalf("%q", loc)
 	}

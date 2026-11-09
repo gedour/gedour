@@ -61,6 +61,7 @@
             "enum": [
               "active",
               "dormant",
+              "suspended",
               "expired",
               "revoked"
             ],
@@ -145,6 +146,7 @@
             "enum": [
               "active",
               "dormant",
+              "suspended",
               "expired",
               "revoked"
             ],

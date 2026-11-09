@@ -45,6 +45,7 @@ const DURATIONS: { value: ApiKeyDuration; label: string }[] = [
 const STATUS_TONE: Record<ApiKey["status"], string> = {
   active: "bg-emerald-500/12 text-emerald-800 ring-emerald-600/25 dark:text-emerald-300",
   dormant: "bg-amber-500/12 text-amber-900 ring-amber-600/25 dark:text-amber-200",
+  suspended: "bg-amber-500/12 text-amber-900 ring-amber-600/25 dark:text-amber-200",
   expired: "bg-line/60 text-ink ring-line",
   revoked: "bg-rose-500/12 text-rose-800 ring-rose-600/25 dark:text-rose-300",
 };
@@ -189,6 +190,7 @@ function KeyTable({
 function EffectiveEnd({ apiKey }: { apiKey: ApiKey }) {
   if (apiKey.status === "revoked") return "—";
   if (apiKey.status === "dormant") return "Sign in to wake it";
+  if (apiKey.status === "suspended") return "Restored at the next sign-in";
   return apiKey.effective_until ? <Timestamp at={apiKey.effective_until} /> : "No end date";
 }
 

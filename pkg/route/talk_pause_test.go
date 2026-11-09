@@ -332,12 +332,12 @@ func TestTalkPauseEnds(t *testing.T) {
 	if n := e.requests("talk-room"); n != 0 {
 		t.Fatalf("%d sent during the pause", n)
 	}
-	e.age(t, ch, 2*time.Hour+14*time.Minute)
+	e.age(t, ch, 29*time.Minute)
 	e.rounds(t, 2)
 	if n := e.requests("talk-room"); n != 0 {
 		t.Fatalf("%d sent a minute before the pause ends", n)
 	}
-	e.age(t, ch, 2*time.Hour+15*time.Minute+time.Second)
+	e.age(t, ch, 30*time.Minute+time.Second)
 	e.rounds(t, 6)
 	if n := e.requests("talk-room"); n != 3 {
 		t.Errorf("%d sent after the pause, want the 3 held", n)
@@ -440,27 +440,33 @@ func TestTalkPauseProbe(t *testing.T) {
 	ch := e.channel(t, "room", wrongTalkSecret)
 	e.events(t, 10, ch)
 	e.rounds(t, 2)
-	e.age(t, ch, 2*time.Hour+15*time.Minute+time.Second)
+	e.age(t, ch, 30*time.Minute+time.Second)
 	e.rounds(t, 4)
 	if n := e.requests("talk-room-rejected"); n != 2 {
 		t.Errorf("%d requests over two pauses, want 2", n)
 	}
 }
 
-// 003-AC8: over 12 simulated hours a bad channel makes 6 requests, under the 7 of Nextcloud 31 and older.
-func TestTalkPauseTwelveHourLimit(t *testing.T) {
+// 003-AC8: over 3 simulated hours a bad channel makes one request per 30 minutes, so it takes 11 broken
+// channels on one IP to pass the 10 failures in 30 minutes of Nextcloud 32 and later.
+func TestTalkPauseThirtyMinuteLimit(t *testing.T) {
 	e := newTalkEnv(t)
 	ch := e.channel(t, "room", wrongTalkSecret)
 	e.events(t, 30, ch)
-	for range 12 * 4 {
+	var at []int
+	for minute := 0; minute < 3*60; minute += 10 {
+		before := e.requests("talk-room-rejected")
 		e.rounds(t, 1)
-		if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET next_attempt_at = next_attempt_at - interval '15 minutes'
+		for range e.requests("talk-room-rejected") - before {
+			at = append(at, minute)
+		}
+		if _, err := e.pool.Exec(context.Background(), `UPDATE deliveries SET next_attempt_at = next_attempt_at - interval '10 minutes'
 			WHERE channel_id = $1 AND status = 'dead'`, ch); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := e.requests("talk-room-rejected"); n != 6 {
-		t.Errorf("%d requests in 12 h, want 6", n)
+	if want := []int{0, 30, 60, 90, 120, 150}; fmt.Sprint(at) != fmt.Sprint(want) {
+		t.Errorf("requests at minutes %v, want %v", at, want)
 	}
 }
 

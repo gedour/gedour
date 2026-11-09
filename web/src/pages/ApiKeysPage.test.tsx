@@ -55,6 +55,7 @@ describe("ApiKeysPage", () => {
           }),
           apiKey({ id: "k3", name: "old", status: "revoked", revoked_at: "2026-11-02T00:00:00Z" }),
           apiKey({ id: "k4", name: "idle", status: "dormant" }),
+          apiKey({ id: "k5", name: "held", status: "suspended" }),
         ],
       },
     });
@@ -74,6 +75,12 @@ describe("ApiKeysPage", () => {
     expect(rows[3]).toHaveTextContent("—");
     expect(rows[4]).toHaveTextContent("Sign in to wake it");
     expect(rows[4]).toHaveTextContent("dormant");
+    // 007-AC12: a suspended key still offers Revoke.
+    expect(rows[5]).toHaveTextContent("Restored at the next sign-in");
+    expect(rows[5]).toHaveTextContent("suspended");
+    expect(
+      within(rows[5] as HTMLElement).getByRole("button", { name: "Revoke" }),
+    ).toBeInTheDocument();
   });
 
   // 007-AC32: loading, empty and error states.

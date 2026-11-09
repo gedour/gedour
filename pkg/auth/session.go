@@ -125,8 +125,16 @@ func (s *Service) login(ctx context.Context, w http.ResponseWriter, r *http.Requ
 			return err
 		}
 		sess.User = u
-		if err := audit.Record(ctx, tx, audit.Entry{ActorUserID: u.ID, Action: "user.login", TargetType: "user", TargetID: u.ID,
-			After: map[string]string{"session": auditID(sess.id)}}); err != nil {
+		// The upsert holds the user row: a racing missing_role refusal suspends before or after, never in between.
+		resumed, err := resumeKeys(ctx, tx, u.ID)
+		if err != nil {
+			return err
+		}
+		after := map[string]any{"session": auditID(sess.id)}
+		if resumed > 0 {
+			after["resumed_api_key_count"] = resumed
+		}
+		if err := audit.Record(ctx, tx, audit.Entry{ActorUserID: u.ID, Action: "user.login", TargetType: "user", TargetID: u.ID, After: after}); err != nil {
 			return err
 		}
 		// A login over a live session replaces it rather than leaving it valid alongside.
@@ -220,13 +228,14 @@ const (
 	deniedDisabled    = "disabled"
 )
 
-// auditDenied records a refused sign-in, without creating or changing the user row. A missing role also revokes the
-// user's API keys and deletes their sessions (007-AC12): a key never signs in to find out, and a live session could mint a new one.
+// auditDenied records a refused sign-in, without creating or changing the user row. A missing role also suspends the
+// user's API keys until the next sign-in and deletes their sessions (007-AC12): a key never signs in to find out, and a
+// live session could mint a new one.
 func (s *Service) auditDenied(ctx context.Context, sub, reason string) error {
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		query := `SELECT id::text FROM users WHERE oidc_sub = $1`
 		if reason == deniedMissingRole {
-			// Waits for a key creation in flight, whose key the revocation below must see.
+			// Waits for a key creation in flight, whose key the suspension below must see.
 			query += ` FOR NO KEY UPDATE`
 		}
 		var id string
@@ -236,12 +245,12 @@ func (s *Service) auditDenied(ctx context.Context, sub, reason string) error {
 		}
 		after := map[string]any{"reason": reason}
 		if reason == deniedMissingRole && id != "" {
-			n, err := revokeActiveKeys(ctx, tx, id)
+			n, err := suspendActiveKeys(ctx, tx, id)
 			if err != nil {
 				return err
 			}
 			if n > 0 {
-				after["revoked_api_key_count"] = n
+				after["suspended_api_key_count"] = n
 			}
 			tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, id)
 			if err != nil {

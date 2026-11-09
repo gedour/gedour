@@ -101,10 +101,12 @@ a failed dev sign-in answers a plain 500.
   another type or non-string items count as no role.
 - With `GEDOUR_OIDC_REQUIRED_ROLE` set, a user holding neither it nor `GEDOUR_OIDC_ADMIN_ROLE` lands on the
   gate with "No access to gedour": no session, no account created, an audit entry `user.login_denied`.
-- Check the role name before enabling `GEDOUR_OIDC_REQUIRED_ROLE`: a sign-in refused for a wrong name revokes that user's API keys for good.
+- Check the role name before enabling `GEDOUR_OIDC_REQUIRED_ROLE`: a sign-in refused for a wrong name suspends that user's API keys until a sign-in passes the check.
 - Roles are read at sign-in only: a role added or removed at the provider applies at the next sign-in.
-  A sign-in refused for a missing role also ends the account's sessions and revokes its active API keys (the
-  audit entry holds `deleted_session_count` and `revoked_api_key_count`, when above 0), even if the browser drops the callback.
+  A sign-in refused for a missing role also ends the account's sessions and suspends its active API keys (status
+  `suspended`, each call gets 401; the audit entry holds `deleted_session_count` and `suspended_api_key_count`, when
+  above 0), even if the browser drops the callback. The next successful sign-in lifts the suspension (`user.login` holds
+  `resumed_api_key_count`); a key that expired or was revoked meanwhile stays dead.
   Sessions opened before the upgrade that added roles are not admin until their next sign-in.
 - `GET /api/v1/me` reports `is_admin`. Dev mode's user is always admin.
 
@@ -179,8 +181,9 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 - **Dormancy**: a key, even one with no end date, stops working once you have not signed in for
   `GEDOUR_API_KEY_SIGNIN_MAX_AGE` (30 days by default). The next sign-in wakes it. The page shows each key's
   effective end, the earlier of its expiry and that limit. Dev mode has no such limit.
-- **Revocation**: revoking is final. Disabling your account or a sign-in refused for a missing role revokes every
-  active key too; purging an account deletes them.
+- **Revocation**: revoking is final. Disabling your account revokes every active key too; purging an account deletes them.
+- **Suspension**: a sign-in refused for a missing role suspends every active key (401 on each call) until your next
+  successful sign-in, which restores the ones neither revoked nor expired meanwhile.
 
 | Scope | Reaches | Does not reach |
 |---|---|---|
@@ -697,6 +700,10 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   20's `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 20 from
   `goose_db_version`. Stored states keep the new keys, which the older image ignores; saving a watch from its
   UI drops the `new_discussions` and `reactions` boxes.
+- Suspended API keys (migration 24). During a rolling update, pods of the previous version still accept a
+  suspended key, and a missing-role refusal they handle revokes the keys as before. Rollback: scale web and worker
+  to 0, run migration 24's `Down` section by hand (`psql`; it revokes every live suspended key), delete version 24
+  from `goose_db_version`, then deploy the older image. Started earlier, the older image accepts suspended keys.
 
 ## Endpoints
 

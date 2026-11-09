@@ -524,13 +524,16 @@ func TestKeyPurge(t *testing.T) {
 	}
 }
 
-// 007-AC12: a sign-in refused for a missing role revokes the user's active keys and says so in the audit row.
+// 007-AC12: a sign-in refused for a missing role suspends the user's active keys and says so in the audit row; the
+// next sign-in with the role lifts it, except on a key that died meanwhile.
 func TestKeyDeniedMissingRole(t *testing.T) {
 	e := setup(t, false, withRoles)
 	alice, aliceToken, _ := e.signedIn(t, "alice-sub", false)
 	bob, bobToken, _ := e.signedIn(t, "bob", false)
 	raw, id := e.keyRow(t, alice, "")
-	raw2, _ := e.keyRow(t, alice, "")
+	raw2, id2 := e.keyRow(t, alice, "")
+	raw3, id3 := e.keyRow(t, alice, "")
+	raw4, id4 := e.keyRow(t, alice, "expires_at = now() + interval '1 day'")
 	rawB, _ := e.keyRow(t, bob, "")
 	_, dead := e.keyRow(t, alice, "revoked_at = now() - interval '2 days'")
 	_, expired := e.keyRow(t, alice, "expires_at = now() - interval '1 minute'")
@@ -538,17 +541,18 @@ func TestKeyDeniedMissingRole(t *testing.T) {
 	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/?auth=forbidden" {
 		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	e.wantInvalidKey(t, raw)
-	e.wantInvalidKey(t, raw2)
+	for _, raw := range []string{raw, raw2, raw3, raw4} {
+		e.wantInvalidKey(t, raw)
+	}
 	e.wantValidKey(t, rawB)
-	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at > now() - interval '1 minute'`, id); n != 1 {
-		t.Fatal("not revoked")
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL AND suspended_at > now() - interval '1 minute'`, alice); n != 4 {
+		t.Fatalf("%d keys suspended, want 4 and none revoked", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id::text = ANY($1) AND suspended_at IS NULL`, []string{dead, expired}); n != 2 {
+		t.Fatal("a dead key was suspended")
 	}
 	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at < now() - interval '1 day'`, dead); n != 1 {
 		t.Fatal("an old revocation moved")
-	}
-	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NULL`, expired); n != 1 {
-		t.Fatal("an expired key was revoked")
 	}
 	if resp := e.call(t, http.MethodGet, "/api/v1/me", aliceToken, ""); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("old session after the denial: %d", resp.StatusCode)
@@ -557,15 +561,43 @@ func TestKeyDeniedMissingRole(t *testing.T) {
 		t.Fatalf("another user's session after the denial: %d", resp.StatusCode)
 	}
 	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login_denied' AND actor_user_id = $1
-		AND after = '{"reason": "missing_role", "revoked_api_key_count": 2, "deleted_session_count": 1}'`, alice); n != 1 {
+		AND after = '{"reason": "missing_role", "suspended_api_key_count": 4, "deleted_session_count": 1}'`, alice); n != 1 {
 		t.Fatal("the denial's audit row does not hold the real counts")
 	}
-	// A second refusal finds nothing to revoke, and its row says only the reason.
+	// A second refusal finds nothing to suspend, keeps the first date, and its row says only the reason.
+	e.exec(t, `UPDATE api_keys SET suspended_at = now() - interval '1 hour' WHERE id = $1`, id)
 	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/?auth=forbidden" {
 		t.Fatalf("callback: %q", resp.Header.Get("Location"))
 	}
 	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login_denied' AND actor_user_id = $1 AND after = '{"reason": "missing_role"}'`, alice); n != 1 {
 		t.Fatal("the second denial's row is not the reason alone")
+	}
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND suspended_at < now() - interval '59 minutes'`, id); n != 1 {
+		t.Fatal("a second refusal moved the suspension date")
+	}
+	// Meanwhile one key is revoked by hand and one expires: the sign-in with the role brings back the other two only.
+	e.exec(t, `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, id3)
+	e.exec(t, `UPDATE api_keys SET expires_at = now() - interval '1 second' WHERE id = $1`, id4)
+	e.stub.extra = map[string]any{"roles": []any{"gedour-user"}}
+	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/" {
+		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	e.wantValidKey(t, raw)
+	e.wantValidKey(t, raw2)
+	e.wantInvalidKey(t, raw3)
+	e.wantInvalidKey(t, raw4)
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id::text = ANY($1) AND suspended_at IS NULL`, []string{id, id2}); n != 2 {
+		t.Fatal("the suspension stayed")
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login' AND actor_user_id = $1 AND after->>'resumed_api_key_count' = '2'`, alice); n != 1 {
+		t.Fatal("the sign-in's audit row does not hold the resumed count")
+	}
+	// A sign-in with nothing suspended says nothing about keys.
+	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/" {
+		t.Fatalf("callback: %q", resp.Header.Get("Location"))
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login' AND actor_user_id = $1 AND after ? 'resumed_api_key_count'`, alice); n != 1 {
+		t.Fatal("a sign-in with nothing to resume logged a count")
 	}
 }
 
@@ -579,7 +611,7 @@ func TestKeyDeniedDisabled(t *testing.T) {
 	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/?auth=forbidden" {
 		t.Fatalf("callback: %q", resp.Header.Get("Location"))
 	}
-	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NULL`, id); n != 1 {
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NULL AND suspended_at IS NULL`, id); n != 1 {
 		t.Fatal("the disabled refusal touched the key")
 	}
 	if n := e.count(t, `SELECT count(*) FROM sessions WHERE user_id = $1`, alice); n != 1 {
@@ -590,7 +622,7 @@ func TestKeyDeniedDisabled(t *testing.T) {
 	}
 }
 
-// A missing-role refusal racing a key creation waits for it, then revokes the new key too.
+// A missing-role refusal racing a key creation waits for it, then suspends the new key too.
 func TestKeyDeniedRacingCreate(t *testing.T) {
 	e := setup(t, false, withRoles)
 	alice, _, _ := e.signedIn(t, "alice-sub", false)
@@ -837,7 +869,7 @@ func TestKeyDisableFailureRollsBack(t *testing.T) {
 	e.wantValidKey(t, raw)
 }
 
-// 007-AC12: a revocation that fails reports it, and writes no denial row saying it happened.
+// 007-AC12: a suspension that fails reports it, and writes no denial row saying it happened.
 func TestKeyDeniedFailure(t *testing.T) {
 	e := setup(t, false)
 	alice, _, _ := e.signedIn(t, "alice-sub", false)
@@ -851,7 +883,7 @@ func TestKeyDeniedFailure(t *testing.T) {
 	}
 }
 
-// A refusal whose user lookup fails writes nothing and revokes nothing; deny logs it and the refusal stands.
+// A refusal whose user lookup fails writes nothing and suspends nothing; deny logs it and the refusal stands.
 func TestKeyDeniedLookupFailure(t *testing.T) {
 	e := setup(t, false)
 	alice, _, _ := e.signedIn(t, "alice-sub", false)
@@ -861,7 +893,7 @@ func TestKeyDeniedLookupFailure(t *testing.T) {
 		t.Fatal("no error")
 	}
 	e.exec(t, `ALTER TABLE gone RENAME TO users`)
-	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NULL`, keyID) + e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login_denied'`); n != 1 {
+	if n := e.count(t, `SELECT count(*) FROM api_keys WHERE id = $1 AND revoked_at IS NULL AND suspended_at IS NULL`, keyID) + e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login_denied'`); n != 1 {
 		t.Fatalf("key alive + denial rows = %d, want 1", n)
 	}
 }
@@ -901,7 +933,8 @@ func TestKeyHandlersNeedSession(t *testing.T) {
 	}
 }
 
-// A key's status names what ended it first in meaning: revoked beats expired, expired beats dormant, and the list runs newest first.
+// 007-AC12: the list reports suspended. A key's status names what ended it first in meaning: revoked beats expired, expired beats suspended, suspended beats
+// dormant, and the list runs newest first.
 func TestKeyListStatusAndOrder(t *testing.T) {
 	e := setup(t, false)
 	id, token, _ := e.signedIn(t, "alice", false)
@@ -909,9 +942,12 @@ func TestKeyListStatusAndOrder(t *testing.T) {
 	want := map[string]string{}
 	var newestFirst []string
 	for i, tt := range []struct{ clause, status string }{
-		{"revoked_at = now(), expires_at = now() - interval '1 day'", "revoked"}, // revoked, expired, dormant
-		{"revoked_at = now()", "revoked"},                                        // revoked, dormant
-		{"expires_at = now() - interval '1 day'", "expired"},                     // expired, dormant
+		{"revoked_at = now(), expires_at = now() - interval '1 day'", "revoked"},   // revoked, expired, dormant
+		{"revoked_at = now()", "revoked"},                                          // revoked, dormant
+		{"expires_at = now() - interval '1 day', suspended_at = now()", "expired"}, // expired, suspended, dormant
+		{"expires_at = now() - interval '1 day'", "expired"},                       // expired, dormant
+		{"revoked_at = now(), suspended_at = now()", "revoked"},                    // revoked, suspended, dormant
+		{"suspended_at = now()", "suspended"},                                      // suspended, dormant
 		{"", "dormant"},
 	} {
 		_, keyID := e.keyRow(t, id, tt.clause)
@@ -979,7 +1015,7 @@ func TestKeyCreateRacingDenial(t *testing.T) {
 	}
 }
 
-// 007-AC12: the revocation outlives a dropped callback.
+// 007-AC12: the suspension outlives a dropped callback.
 func TestKeyDenyOutlivesTheRequest(t *testing.T) {
 	e := setup(t, false, withRoles)
 	id, token, _ := e.signedIn(t, "alice-sub", false)
@@ -993,9 +1029,9 @@ func TestKeyDenyOutlivesTheRequest(t *testing.T) {
 	}
 }
 
-// A revocation that fails is visible in the logs, naming who still holds keys; a plain denial's failure stays its own event.
+// A suspension that fails is visible in the logs, naming who still holds keys; a plain denial's failure stays its own event.
 func TestKeyDenyFailureIsLogged(t *testing.T) {
-	for reason, event := range map[string]string{deniedMissingRole: "login_denied_revocation_lost", deniedDisabled: "login_denied_audit_failed"} {
+	for reason, event := range map[string]string{deniedMissingRole: "login_denied_suspension_lost", deniedDisabled: "login_denied_audit_failed"} {
 		t.Run(reason, func(t *testing.T) {
 			e := setup(t, false, withRoles)
 			e.signedIn(t, "alice-sub", false)
@@ -1011,7 +1047,7 @@ func TestKeyDenyFailureIsLogged(t *testing.T) {
 	}
 }
 
-// 007-AC12: the sessions go in the same tx as the revocation: if deleting them fails, the keys stay as they were.
+// 007-AC12: the sessions go in the same tx as the suspension: if deleting them fails, the keys stay as they were.
 func TestKeyDeniedSessionFailureRollsBack(t *testing.T) {
 	e := setup(t, false)
 	id, _, _ := e.signedIn(t, "alice-sub", false)
@@ -1019,6 +1055,93 @@ func TestKeyDeniedSessionFailureRollsBack(t *testing.T) {
 	e.armBoom(t, "DELETE", "sessions")
 	if err := e.svc.auditDenied(context.Background(), "alice-sub", deniedMissingRole); err == nil {
 		t.Fatal("no error")
+	}
+	e.wantValidKey(t, raw)
+}
+
+// 007-AC12: a sign-in waiting on the user row behind a refusal's suspension lifts it once the refusal commits.
+func TestKeyResumeRacingDenial(t *testing.T) {
+	e := setup(t, false, withRoles)
+	alice, _, _ := e.signedIn(t, "alice-sub", false)
+	raw, _ := e.keyRow(t, alice, "")
+	e.stub.extra = map[string]any{"roles": []any{"gedour-user"}}
+	callback := e.approve(t, e.startLogin(t, "/")).String()
+	ctx := context.Background()
+	blocker := e.begin(t)
+	if _, err := blocker.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, alice); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, callback, nil)
+		if err != nil {
+			got <- err.Error()
+			return
+		}
+		resp, err := e.client.Do(req)
+		if err != nil {
+			got <- err.Error()
+			return
+		}
+		_ = resp.Body.Close()
+		got <- resp.Header.Get("Location")
+	}()
+	e.waitLockWaiters(t, 1)
+	if _, err := blocker.Exec(ctx, `UPDATE api_keys SET suspended_at = now() WHERE user_id = $1`, alice); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if loc := <-got; loc != "/" {
+		t.Fatalf("callback: %q", loc)
+	}
+	e.wantValidKey(t, raw)
+}
+
+// 007-AC12: a refusal whose tx began before a sign-in that took the row first dates its suspension after that
+// sign-in, so migration 24's Down (last_login_at > suspended_at) still revokes the key.
+func TestKeySuspensionDatedAfterTheLock(t *testing.T) {
+	e := setup(t, false, withRoles)
+	alice, _, _ := e.signedIn(t, "alice-sub", false)
+	e.keyRow(t, alice, "")
+	ctx := context.Background()
+	refusal := e.begin(t)
+	e.exec(t, `UPDATE users SET last_login_at = now() WHERE id = $1`, alice)
+	if _, err := refusal.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, alice); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := suspendActiveKeys(ctx, refusal, alice); err != nil || n != 1 {
+		t.Fatalf("%d %v", n, err)
+	}
+	if err := refusal.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM api_keys k JOIN users u ON u.id = k.user_id WHERE u.id = $1 AND u.last_login_at > k.suspended_at`, alice); n != 0 {
+		t.Fatal("the suspension is dated before the sign-in that held the row first")
+	}
+}
+
+// 007-AC12: a sign-in whose lift fails opens no session and audits no login; the keys stay suspended until the next one.
+func TestKeyResumeFailureFailsTheSignIn(t *testing.T) {
+	e := setup(t, false)
+	id, _, _ := e.signedIn(t, "alice-sub", false)
+	raw, _ := e.keyRow(t, id, "suspended_at = now()")
+	logins := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login'`)
+	e.armBoom(t, "UPDATE", "api_keys")
+	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/?auth=failed" {
+		t.Fatalf("callback: %d %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if n := e.count(t, `SELECT count(*) FROM sessions WHERE user_id = $1`, id); n != 1 {
+		t.Fatalf("%d sessions, want the one from before", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.login'`); n != logins {
+		t.Fatalf("%d login rows, want %d", n, logins)
+	}
+	e.exec(t, `DROP TRIGGER boom ON api_keys`)
+	e.wantInvalidKey(t, raw)
+	if resp := e.fullLogin(t, "/"); resp.Header.Get("Location") != "/" {
+		t.Fatalf("callback: %q", resp.Header.Get("Location"))
 	}
 	e.wantValidKey(t, raw)
 }

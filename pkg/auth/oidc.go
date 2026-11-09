@@ -404,7 +404,7 @@ func (s *Service) handleCallback(w http.ResponseWriter, r *http.Request) {
 // denyTimeout bounds a refusal's write once it no longer follows the request.
 const denyTimeout = 10 * time.Second
 
-// deny audits a refused sign-in. It outlives the request, as a dropped callback must not lose a revocation; a failure
+// deny audits a refused sign-in. It outlives the request, as a dropped callback must not lose a suspension; a failure
 // is logged with the subject (keys and sessions stay until the next refusal) and the refusal stands.
 func (s *Service) deny(ctx context.Context, sub, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), denyTimeout)
@@ -412,7 +412,7 @@ func (s *Service) deny(ctx context.Context, sub, reason string) {
 	if err := s.auditDenied(ctx, sub, reason); err != nil {
 		event := "login_denied_audit_failed"
 		if reason == deniedMissingRole {
-			event = "login_denied_revocation_lost"
+			event = "login_denied_suspension_lost"
 		}
 		s.log.Error(event, zap.String("oidc_sub", sub), zap.String("reason", reason), zap.Error(err))
 	}

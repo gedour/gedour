@@ -883,7 +883,7 @@ export interface components {
       /** @enum {string} */
       scope: "read" | "write" | "manage";
       /** @enum {string} */
-      status: "active" | "dormant" | "expired" | "revoked";
+      status: "active" | "dormant" | "suspended" | "expired" | "revoked";
     };
     APIKeyCreated: {
       /** Format: date-time */
@@ -912,7 +912,7 @@ export interface components {
       /** @enum {string} */
       scope: "read" | "write" | "manage";
       /** @enum {string} */
-      status: "active" | "dormant" | "expired" | "revoked";
+      status: "active" | "dormant" | "suspended" | "expired" | "revoked";
     };
     Actor: {
       /** Format: uuid */

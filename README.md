@@ -701,10 +701,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `goose_db_version`. Stored states keep the new keys, which the older image ignores; saving a watch from its
   UI drops the `new_discussions` and `reactions` boxes.
 - Suspended API keys (migration 24). During a rolling update, pods of the previous version still accept a
-  suspended key, and a missing-role refusal they handle revokes the keys as before. Rollback: deploy the older
-  image first; until the next step it accepts suspended keys. Once no pod of the new version runs, run migration
-  24's `Down` section by hand (`psql`; it revokes each live suspended key whose owner has not signed in since) and delete version 24 from
-  `goose_db_version`.
+  suspended key, and a missing-role refusal they handle revokes the keys as before. Rollback: scale web and worker
+  to 0, run migration 24's `Down` section by hand (`psql`; it revokes every live suspended key), delete version 24
+  from `goose_db_version`, then deploy the older image. Started earlier, the older image accepts suspended keys.
 
 ## Endpoints
 

@@ -13,7 +13,8 @@ import (
 )
 
 // 007-AC12: the down turns a suspension of a live key into a revocation at the suspension date, so older code never
-// sees it working; a key already dead, never suspended, or whose owner signed in since keeps its row as it was.
+// sees it working, even when its owner signed in since: a later refusal may have kept the first date. A key already
+// dead or never suspended keeps its row as it was.
 func TestAPIKeySuspendedMigrationDown(t *testing.T) {
 	ctx := context.Background()
 	pool, err := db.Connect(ctx, testpg.NewDB(t))
@@ -69,7 +70,7 @@ func TestAPIKeySuspendedMigrationDown(t *testing.T) {
 		"expired":   `revoked_at IS NULL`,
 		"revoked":   `revoked_at < now() - interval '2 days'`,
 		"plain":     `revoked_at IS NULL`,
-		"signed in": `revoked_at IS NULL`,
+		"signed in": `revoked_at BETWEEN now() - interval '121 minutes' AND now() - interval '119 minutes'`,
 	} {
 		var ok bool
 		if err := pool.QueryRow(ctx, `SELECT `+where+` FROM api_keys WHERE id = $1`, ids[name]).Scan(&ok); err != nil || !ok {

@@ -405,7 +405,7 @@ CREATE INDEX api_keys_user_id_idx ON api_keys (user_id);
 
 Migration `00014` (phase 3): `ALTER TABLE audit_log ADD COLUMN api_key_id uuid`. Instant, and no append-only trigger fires.
 
-Migration `00024`: `ALTER TABLE api_keys ADD COLUMN suspended_at timestamptz`, set by a `missing_role` refusal, cleared by the next sign-in. Its down revokes each live suspended key whose owner has not signed in since, then drops the column.
+Migration `00024`: `ALTER TABLE api_keys ADD COLUMN suspended_at timestamptz`, set by a `missing_role` refusal, cleared by the next sign-in. Its down revokes every live suspended key, then drops the column: `suspended_at` keeps the first refusal, so a later sign-in does not prove the last one was lifted.
 
 - Locks: key creation takes the user `FOR NO KEY UPDATE`, for the cap and against a racing disable. Keys come after users in the lock order.
 - Personal data: only the key's name, chosen by the user. The row goes with the purge; the name stays in its audit rows, which are append-only.

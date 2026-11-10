@@ -754,6 +754,15 @@ func TestInboxAPI(t *testing.T) {
 	if res.Unread != 3 {
 		t.Fatalf("unarchive: %+v", res)
 	}
+	// Unread takes an item out of the archive, read (all[1]) or not (all[0]).
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/archive", map[string]any{"ids": all[:2]}, http.StatusOK, &res)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/unread", map[string]any{"ids": all[:2]}, http.StatusOK, &res)
+	if res.Updated != 2 || res.Unread != 4 {
+		t.Fatalf("unread archived: %+v", res)
+	}
+	if got := a.inboxIDs(t, alice, "archived"); len(got) != 0 {
+		t.Fatalf("unread left archived: %v", got)
+	}
 
 	var page inboxJSON
 	a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?limit=3", nil, http.StatusOK, &page)

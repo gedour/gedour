@@ -495,7 +495,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Mark the caller's items unread */
+    /**
+     * Mark the caller's items unread
+     * @description Archived items also leave the archive.
+     */
     post: operations["unread-inbox"];
     delete?: never;
     options?: never;

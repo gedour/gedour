@@ -235,7 +235,7 @@ Or per project, in `.mcp.json`, with the key in an environment variable:
 | `list_rules` | Routing rules, with filters | |
 | `get_rule` | One rule | |
 | `list_deliveries` | Deliveries with their channel's name, without logs or errors, as errors name channel targets | max 50 |
-| `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
+| `mark_inbox_read`, `mark_inbox_unread` | Mark items read or unread (unread also unarchives): `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
 | `archive_inbox`, `unarchive_inbox` | Archive items or take them back: `updated` and `unread`; `ids` is an array of item IDs from `list_inbox`, another user's IDs are ignored | `write` key; max 500 IDs |
 | `run_watch` | Schedules a run of one of your watches and does not wait; refused on a paused watch, or while the upstream's rate limit holds the watch | `write` key; shared budget |
 | `get_filter_reference` | What a rule's filter may use, and its limits | `manage` key |
@@ -755,7 +755,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `{event_id}` (an event of one of your watches) or `{sample: {type, payload, occurred_at, watch}}`: answers
   `{ok, outcome, error, logs, result, fetches, duration_ms}`.
 - `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&cursor=`, `GET /api/v1/inbox/count`,
-  `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only), `GET /api/v1/inbox/stream`.
+  `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only; `unread` also unarchives), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer
   owns are hidden, and a rule's `watch_name` is null then.

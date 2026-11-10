@@ -62,7 +62,7 @@ func TestTalkMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, insert, "pager", "pager"); err == nil {
 		t.Fatal("an unknown type must stay refused")
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, filter) VALUES ((SELECT id FROM users), 'r', '') RETURNING id`).Scan(&rule); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, filter, all_watches) VALUES ((SELECT id FROM users), 'r', '', true) RETURNING id`).Scan(&rule); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, rule, channel); err != nil {

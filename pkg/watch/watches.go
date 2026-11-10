@@ -438,6 +438,9 @@ func (s *Service) setPaused(ctx context.Context, op, action, id string, paused b
 	return &watchOutput{Body: w}, nil
 }
 
+// lockListingRules locks the rules listing a watch, by id; NO KEY UPDATE lets the router's FK KEY SHARE through.
+const lockListingRules = `SELECT 1 FROM rules WHERE id IN (SELECT rule_id FROM rule_watches WHERE watch_id = $1) ORDER BY id FOR NO KEY UPDATE`
+
 func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error) {
 	me, err := s.me(ctx)
 	if err != nil {
@@ -450,16 +453,26 @@ func (s *Service) deleteWatch(ctx context.Context, in *idPath) (*struct{}, error
 		}
 		// Rules before the watch (lock order in AGENTS.md): a rule edit holds its rule, then wants the watch's KEY SHARE.
 		// NO KEY UPDATE lets the router's FK KEY SHARE through; TestWatchDeleteRacingRouter guards it.
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE watch_id = $1 ORDER BY id FOR NO KEY UPDATE`, in.ID); err != nil {
+		if _, err := tx.Exec(ctx, lockListingRules, in.ID); err != nil {
 			return fmt.Errorf("lock rules: %w", err)
 		}
 		before, err := authorize(ctx, tx, me, in.ID, true)
 		if err != nil {
 			return err
 		}
-		// Not left to the cascade: its trigger order may delete rules first and wait on a router holding an event.
+		// A statement of its own, after the watch lock: a rule edit adding this watch committed while that lock waited.
+		if _, err := tx.Exec(ctx, lockListingRules, in.ID); err != nil {
+			return fmt.Errorf("lock rules: %w", err)
+		}
+		// Events before rules: a router holding one takes its rules' KEY SHARE next, which a rule delete would block.
 		if _, err := tx.Exec(ctx, `DELETE FROM events WHERE watch_id = $1`, in.ID); err != nil {
 			return fmt.Errorf("delete events: %w", err)
+		}
+		// No digest reschedule, as the cascade it replaces: what an emptied rule held from an earlier scope goes out when due.
+		if _, err := tx.Exec(ctx, `DELETE FROM rules r USING rule_watches rw
+			WHERE rw.watch_id = $1 AND rw.rule_id = r.id AND NOT r.all_watches
+				AND NOT EXISTS (SELECT 1 FROM rule_watches o WHERE o.rule_id = r.id AND o.watch_id <> $1)`, in.ID); err != nil {
+			return fmt.Errorf("delete emptied rules: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM watches WHERE id = $1`, in.ID); err != nil {
 			return err

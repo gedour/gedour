@@ -807,8 +807,20 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "One of the caller's watches; empty for all of them",
+            "deprecated": true,
+            "description": "Deprecated, use watch_ids: one of the caller's watches, empty for all of them; not with watch_ids",
             "type": "string"
+          },
+          "watch_ids": {
+            "description": "The caller's watches; absent or empty for all of them",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1909,8 +1921,20 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Scope like a rule's; empty for all the caller's watches",
+            "deprecated": true,
+            "description": "Deprecated, use watch_ids: one watch, empty for all; not with watch_ids",
             "type": "string"
+          },
+          "watch_ids": {
+            "description": "Scope like a rule's; absent or empty for all the caller's watches",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1986,7 +2010,7 @@
             "type": "integer"
           },
           "other_users_rules": {
-            "description": "Other users' rules targeting the account's watches",
+            "description": "Other users' rules whose every watch is the account's",
             "format": "int64",
             "type": "integer"
           },
@@ -2272,17 +2296,39 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Null: every watch of the owner",
+            "deprecated": true,
+            "description": "Deprecated, use watch_ids: the watch of a one-watch rule, null for all watches and for several; a reader of this field alone takes a several-watch rule for all watches",
             "format": "uuid",
             "type": [
               "string",
               "null"
             ]
           },
+          "watch_ids": {
+            "description": "Sorted; empty: every watch of the owner",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "watch_name": {
-            "description": "Null with a watch_id: the owner no longer owns that watch",
+            "deprecated": true,
+            "description": "Deprecated, use watches: the name of a one-watch rule's watch, null otherwise or while the owner no longer owns it",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "watches": {
+            "description": "The listed watches, sorted like watch_ids",
+            "items": {
+              "$ref": "#/components/schemas/RuleWatch"
+            },
+            "type": [
+              "array",
               "null"
             ]
           }
@@ -2290,6 +2336,8 @@
         "required": [
           "id",
           "name",
+          "watch_ids",
+          "watches",
           "watch_id",
           "watch_name",
           "filter",
@@ -2313,6 +2361,27 @@
           },
           "name": {
             "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "RuleWatch": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "description": "Null while the rule's owner does not own this watch",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2669,8 +2738,20 @@
             "type": "string"
           },
           "watch_id": {
-            "description": "Empty string: all the caller's watches",
+            "deprecated": true,
+            "description": "Deprecated, use watch_ids: one watch, empty string for all the caller's watches; not with watch_ids",
             "type": "string"
+          },
+          "watch_ids": {
+            "description": "Replaces the list; [] for all the caller's watches; absent keeps it",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "type": "object"

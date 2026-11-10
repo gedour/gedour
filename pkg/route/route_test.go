@@ -104,8 +104,11 @@ func (e *env) event(t *testing.T, watch, typ, tag string) int64 {
 
 func (e *env) rule(t *testing.T, owner string, watch *string, filter string, channels ...string) string {
 	t.Helper()
-	var id string
-	e.scalar(t, &id, `INSERT INTO rules (owner_id, name, watch_id, filter) VALUES ($1, gen_random_uuid()::text, $2, $3) RETURNING id::text`, owner, watch, filter)
+	r := testpg.Rule{Owner: owner, Filter: filter}
+	if watch != nil {
+		r.Watches = []string{*watch}
+	}
+	id := testpg.InsertRule(t, e.pool, r)
 	for _, c := range channels {
 		if _, err := e.pool.Exec(context.Background(), `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, id, c); err != nil {
 			t.Fatal(err)
@@ -155,7 +158,7 @@ func TestRouting(t *testing.T) {
 	e.rule(t, alice, nil, `event.payload.tag startsWith "v2"`, hook, hook2)
 	e.rule(t, bob, nil, "") // bob cannot read the watch: never routed to him
 	var disabled string
-	e.scalar(t, &disabled, `INSERT INTO rules (owner_id, name, filter, enabled) VALUES ($1, 'off', '', false) RETURNING id::text`, alice)
+	e.scalar(t, &disabled, `INSERT INTO rules (owner_id, name, filter, enabled, all_watches) VALUES ($1, 'off', '', false, true) RETURNING id::text`, alice)
 
 	match := e.event(t, w, "release.published", "v2.1.0")
 	miss := e.event(t, w, "tag.removed", "v1.0.0")

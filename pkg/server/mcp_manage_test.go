@@ -618,7 +618,7 @@ func TestMCPManageRuleChecks(t *testing.T) {
 	if res := m.manage(t, alice, "create_rule", ok); res.IsError {
 		t.Fatalf("%+v", res)
 	}
-	m.exec(t, `INSERT INTO rules (owner_id, name) SELECT $1, 'filler ' || g FROM generate_series(1, $2::int - (SELECT count(*)::int FROM rules WHERE owner_id = $1)) g`, alice.id, route.MaxRules)
+	m.exec(t, `INSERT INTO rules (owner_id, name, all_watches) SELECT $1, 'filler ' || g, true FROM generate_series(1, $2::int - (SELECT count(*)::int FROM rules WHERE owner_id = $1)) g`, alice.id, route.MaxRules)
 	if res := m.manage(t, alice, "create_rule", map[string]any{"name": "one too many"}); !res.IsError || !strings.Contains(res.text(), "delete one first") {
 		t.Fatalf("MaxRules: %+v", res)
 	}
@@ -719,4 +719,34 @@ func sessionWatch(t *testing.T, m *mcpApp, u apiUser) string {
 	var w watchJSON
 	m.mustCall(t, u, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	return w.ID
+}
+
+// 014-AC14: create_rule takes watch_ids and get_rule returns the rule's watches with their names.
+func TestMCPManageSeveralWatchRule(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	key, _ := m.key(t, alice.id, "manage", "")
+	var a, b watchJSON
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &a)
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &b)
+	res := m.tool(t, key, "create_rule", map[string]any{"name": "both", "watch_ids": []string{b.ID, a.ID}}, nil)
+	if res.IsError {
+		t.Fatalf("create_rule: %+v", res)
+	}
+	id, _ := res.data(t).(map[string]any)["id"].(string)
+	res = m.tool(t, key, "get_rule", map[string]any{"id": id}, nil)
+	if res.IsError {
+		t.Fatalf("get_rule: %+v", res)
+	}
+	got, _ := res.data(t).(map[string]any)["watches"].([]any)
+	want := map[string]string{a.ID: a.Name, b.ID: b.Name}
+	if len(got) != 2 {
+		t.Fatalf("watches: %v", got)
+	}
+	for _, x := range got {
+		w, _ := x.(map[string]any)
+		if id, _ := w["id"].(string); w["name"] != want[id] {
+			t.Errorf("watch %v, want name %q", w, want[id])
+		}
+	}
 }

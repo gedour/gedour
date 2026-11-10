@@ -19,7 +19,7 @@ type PurgeCounts struct {
 	Watches         int `json:"watches"`
 	Channels        int `json:"channels"`
 	Rules           int `json:"rules"`
-	OtherUsersRules int `json:"other_users_rules" doc:"Other users' rules targeting the account's watches"`
+	OtherUsersRules int `json:"other_users_rules" doc:"Other users' rules whose every watch is the account's"`
 	Scripts         int `json:"scripts"`
 	// Not "credentials": the audit redacts every key naming a credential but a few exact ones.
 	Credentials    int `json:"credential_count"`
@@ -30,7 +30,7 @@ type PurgeCounts struct {
 	APIKeys int `json:"api_key_count"`
 }
 
-// OtherRule is another user's rule a purge deletes because it targets one of the account's watches.
+// OtherRule is another user's rule a purge deletes because every watch it lists is the account's.
 type OtherRule struct {
 	ID    string `json:"id" format:"uuid"`
 	Name  string `json:"name"`
@@ -67,7 +67,7 @@ const purgePreviewSQL = `SELECT
 		(SELECT count(*) FROM watches WHERE owner_id = u.id),
 		(SELECT count(*) FROM channels WHERE owner_id = u.id),
 		(SELECT count(*) FROM rules WHERE owner_id = u.id),
-		(SELECT count(*) FROM rules r JOIN watches w ON w.id = r.watch_id WHERE w.owner_id = u.id AND r.owner_id <> u.id),
+		(SELECT count(*) FROM rules r WHERE ` + otherRulesSQL + `),
 		(SELECT count(*) FROM scripts WHERE owner_id = u.id),
 		(SELECT count(*) FROM credentials WHERE owner_id = u.id),
 		(SELECT count(*) FROM inbox_items WHERE user_id = u.id),
@@ -76,9 +76,14 @@ const purgePreviewSQL = `SELECT
 		(SELECT count(*) FROM api_keys WHERE user_id = u.id),
 		(SELECT coalesce(json_agg(json_build_object('id', r.id, 'name', r.name, 'owner', ` + userLabelSQL + `)
 				ORDER BY lower(` + userLabelSQL + `), lower(r.name), r.id), '[]')
-			FROM rules r JOIN watches w ON w.id = r.watch_id JOIN users o ON o.id = r.owner_id
-			WHERE w.owner_id = u.id AND r.owner_id <> u.id)
+			FROM rules r JOIN users o ON o.id = r.owner_id
+			WHERE ` + otherRulesSQL + `)
 	FROM users u WHERE u.id = $1`
+
+// otherRulesSQL picks the rules r of other users than u that a purge of u leaves with no watch (014-AC9).
+const otherRulesSQL = `r.owner_id <> u.id AND NOT r.all_watches
+	AND EXISTS (SELECT 1 FROM rule_watches rw JOIN watches w ON w.id = rw.watch_id WHERE rw.rule_id = r.id AND w.owner_id = u.id)
+	AND NOT EXISTS (SELECT 1 FROM rule_watches rw JOIN watches w ON w.id = rw.watch_id WHERE rw.rule_id = r.id AND w.owner_id <> u.id)`
 
 // userLabelSQL names users row o as the UI does: its display name, else its email.
 const userLabelSQL = `COALESCE(NULLIF(o.display_name, ''), o.email)`
@@ -107,14 +112,14 @@ var purgeSteps = []struct {
 	count func(*PurgeCounts) *int
 }{
 	// One id-ordered lock, as deleteWatch's; NO KEY UPDATE lets the router's FK KEY SHARE pass (TestPurgeRacingRouter).
-	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE owner_id = $1 OR watch_id IN (SELECT id FROM watches WHERE owner_id = $1)
-		ORDER BY id FOR NO KEY UPDATE) x`, nil},
+	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE owner_id = $1 OR id IN (SELECT rw.rule_id FROM rule_watches rw
+		JOIN watches w ON w.id = rw.watch_id WHERE w.owner_id = $1) ORDER BY id FOR NO KEY UPDATE) x`, nil},
 	{`WITH d AS (DELETE FROM rules WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Rules }},
 	// From here a rule create or move onto these watches (KEY SHARE on the watch) waits for the purge.
 	{`SELECT count(*) FROM (SELECT 1 FROM watches WHERE owner_id = $1 ORDER BY id FOR UPDATE) x`, nil},
-	// A statement of its own, after the watch lock: it counts a rule committed while that lock waited.
-	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) FOR NO KEY UPDATE) x`,
-		func(c *PurgeCounts) *int { return &c.OtherUsersRules }},
+	// A statement of its own, after the watch lock: it locks a rule committed while that lock waited.
+	{`SELECT count(*) FROM (SELECT 1 FROM rules WHERE id IN (SELECT rw.rule_id FROM rule_watches rw
+		JOIN watches w ON w.id = rw.watch_id WHERE w.owner_id = $1) ORDER BY id FOR NO KEY UPDATE) x`, nil},
 	{`WITH d AS (DELETE FROM channels WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Channels }},
 	{`WITH d AS (DELETE FROM inbox_items WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.InboxItems }},
 	{`WITH d AS (DELETE FROM sessions WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Sessions }},
@@ -122,9 +127,12 @@ var purgeSteps = []struct {
 	{`WITH d AS (UPDATE sessions SET acting_as = NULL WHERE acting_as = $1 RETURNING 1) SELECT count(*) FROM d`,
 		func(c *PurgeCounts) *int { return &c.ActingSessions }},
 	{`WITH d AS (DELETE FROM api_keys WHERE user_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.APIKeys }},
-	// Not left to the watches' cascade: its trigger order may delete rules first and wait on a router holding an event.
+	// Events before rules: a router holding one takes its rules' KEY SHARE next, which a rule delete would block.
 	{`WITH d AS (DELETE FROM events WHERE watch_id IN (SELECT id FROM watches WHERE owner_id = $1) RETURNING 1) SELECT count(*) FROM d`, nil},
-	// Cascades to other users' rules on them, states, cache.
+	// Other users' rules left with no watch (014-AC9); the rest only lose the purged watches, through the cascade.
+	{`WITH d AS (DELETE FROM rules r USING users u WHERE u.id = $1 AND ` + otherRulesSQL + ` RETURNING 1) SELECT count(*) FROM d`,
+		func(c *PurgeCounts) *int { return &c.OtherUsersRules }},
+	// Cascades to the rule_watches rows of other users' rules, states, cache.
 	{`WITH d AS (DELETE FROM watches WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Watches }},
 	{`WITH d AS (DELETE FROM credentials WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Credentials }},
 	{`WITH d AS (DELETE FROM scripts WHERE owner_id = $1 RETURNING 1) SELECT count(*) FROM d`, func(c *PurgeCounts) *int { return &c.Scripts }},

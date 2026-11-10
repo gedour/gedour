@@ -170,7 +170,7 @@ func Terminate() {
 }
 
 // FlipEventsCascade recreates events_watch_id_fkey, as a pg_restore --jobs or a later migration may: its
-// trigger then sorts after the rules one, so a watch delete cascades its rules before its events.
+// trigger then sorts after the rule_watches one, so a watch delete cascades its rules' rows before its events.
 func FlipEventsCascade(t testing.TB, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
@@ -181,10 +181,34 @@ func FlipEventsCascade(t testing.TB, pool *pgxpool.Pool) {
 	if err == nil {
 		err = pool.QueryRow(ctx, `SELECT string_agg(c.conrelid::regclass::text, ',' ORDER BY t.tgname)
 			FROM pg_trigger t JOIN pg_constraint c ON c.oid = t.tgconstraint
-			WHERE t.tgrelid = 'watches'::regclass AND c.conrelid IN ('rules'::regclass, 'events'::regclass) AND t.tgtype & 8 <> 0`).Scan(&order)
+			WHERE t.tgrelid = 'watches'::regclass AND c.conrelid IN ('rule_watches'::regclass, 'events'::regclass) AND t.tgtype & 8 <> 0`).Scan(&order)
 	}
-	if err != nil || order != "rules,events" {
-		t.Fatalf("watches delete cascade order %q, want rules,events: %v", order, err)
+	if err != nil || order != "rule_watches,events" {
+		t.Fatalf("watches delete cascade order %q, want rule_watches,events: %v", order, err)
 	}
 	t.Logf("watches delete cascade order: %s", order)
+}
+
+// Rule is a rules row for InsertRule: no Watches means all the owner's watches, no Name a random one.
+type Rule struct {
+	ID, Owner, Name, Filter string
+	Watches                 []string
+}
+
+// InsertRule stores r with its rule_watches rows and returns its id.
+func InsertRule(t testing.TB, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, r Rule) string {
+	t.Helper()
+	var id string
+	if err := q.QueryRow(context.Background(), `WITH r AS (
+			INSERT INTO rules (id, owner_id, name, filter, all_watches)
+			VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, COALESCE(NULLIF($3, ''), gen_random_uuid()::text), $4,
+				COALESCE(cardinality($5::uuid[]), 0) = 0)
+			RETURNING id),
+		rw AS (INSERT INTO rule_watches (rule_id, watch_id) SELECT r.id, unnest($5::uuid[]) FROM r)
+		SELECT id::text FROM r`, r.ID, r.Owner, r.Name, r.Filter, r.Watches).Scan(&id); err != nil {
+		t.Fatalf("insert rule %+v: %v", r, err)
+	}
+	return id
 }

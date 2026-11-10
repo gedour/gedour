@@ -184,7 +184,7 @@ func (r *Router) routeEvent(ctx context.Context, tx pgx.Tx, x routedEvent, notif
 	rows, err := tx.Query(ctx, `SELECT r.id::text, r.owner_id::text, r.filter, r.priority, r.delivery,
 			COALESCE((SELECT array_agg(rc.channel_id::text) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}')
 		FROM rules r JOIN watches w ON w.id = $1 JOIN users u ON u.id = r.owner_id
-		WHERE r.enabled AND `+activeOwner+` AND (r.watch_id IS NULL OR r.watch_id = $1) AND `+watch.ReadableSQL("w", "r.owner_id")+`
+		WHERE r.enabled AND `+activeOwner+` AND (r.all_watches OR EXISTS (SELECT 1 FROM rule_watches rw WHERE rw.rule_id = r.id AND rw.watch_id = $1)) AND `+watch.ReadableSQL("w", "r.owner_id")+`
 		ORDER BY r.created_at, r.id`, x.w.ID)
 	if err != nil {
 		return err

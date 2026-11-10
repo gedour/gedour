@@ -22,6 +22,7 @@ import (
 	"github.com/gedour/gedour/pkg/filter"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
+	"github.com/gedour/gedour/pkg/testpg"
 )
 
 type channelJSON struct {
@@ -35,8 +36,13 @@ type channelJSON struct {
 }
 
 type ruleJSON struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	WatchIDs []string `json:"watch_ids"`
+	Watches  []struct {
+		ID   string  `json:"id"`
+		Name *string `json:"name"`
+	} `json:"watches"`
 	WatchID    *string  `json:"watch_id"`
 	WatchName  *string  `json:"watch_name"`
 	Filter     string   `json:"filter"`
@@ -557,10 +563,7 @@ func TestRulesOnReleaseNotes(t *testing.T) {
 	if err := a.pool.QueryRow(context.Background(), `SELECT id FROM events WHERE payload->>'tag' = 'v1'`).Scan(&first); err != nil {
 		t.Fatal(err)
 	}
-	var ruleID string
-	if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, watch_id, filter) SELECT owner_id, 'all', id, '' FROM watches WHERE id = $1 RETURNING id::text`, w.ID).Scan(&ruleID); err != nil {
-		t.Fatal(err)
-	}
+	ruleID := testpg.InsertRule(t, a.pool, testpg.Rule{Owner: alice.id, Name: "all", Watches: []string{w.ID}})
 	a.exec(t, `INSERT INTO deliveries (event_id, rule_id, channel_id) VALUES ($1, $2, $3)`, first, ruleID, hook.ID)
 	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT owner_id, $1 FROM watches WHERE id = $2`, first, w.ID)
 	check := func(path string, wantBody bool, payload func(l listed) map[string]any) {
@@ -801,7 +804,7 @@ func TestRulePriority(t *testing.T) {
 		a.problemOf(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "bad", "priority": bad}, http.StatusBadRequest)
 		a.problemOf(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"priority": bad}, http.StatusBadRequest)
 	}
-	a.exec(t, `INSERT INTO rules (owner_id, name) VALUES ($1, 'stored')`, alice.id)
+	a.exec(t, `INSERT INTO rules (owner_id, name, all_watches) VALUES ($1, 'stored', true)`, alice.id)
 	var list struct{ Items []ruleJSON }
 	a.mustCall(t, alice, http.MethodGet, "/api/v1/rules", nil, http.StatusOK, &list)
 	want := map[string]string{"high": "high", "omitted": "normal", "stored": "normal"}
@@ -1108,7 +1111,7 @@ func TestPerUserCaps(t *testing.T) {
 	a := newDevApp(t)
 	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
 	a.exec(t, `INSERT INTO channels (owner_id, name, type, config) SELECT $1, 'c' || g, 'webhook', '{"url":"https://h.example/"}' FROM generate_series(1, 49) g`, alice.id)
-	a.exec(t, `INSERT INTO rules (owner_id, name) SELECT $1, 'r' || g FROM generate_series(1, 99) g`, alice.id)
+	a.exec(t, `INSERT INTO rules (owner_id, name, all_watches) SELECT $1, 'r' || g, true FROM generate_series(1, 99) g`, alice.id)
 	hook := map[string]any{"name": "last", "type": "webhook", "config": map[string]any{"url": "https://h.example/"}}
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", hook, http.StatusCreated, nil)
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "last"}, http.StatusCreated, nil)

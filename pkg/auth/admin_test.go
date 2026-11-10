@@ -124,7 +124,7 @@ func TestAdminListUsers(t *testing.T) {
 	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config, credential_id) VALUES ($1, 'a', 'github_repo', '{}', $2)`, old, cred)
 	e.exec(t, `INSERT INTO watches (owner_id, name, kind, config) VALUES ($1, 'b', 'github_repo', '{}'), ($2, 'c', 'github_repo', '{}')`, old, recent)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, old)
-	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r1', ''), ($1, 'r2', '')`, old)
+	e.exec(t, `INSERT INTO rules (owner_id, name, filter, all_watches) VALUES ($1, 'r1', '', true), ($1, 'r2', '', true)`, old)
 	e.exec(t, `INSERT INTO scripts (owner_id, name, source) VALUES ($1, 's', '')`, old)
 
 	got := e.adminUsers(t, token)
@@ -204,7 +204,7 @@ func TestDisableEnable(t *testing.T) {
 	// A crashed worker's lease, past its end: the worker treats the watch as free, so the enable must too.
 	e.exec(t, `UPDATE watches SET leased_until = now() - interval '1 hour' WHERE name = 'x'`)
 	e.exec(t, `INSERT INTO channels (owner_id, name, type) VALUES ($1, 'ch', 'webhook')`, bob.ID)
-	e.exec(t, `INSERT INTO rules (owner_id, name, filter) VALUES ($1, 'r', '')`, bob.ID)
+	e.exec(t, `INSERT INTO rules (owner_id, name, filter, all_watches) VALUES ($1, 'r', '', true)`, bob.ID)
 	// A second session of bob's, from another browser.
 	other := randomToken()
 	e.exec(t, `INSERT INTO sessions (id, user_id, csrf_token, expires_at) VALUES ($1, $2, 'x', now() + interval '1 hour')`, hashToken(other), bob.ID)

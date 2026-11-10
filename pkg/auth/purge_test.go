@@ -12,6 +12,12 @@ import (
 	"github.com/gedour/gedour/pkg/testpg"
 )
 
+// ruleOn inserts owner's rule on the given watches, all of them when none.
+func (e *env) ruleOn(t *testing.T, owner, name string, watches ...string) string {
+	t.Helper()
+	return testpg.InsertRule(t, e.pool, testpg.Rule{Owner: owner, Name: name, Watches: watches})
+}
+
 func (e *env) purge(t *testing.T, token, csrf, id string) (int, []byte) {
 	t.Helper()
 	return e.send(t, http.MethodPost, "/api/v1/admin/users/"+id+"/purge", token, csrf, nil)
@@ -198,10 +204,11 @@ func TestAdminDataDatabaseFailure(t *testing.T) {
 // The router holds an event of a purged account's watch FOR UPDATE, then takes KEY SHARE on another
 // user's rule on it (the deliveries FK). The purge only locks those rules (NO KEY UPDATE) and deletes the
 // events before the watches, so the router goes through and the purge then completes, whatever order the
-// watches' cascades fire in.
+// watches' cascades fire in. 014-AC12: the same with a rule on the purged watch and one of erin's, which the purge
+// trims and keeps.
 func TestPurgeRacingRouter(t *testing.T) {
 	for _, flipped := range []bool{false, true} {
-		t.Run(map[bool]string{false: "events cascade first", true: "rules cascade first"}[flipped], func(t *testing.T) {
+		t.Run(map[bool]string{false: "events cascade first", true: "rule_watches cascade first"}[flipped], func(t *testing.T) {
 			e := setup(t, false)
 			if flipped {
 				testpg.FlipEventsCascade(t, e.pool)
@@ -211,6 +218,8 @@ func TestPurgeRacingRouter(t *testing.T) {
 			erin, _, _ := e.signedIn(t, "erin", false)
 			w := e.watchOf(t, dave, "w", nil)
 			r := e.ruleOf(t, erin, "erin on w", &w)
+			ew := e.watchOf(t, erin, "erin's", nil)
+			both := e.ruleOn(t, erin, "erin on both", w, ew)
 			ev := e.id(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id::text`, w)
 			e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
 			ctx := context.Background()
@@ -220,7 +229,7 @@ func TestPurgeRacingRouter(t *testing.T) {
 			}
 			purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
 			e.waitLockWaiters(t, 1)
-			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, r); err != nil {
+			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE`, []string{r, both}); err != nil {
 				t.Fatalf("router's rule KEY SHARE: %v", err)
 			}
 			if err := router.Commit(ctx); err != nil {
@@ -231,6 +240,10 @@ func TestPurgeRacingRouter(t *testing.T) {
 			}
 			if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, r); n != 0 {
 				t.Error("erin's rule on the purged watch survived")
+			}
+			if n := e.count(t, `SELECT count(*) FROM rule_watches WHERE rule_id = $1 AND watch_id = $2`, both, ew) +
+				e.count(t, `SELECT count(*) FROM rule_watches WHERE watch_id = $1`, w); n != 1 {
+				t.Error("erin's rule on both watches did not keep hers alone")
 			}
 			if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 1 {
 				t.Errorf("audit other_users_rules %d, want 1", n)
@@ -252,7 +265,6 @@ func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
 	ctx := context.Background()
 	// createRule's statements: the cap lock on its owner, the watch's KEY SHARE, then the insert.
 	create := e.begin(t)
-	var late string
 	for _, q := range []struct {
 		sql  string
 		args []any
@@ -264,9 +276,7 @@ func TestPurgeCountsRuleCreatedDuringWait(t *testing.T) {
 			t.Fatalf("%s: %v", q.sql, err)
 		}
 	}
-	if err := create.QueryRow(ctx, `INSERT INTO rules (owner_id, name, watch_id) VALUES ($1, 'late', $2) RETURNING id::text`, erin, w).Scan(&late); err != nil {
-		t.Fatal(err)
-	}
+	late := testpg.InsertRule(t, create, testpg.Rule{Owner: erin, Name: "late", Watches: []string{w}})
 	purge := e.sendAsync(http.MethodPost, "/api/v1/admin/users/"+dave+"/purge", token, csrf, nil)
 	e.waitLockWaiters(t, 1)
 	if err := create.Commit(ctx); err != nil {
@@ -356,8 +366,7 @@ func TestPurgeCountsPerType(t *testing.T) {
 		args []any
 	}{
 		{`INSERT INTO channels (owner_id, name, type) SELECT $1, 'c' || g, 'webhook' FROM generate_series(1, 2) g`, []any{dave}},
-		{`INSERT INTO rules (owner_id, name) SELECT $1, 'r' || g FROM generate_series(1, 3) g`, []any{dave}},
-		{`INSERT INTO rules (owner_id, name, watch_id) SELECT $1, 'o' || g, $2 FROM generate_series(1, 4) g`, []any{erin, w}},
+		{`INSERT INTO rules (owner_id, name, all_watches) SELECT $1, 'r' || g, true FROM generate_series(1, 3) g`, []any{dave}},
 		{`INSERT INTO scripts (owner_id, name, source) SELECT $1, 's' || g, '' FROM generate_series(1, 5) g`, []any{dave}},
 		{`INSERT INTO credentials (id, owner_id, name, kind, secret_ciphertext, secret_nonce, key_version)
 			SELECT gen_random_uuid(), $1, 'k' || g, 'github_token', '\x00', '\x00', 1 FROM generate_series(1, 6) g`, []any{dave}},
@@ -373,6 +382,9 @@ func TestPurgeCountsPerType(t *testing.T) {
 		{`UPDATE users SET disabled_at = now() WHERE id = $1`, []any{dave}},
 	} {
 		e.exec(t, s.sql, s.args...)
+	}
+	for range 4 {
+		e.ruleOn(t, erin, "", w)
 	}
 	want := PurgeCounts{Watches: 1, Channels: 2, Rules: 3, OtherUsersRules: 4, Scripts: 5, Credentials: 6, InboxItems: 7,
 		Sessions: 8, ActingSessions: 9, APIKeys: 10}
@@ -391,5 +403,50 @@ func TestPurgeCountsPerType(t *testing.T) {
 	}
 	if after.Deleted != want {
 		t.Fatalf("audit deleted %+v, want %+v", after.Deleted, want)
+	}
+}
+
+// 014-AC9: the purge deletes and lists the other users' rules whose every watch was the account's; a rule keeping
+// another watch, one of a third user's included, only loses the purged ones and stays.
+func TestPurgeKeepsRulesWithAnotherWatch(t *testing.T) {
+	e := setup(t, false)
+	_, token, csrf := e.signedIn(t, "admin", true)
+	dave, _, _ := e.signedIn(t, "dave", false)
+	erin, _, _ := e.signedIn(t, "erin", false)
+	frank, _, _ := e.signedIn(t, "frank", false)
+	w1, w2 := e.watchOf(t, dave, "w1", nil), e.watchOf(t, dave, "w2", nil)
+	ew, fw := e.watchOf(t, erin, "erin's", nil), e.watchOf(t, frank, "frank's", nil)
+	gone := e.ruleOn(t, erin, "dave's only", w1, w2)
+	kept := e.ruleOn(t, erin, "dave's and mine", w1, ew)
+	moved := e.ruleOn(t, erin, "dave's and frank's", w2, fw)
+	all := e.ruleOn(t, erin, "all")
+	e.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave)
+
+	code, raw := e.send(t, http.MethodGet, "/api/v1/admin/users/"+dave+"/purge-preview", token, "", nil)
+	var preview purgePreviewOutput
+	if err := json.Unmarshal(raw, &preview.Body); code != http.StatusOK || err != nil {
+		t.Fatalf("preview: %d %v", code, err)
+	}
+	if p := preview.Body; p.Counts.OtherUsersRules != 1 || len(p.OtherRules) != 1 || p.OtherRules[0].ID != gone {
+		t.Fatalf("preview: %+v", p)
+	}
+	if code, raw := e.purge(t, token, csrf, dave); code != http.StatusNoContent {
+		t.Fatalf("purge: %d %s", code, raw)
+	}
+	if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, gone); n != 0 {
+		t.Error("the rule on dave's watches only survived")
+	}
+	for id, want := range map[string]string{kept: ew, moved: fw} {
+		var got []string
+		if err := e.pool.QueryRow(context.Background(), `SELECT array_agg(watch_id::text) FROM rules r JOIN rule_watches rw ON rw.rule_id = r.id
+			WHERE r.id = $1 AND NOT r.all_watches`, id).Scan(&got); err != nil || len(got) != 1 || got[0] != want {
+			t.Errorf("rule %s after the purge: %v %v, want [%s]", id, got, err, want)
+		}
+	}
+	if n := e.count(t, `SELECT count(*) FROM rules WHERE id = $1`, all); n != 1 {
+		t.Error("erin's all-watches rule went")
+	}
+	if n := e.count(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 1 {
+		t.Errorf("audit other_users_rules %d, want 1", n)
 	}
 }

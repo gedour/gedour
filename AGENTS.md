@@ -69,7 +69,8 @@
 - `index.html`'s pre-paint theme script reads `%GEDOUR_THEME_KEY%`, filled by Vite from `src/lib/theme.ts`.
 - Default branch `develop`; releases are `vX.Y.Z` tags on it. CI jobs live in the reusable
   `.github/workflows/checks.yml`, called by `ci.yml` (PRs) and gating `release.yml` (tags and `develop`
-  pushes, which publish `develop-<sha>-<run>` images).
+  pushes, which publish `develop-<sha>-<run>` images). A `develop` merge of a PR branch that already held
+  `develop` skips them when `ci.yml` passed on the PR head (same tree).
   Actions are pinned to commit SHAs with a `# vX.Y.Z` comment; Dependabot bumps them.
 - Migrations: goose SQL files in `pkg/db/migrations`, embedded, applied at startup under a PG advisory lock.
   Each lock wait stops at `lock_timeout` 5 s (`migrationLockTimeout`), then the pod restart retries. A large index build goes in its own NO TRANSACTION file with `CONCURRENTLY`, after a `DROP INDEX CONCURRENTLY IF EXISTS` for the retry; its wait on older transactions, on any table, counts too (`SET lock_timeout = 0` then `RESET lock_timeout` around it if it must outwait them).

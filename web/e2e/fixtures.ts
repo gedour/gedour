@@ -1,4 +1,4 @@
-import { expect, test as base, type Page } from "@playwright/test";
+import { expect, test as base, type Page, type Response } from "@playwright/test";
 
 export const ALICE = { username: "alice", password: "alice", name: "Alice Liddell" };
 export const BOB = { username: "bob", password: "bob", name: "Bob Builder" };
@@ -86,6 +86,23 @@ export async function api(page: Page) {
   const { csrf_token } = await (await page.request.get("/api/v1/me")).json();
   return (method: string, path: string, data?: unknown) =>
     page.request.fetch(path, { method, data, headers: { "X-CSRF-Token": csrf_token } });
+}
+
+/**
+ * Clicks until the POST to a URL matching url is not a 429, and returns that response. A user's channel and
+ * rule tests share one 10 s window, and several specs test as bob.
+ */
+export async function untilNotTooSoon(page: Page, url: RegExp, click: () => Promise<void>) {
+  // Each caller gets the 40 s on top of its own budget, the default test timeout being 30 s.
+  test.info().setTimeout(test.info().timeout + 40_000);
+  let res: Response | undefined;
+  await expect(async () => {
+    const next = page.waitForResponse((r) => url.test(r.url()) && r.request().method() === "POST");
+    await click();
+    res = await next;
+    expect(res.status()).not.toBe(429);
+  }).toPass({ intervals: [1000], timeout: 40_000 });
+  return res as Response;
 }
 
 /** Switches the fake upstream's global fixture set; only seed.setup.ts and activity.spec.ts may. */

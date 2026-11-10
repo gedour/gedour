@@ -94,6 +94,25 @@ func TestWebhook(t *testing.T) {
 	}
 }
 
+// 013-AC11: a live test's webhook body has "test": true; a real delivery's has no test key.
+func TestWebhookTestField(t *testing.T) {
+	for _, test := range []bool{false, true} {
+		srv, got := receiver(t, http.StatusNoContent)
+		d := sample
+		d.Test = test
+		if err := newSender(t, "127.0.0.0/8").Send(context.Background(), webhookChannel(srv.URL+"/hook"), d); err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(got.body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if v, ok := body["test"]; ok != test || (test && v != true) {
+			t.Errorf("test %v: body %s", test, got.body)
+		}
+	}
+}
+
 // 004-AC8: a webhook carries both fields, whole.
 func TestWebhookCarriesNotes(t *testing.T) {
 	srv, got := receiver(t, http.StatusNoContent)

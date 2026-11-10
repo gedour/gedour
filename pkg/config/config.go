@@ -189,7 +189,7 @@ func (c Config) Validate() error {
 	if c.RunsWorker() && (c.WorkerPoll <= 0 || c.WorkerConcurrency < 1) {
 		errs = append(errs, errors.New("GEDOUR_WORKER_POLL must be positive and GEDOUR_WORKER_CONCURRENCY at least 1"))
 	}
-	// Both roles send: the worker deliveries, web the channel tests.
+	// Both roles send: the worker deliveries, web the channel and rule tests.
 	for _, n := range c.AllowPrivateNets {
 		if _, err := netip.ParsePrefix(n); err != nil {
 			errs = append(errs, fmt.Errorf("GEDOUR_ALLOW_PRIVATE_NETS: %w", err))

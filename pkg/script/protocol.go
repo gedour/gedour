@@ -52,12 +52,14 @@ type Event struct {
 	URL        string         `json:"url"`
 }
 
-// Input is the data a run gets: `event`, `watch`, `rule` and `delivery_id`.
+// Input is the data a run gets: `event`, `watch`, `rule`, `delivery_id` and `test`.
 type Input struct {
 	Event      Event        `json:"event"`
 	Watch      notify.Watch `json:"watch"`
 	Rule       *notify.Rule `json:"rule"`
 	DeliveryID int64        `json:"delivery_id"`
+	// Test is true on a rule's live test, absent otherwise.
+	Test bool `json:"test,omitempty"`
 }
 
 // InputOf is the input of a run for delivery d; summary and URL read as in every other channel.
@@ -73,7 +75,7 @@ func InputOf(d notify.Delivery) Input {
 	}
 	return Input{
 		Event: Event{Type: d.Event.Type, OccurredAt: at, Payload: payload, Summary: m.Summary, URL: m.URL},
-		Watch: d.Watch, Rule: d.Rule, DeliveryID: d.ID,
+		Watch: d.Watch, Rule: d.Rule, DeliveryID: d.ID, Test: d.Test,
 	}
 }
 

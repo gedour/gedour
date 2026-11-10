@@ -38,7 +38,12 @@ type Delivery struct {
 	Event Event
 	Watch Watch
 	Rule  *Rule
+	// Test marks a rule's live test: its summary reads "[test] ", webhook and script inputs carry test: true.
+	Test bool
 }
+
+// testPrefix starts the summary of a live test: on a shared channel an unmarked message reads as a real event.
+const testPrefix = "[test] "
 
 // TestEventType marks the synthetic event of a channel test.
 const TestEventType = "gedour.test"
@@ -219,6 +224,9 @@ func summarize(e Event) string {
 // Format builds the message of d; payload values are untrusted text, escaped by each channel.
 func Format(d Delivery) Message {
 	m := Message{Summary: summarize(d.Event)}
+	if d.Test {
+		m.Summary = testPrefix + m.Summary
+	}
 	m.Title = d.Watch.Name + ": " + m.Summary
 	switch {
 	case d.Event.Type == TestEventType:

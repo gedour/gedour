@@ -1,5 +1,5 @@
 import { BOB_AUTH_FILE } from "./auth-file";
-import { expect, TALK_SECRET, test, UPSTREAM } from "./fixtures";
+import { expect, TALK_SECRET, test, untilNotTooSoon, UPSTREAM } from "./fixtures";
 
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
 
@@ -117,11 +117,14 @@ test.describe("as bob", () => {
     await dialog.getByRole("switch", { name: "Silent" }).click();
     await dialog.getByRole("button", { name: "Create channel" }).click();
     await expect(dialog).toBeHidden();
-    await page
-      .getByRole("listitem")
-      .filter({ hasText: name })
-      .getByRole("button", { name: "Send test" })
-      .click();
+    const res = await untilNotTooSoon(page, /\/api\/v1\/channels\/[^/]+\/test$/, () =>
+      page
+        .getByRole("listitem")
+        .filter({ hasText: name })
+        .getByRole("button", { name: "Send test" })
+        .click(),
+    );
+    expect(res.status()).toBe(200);
     await expect(page.getByText(`Test message sent to ${name}`)).toBeVisible();
     const sent = (await received(page))
       .filter((r) => r.endpoint === "telegram")

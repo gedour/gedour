@@ -30,13 +30,16 @@
   (`POST /_hooks/<name>`, `fail*` answers 500); `GET /_received` lists what they got. Its Talk endpoint checks
   the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
-  runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005). The a11y, 375 px, keyboard,
-  priority, push, api-keys and mcp specs run as bob (channels and watches in part). Specs open (mark read) the newest
-  or a high item, only the keyboard spec touches the rc promotion item. Push devices for bob: a11y adds two and
-  keeps them, 375 px and keyboard remove the one they add, push registers its browser. Push also creates, then
-  deletes, a bob rule on the seeded watch targeting its Web Push channel. The last activity test creates, then
-  deletes, alice's Web Push device, channel, rule and watch. Alice's inbox belongs to `activity.spec.ts`: its inbox
-  test archives every item first, as a retry reruns the serial group.
+  runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005). The a11y, 375 px,
+  keyboard, priority, push, api-keys, mcp and rule-live-test specs run as bob (channels and watches in part).
+  Specs open (mark read) the newest or a high item, only the keyboard spec touches the rc promotion item. Push
+  devices for bob: a11y adds two and keeps them, 375 px and keyboard remove the one they add, push registers its
+  browser. Push also creates, then deletes, a bob rule on the seeded watch targeting its Web Push channel;
+  rule-live-test creates, then deletes, its own script, webhook and script channels, and a rule on the seeded
+  watch (`event.type == "none"`). The channels (as bob), push and rule-live-test specs all draw on bob's one 10 s
+  test window: they retry on 429 (`untilNotTooSoon`). The last activity test creates, then deletes, alice's Web Push
+  device, channel, rule and watch. Alice's inbox belongs to `activity.spec.ts`: its inbox test archives every item
+  first, as a retry reruns the serial group.
 - Code collecting response bodies must skip `/api/v1/inbox/stream` (SSE, never ends).
 - Notifications need `test.use({ channel: "chromium" })`: the default headless shell reports them denied
   even when granted (`push.spec.ts`, which also stubs `PushManager.subscribe` to point at the fake push service).

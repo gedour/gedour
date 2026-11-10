@@ -63,7 +63,7 @@ type Config struct {
 	// AllowPrivateNets are CIDRs outbound requests may reach despite the SSRF guard.
 	AllowPrivateNets []string
 
-	// WorkerPoll is how often an idle worker looks for due watches.
+	// WorkerPoll is the safety poll: how long a worker loop sleeps at most without a notification or a due time.
 	WorkerPoll time.Duration
 	// WorkerConcurrency caps the runs one worker process executes at once.
 	WorkerConcurrency int
@@ -114,7 +114,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	poll, err := getDuration("GEDOUR_WORKER_POLL", "2s")
+	poll, err := getDuration("GEDOUR_WORKER_POLL", "60s")
 	if err != nil {
 		return Config{}, err
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 const wrongTalkSecret = "wrong-talk-bot-shared-secret-0123456789abcdef" //nolint:gosec // test fixture
@@ -78,7 +79,7 @@ func (e *talkEnv) events(t *testing.T, n int, channels ...string) {
 	}
 }
 
-// rounds makes everything due and polls, n times.
+// rounds makes everything due and runs a pass, n times.
 func (e *talkEnv) rounds(t *testing.T, n int) {
 	t.Helper()
 	for range n {
@@ -212,7 +213,7 @@ func TestTalkPauseAfterFailedSend(t *testing.T) {
 				if e.status(t, ch, "dead") == 1 {
 					break
 				}
-				time.Sleep(e.d.poll)
+				time.Sleep(10 * time.Millisecond)
 			}
 			var failed, dead int64
 			e.scalar(t, &failed, `SELECT id FROM deliveries WHERE channel_id = $1 AND status = 'failed'`, ch)
@@ -350,7 +351,7 @@ func TestTalkPauseEnds(t *testing.T) {
 	}
 }
 
-// 003-AC8: one poll clears a backlog larger than the send slots, paused or waiting on a request in flight,
+// 003-AC8: one pass clears a backlog larger than the send slots, paused or waiting on a request in flight,
 // so it cannot keep other channels out.
 func TestTalkHoldClearsBacklog(t *testing.T) {
 	for _, tt := range []struct {
@@ -359,7 +360,6 @@ func TestTalkHoldClearsBacklog(t *testing.T) {
 	}{{"paused", http.StatusUnauthorized}, {"busy", http.StatusCreated}} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newTalkEnv(t)
-			e.d.poll = time.Hour // a held delivery stays not due for the assertion
 			var hits atomic.Int64
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				hits.Add(1)
@@ -374,10 +374,13 @@ func TestTalkHoldClearsBacklog(t *testing.T) {
 				hits.Store(0)
 			}
 			e.makeDue(t)
+			var before time.Time
+			e.scalar(t, &before, `SELECT now()`)
 			if _, err := e.d.DeliverOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if n := e.count(t, `SELECT count(*) FROM deliveries WHERE status IN ('pending', 'failed') AND next_attempt_at <= now()`); n != 0 {
+			// Against the time before the pass: a busy hold is 1 s, which a loaded machine may outlive.
+			if n := e.count(t, `SELECT count(*) FROM deliveries WHERE status IN ('pending', 'failed') AND next_attempt_at <= $1`, before); n != 0 {
 				t.Errorf("%d deliveries left due", n)
 			}
 			if tt.code == http.StatusUnauthorized && hits.Load() != 0 {
@@ -387,21 +390,21 @@ func TestTalkHoldClearsBacklog(t *testing.T) {
 	}
 }
 
-// 003-AC8: a held delivery wakes after 30 s when paused and half a poll when waiting on a request in
-// flight; a delivery still in its own backoff stays out of the hold.
+// 003-AC8, 015-AC12: a held delivery wakes after 30 s when paused and 1 s when waiting on a request in
+// flight, whatever the safety poll; a delivery still in its own backoff stays out of the hold.
 func TestTalkHoldDelays(t *testing.T) {
 	for _, tt := range []struct {
-		name          string
-		code          int
-		status        string
-		minWait, wait float64
+		name   string
+		code   int
+		status string
+		delay  float64
 	}{
-		{"paused", http.StatusUnauthorized, "failed", 25, 31},
-		{"busy", http.StatusCreated, "pending", 55, 61},
+		{"paused", http.StatusUnauthorized, "failed", 30},
+		{"busy", http.StatusCreated, "pending", 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e := newTalkEnv(t)
-			e.d.poll = 2 * time.Minute
+			e.d.loop = wake.NewLoop("deliveries", time.Minute, nil, nil)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				time.Sleep(200 * time.Millisecond)
 				w.WriteHeader(tt.code)
@@ -416,16 +419,19 @@ func TestTalkHoldDelays(t *testing.T) {
 			var waiting int64
 			e.scalar(t, &waiting, `UPDATE deliveries SET next_attempt_at = now() + interval '2 hours'
 				WHERE id = (SELECT max(id) FROM deliveries) RETURNING id`)
+			var before, after time.Time
+			e.scalar(t, &before, `SELECT now()`)
 			if _, err := e.d.DeliverOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			e.scalar(t, &after, `SELECT now()`)
 			if got := e.delivery(t, waiting); got.wait < 3600 {
 				t.Errorf("a delivery in its backoff moved: next in %.0f s", got.wait)
 			}
 			if n := e.count(t, `SELECT count(*) FROM deliveries WHERE id <> $1 AND status = $2
-				AND next_attempt_at NOT BETWEEN now() + make_interval(secs => $3) AND now() + make_interval(secs => $4)`,
-				waiting, tt.status, tt.minWait, tt.wait); n != 0 {
-				t.Errorf("%d held deliveries outside %.0f to %.0f s", n, tt.minWait, tt.wait)
+				AND next_attempt_at NOT BETWEEN $3::timestamptz + make_interval(secs => $5) AND $4::timestamptz + make_interval(secs => $5)`,
+				waiting, tt.status, before, after, tt.delay); n != 0 {
+				t.Errorf("%d held deliveries not %.0f s after their hold", n, tt.delay)
 			}
 			if n := e.count(t, `SELECT count(*) FROM deliveries WHERE id <> $1 AND status = $2`, waiting, tt.status); n == 0 {
 				t.Error("nothing held")

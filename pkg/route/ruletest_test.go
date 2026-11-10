@@ -19,6 +19,7 @@ import (
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/script"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 // ruleTestEnv is a push env whose fake upstream also takes Telegram and webhook messages, with a service and
@@ -46,7 +47,7 @@ func (r *ruleTestEnv) service(viewer string) *Service {
 }
 
 func (r *ruleTestEnv) deliverer() *Deliverer {
-	return NewDeliverer(r.pool, zap.NewNop(), r.box, r.sender, r.runner, r.m, 10*time.Millisecond, 4, time.Second)
+	return NewDeliverer(r.pool, zap.NewNop(), r.box, r.sender, r.runner, r.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 }
 
 // hook is a webhook channel posting to the fake's /_hooks/<name>.

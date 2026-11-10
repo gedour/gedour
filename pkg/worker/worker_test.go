@@ -114,7 +114,7 @@ func (e *env) worker(t *testing.T, pool *pgxpool.Pool, collectors map[string]col
 	return w
 }
 
-// tick runs everything due at the current clock, like one poll that keeps claiming until nothing is left.
+// tick runs everything due at the current clock, like one pass that keeps claiming until nothing is left.
 func tick(t *testing.T, w *Worker) {
 	t.Helper()
 	ctx := context.Background()
@@ -664,10 +664,14 @@ func TestRunDrainsAndReleases(t *testing.T) {
 			t.Fatalf("in-flight run lost: %+v", r)
 		}
 		// 001-AC31: the gauge counts due watches; this one is scheduled a minute ahead now.
-		w.updateDue(context.Background())
+		if _, err := w.deadline(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 		e.clock.set(t0.Add(time.Minute))
 		e.addWatch(t, "github_repo", `{"other": 1}`, "1m")
-		w.updateDue(context.Background())
+		if _, err := w.deadline(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 		if got := testutil.ToFloat64(e.m.due); got != 2 {
 			t.Fatalf("due gauge %v", got)
 		}
@@ -1004,7 +1008,10 @@ func TestDisabledOwnerStopsCollecting(t *testing.T) {
 	setDisabled(true)
 	// A sentinel: a gauge left at 0 by a failed query would pass for "not counted".
 	e.m.due.Set(-1)
-	w.updateDue(ctx)
+	// 015: the deadline uses the claim's predicates, so a disabled owner's watch sets none.
+	if next, err := w.deadline(ctx); err != nil || !next.IsZero() {
+		t.Fatalf("deadline %v, %v while the owner is disabled", next, err)
+	}
 	if got := testutil.ToFloat64(e.m.due); got != 0 {
 		t.Fatalf("due gauge %v while the owner is disabled", got)
 	}
@@ -1013,7 +1020,9 @@ func TestDisabledOwnerStopsCollecting(t *testing.T) {
 		t.Fatalf("disabled owner's watch ran: %v", f.total())
 	}
 	setDisabled(false)
-	w.updateDue(ctx)
+	if _, err := w.deadline(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := testutil.ToFloat64(e.m.due); got != 1 {
 		t.Fatalf("due gauge %v after enable", got)
 	}
@@ -1093,7 +1102,9 @@ func TestClaimSelection(t *testing.T) {
 	u.RawQuery = q.Encode()
 	w := e.worker(t, connect(t, u.String()), map[string]collect.Collector{"github_repo": f})
 	e.m.due.Set(-1)
-	w.updateDue(ctx)
+	if _, err := w.deadline(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := testutil.ToFloat64(e.m.due); got != 3 {
 		t.Fatalf("due gauge %v, want 3 (late, early, mid)", got)
 	}
@@ -1131,8 +1142,8 @@ func TestClaimSkipsLockedWatch(t *testing.T) {
 	}
 }
 
-// A claim that fails starts nothing and reports the failure to the poll loop, which logs it; the watch stays
-// unleased for the next poll.
+// A claim that fails starts nothing and reports the failure to the loop, which logs it; the watch stays
+// unleased for the next pass.
 func TestClaimFailure(t *testing.T) {
 	e := newEnv(t)
 	id := e.addWatch(t, "github_repo", `{}`, "1m")

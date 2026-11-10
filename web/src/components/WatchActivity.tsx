@@ -30,7 +30,7 @@ import type { StateSnapshot, Watch, WatchEvent } from "@/types/api";
 const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 sm:p-6";
 const badge =
   "inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset";
-// A run is at most 60 s on the worker, plus a 2 s poll: stop waiting for it after that.
+// A run-now starts at once and a run is at most 60 s on the worker: stop waiting for it after that.
 const RUN_WAIT_MS = 90_000;
 
 export function StatusCard({ watch }: { watch: Watch }) {

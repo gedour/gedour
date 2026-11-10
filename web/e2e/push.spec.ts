@@ -189,6 +189,6 @@ test("register this browser, send a test and open the notification", async ({
       name: new RegExp(seeded.event.payload.tag.replaceAll(".", "\\.")),
     }),
   ).toBeVisible();
-  await expect(page).toHaveURL(`${origin}/inbox`);
+  await expect(page).toHaveURL(`${origin}/inbox?state=all`);
   expect(await kept()).toBe(true);
 });

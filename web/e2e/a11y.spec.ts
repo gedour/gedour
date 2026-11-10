@@ -209,7 +209,7 @@ for (const theme of ["light", "dark"] as const) {
     test("the high priority panel and rule form have no serious axe violation", async ({
       page,
     }) => {
-      await page.goto("/inbox?priority=high");
+      await page.goto("/inbox?state=all&priority=high");
       await page
         .getByRole("list", { name: /^Inbox, / })
         .getByRole("button")

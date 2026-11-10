@@ -14,3 +14,4 @@
 | [010](010-web-push.md) | Web Push channel | shipped |
 | [011](011-github-discussions-reactions.md) | GitHub discussions and reactions | shipped |
 | [012](012-channel-digest.md) | Channel digests | shipped |
+| [014](014-rule-multi-watch.md) | Rules on several watches | in progress |

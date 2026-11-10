@@ -1,11 +1,12 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clock, Play, Plus, Search, Trash2 } from "lucide-react";
+import { Clock, Play, Plus, Search, Trash2 } from "lucide-react";
 import { createContext, use, useEffect, useId, useRef, useState, type Ref } from "react";
 import { Link } from "react-router";
 
 import { deleteWatch, listWatches, runAllWatches } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { SelectionBar, SelectTile } from "@/components/Selection";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { inputClass } from "@/components/ui/field";
@@ -172,7 +173,6 @@ export function WatchesPage({ item }: { item: NavItem }) {
   // Ids hidden by a filter stay selected but out of the action.
   const shown = query.data ?? [];
   const chosen = shown.filter((w) => selected.has(w.id));
-  const allSelected = shown.length > 0 && chosen.length === shown.length;
   const newWatch = useRef<HTMLAnchorElement>(null);
   const selecting = chosen.length > 0;
   const wasSelecting = useRef(false);
@@ -289,39 +289,14 @@ export function WatchesPage({ item }: { item: NavItem }) {
           )
         ) : (
           <div className="flex flex-col gap-3">
-            <div className="flex min-h-9 items-center">
-              {!selecting ? (
-                <span className="text-sm text-muted">
-                  {query.data.length} watch{query.data.length === 1 ? "" : "es"}
-                </span>
-              ) : (
-                <div
-                  role="toolbar"
-                  aria-label="Bulk actions"
-                  className="flex flex-1 flex-wrap items-center gap-2 rounded-lg border border-beacon/40 bg-beacon-soft/40 px-3 py-1"
-                >
-                  <span className="mr-2 text-sm font-medium">{chosen.length} selected</span>
-                  <DeleteSelected watches={chosen} onDone={setSelected} />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setSelected(allSelected ? new Set() : new Set(shown.map((w) => w.id)))
-                    }
-                  >
-                    {allSelected ? "Select none" : `Select all ${shown.length}`}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto"
-                    onClick={() => setSelected(new Set())}
-                  >
-                    Clear
-                  </Button>
-                </div>
-              )}
-            </div>
+            <SelectionBar
+              count={`${shown.length} watch${shown.length === 1 ? "" : "es"}`}
+              selected={chosen.length}
+              total={shown.length}
+              onSelect={(all) => setSelected(new Set(all ? shown.map((w) => w.id) : []))}
+            >
+              <DeleteSelected watches={chosen} onDone={setSelected} />
+            </SelectionBar>
             <ul aria-label="Watches" className="flex flex-col gap-2">
               {query.data.map((w) => (
                 <WatchRow
@@ -362,28 +337,15 @@ function WatchRow({
         selected && "border-beacon bg-beacon-soft/40",
       )}
     >
-      {/* The kind tile is the selection toggle: a checkbox on hover or focus, and on every
-          row once one is selected. */}
-      <button
-        type="button"
-        aria-pressed={selected}
-        aria-label={`Select: ${watch.name}`}
-        onClick={onToggle}
-        className="group/tile relative ml-4 grid size-10 shrink-0 place-items-center rounded-lg"
+      <SelectTile
+        label={watch.name}
+        selected={selected}
+        selecting={selecting}
+        onToggle={onToggle}
+        className="ml-4"
       >
         <KindIcon kind={watch.kind} />
-        <span
-          aria-hidden
-          className={cn(
-            "absolute inset-0 grid place-items-center rounded-lg border-2 opacity-0 transition-opacity",
-            selected ? "border-beacon bg-beacon text-surface" : "border-line bg-surface text-muted",
-            (selected || selecting) && "opacity-100",
-            "group-hover/tile:opacity-100 group-focus-visible/tile:opacity-100",
-          )}
-        >
-          <Check className={cn("size-5", !selected && "opacity-40")} />
-        </span>
-      </button>
+      </SelectTile>
       <Link
         to={`/watches/${watch.id}`}
         className="flex min-w-0 flex-1 items-center gap-4 rounded-r-xl px-4 py-3.5"

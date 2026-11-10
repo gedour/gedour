@@ -222,7 +222,8 @@ for (const [width, height] of [
       await page.goto("/inbox");
       await expect(page.locator("#inbox-item-40")).toBeAttached();
       expect(await barBottom(page)).toBe(acting ? 100 : 56);
-      for (let i = 0; i < 39; i++) await page.keyboard.press("j");
+      // The first j shows the cursor on the first row, 39 more reach the last.
+      for (let i = 0; i < 40; i++) await page.keyboard.press("j");
       await expect(page.locator("#inbox-item-40")).toBeFocused();
       for (let i = 0; i < 20; i++) {
         await page.keyboard.press("k");

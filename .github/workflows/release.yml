@@ -20,8 +20,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The commit passes the full CI gate before anything is pushed.
+  # A develop merge of a PR branch that already held develop has the PR head's exact tree, and ci.yml tested
+  # that tree (its merge ref was the head itself): a green ci.yml run on the head stands for the checks.
+  tested:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      head: ${{ steps.find.outputs.head }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(git rev-parse --verify --quiet HEAD^2) || exit 0
+          git merge-base --is-ancestor HEAD^1 "$head" || exit 0
+          # An API failure runs the full checks rather than failing the release.
+          if ! runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${head}&status=success" -q .total_count); then
+            echo "::warning::ci.yml runs lookup failed; running the checks"
+            exit 0
+          fi
+          if (( runs > 0 )); then
+            echo "head=${head}" >> "$GITHUB_OUTPUT"
+            echo "Checks skipped: ci.yml passed on ${head}, same tree." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # The commit passes the full CI gate before anything is pushed, unless tested found it already did.
   checks:
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.head == '' }}
     uses: ./.github/workflows/checks.yml
 
   # A release tag must match the image tag pinned in deploy/k8s/base and the README overlay example.
@@ -34,9 +67,12 @@ jobs:
       - run: scripts/check-release-pin.sh "${GITHUB_REF_NAME}"
 
   build:
-    needs: [checks, pin]
-    # pin is skipped on develop: run when checks passed and pin passed or did not apply.
-    if: ${{ !cancelled() && needs.checks.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.pin.result) }}
+    needs: [tested, checks, pin]
+    # pin is skipped on develop: run when checks passed (or tested vouched for them) and pin passed or did not apply.
+    if: >-
+      ${{ !cancelled()
+        && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.head != ''))
+        && contains(fromJSON('["success","skipped"]'), needs.pin.result) }}
     strategy:
       matrix:
         include:

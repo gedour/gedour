@@ -404,7 +404,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   apply. The answer lists `{channel_id, channel_name, ok, error, logs, accepted}` per channel (`[]` without
   one); a script with no free sandbox fails its item only. An event out of scope, not yours or missing, or
   another user's rule, is a 404. Channel and rule tests count together: one test per 10 s per user (429 with
-  `Retry-After`). Each live test is audited as `rule.tested` with the event id.
+  `Retry-After`). Each live test is audited as `rule.tested` with the event id. In the UI, each row of a
+  saved rule's preview ("Test against last 20 events") has a "Live test" button that lists these results.
 - Webhooks: `POST` JSON `{delivery_id, event, watch, rule, sent_at}`, plus `"test": true` on a live test,
   with `X-Gedour-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
   redirects are not followed; 10 s timeout. Same SSRF guard as collectors; a literal private IP is refused

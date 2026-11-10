@@ -1,6 +1,6 @@
 # 013 — Send a real event through a rule
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-10
 
@@ -36,7 +36,7 @@ then shows, per channel, whether it was sent, the error, and a script's log line
 - Script channels: a sandbox is reserved per run; none free → that channel's item fails with the busy
   error, the others are still sent.
 - UI: "Live test" button on each preview row, edit page only, titled "Sends this event to the rule's
-  channels now"; results shown under the table.
+  channels now"; results shown above the table.
 - OpenAPI, web API client, README (rules section, webhook and script payload `test` field).
 
 ## Out of scope
@@ -48,28 +48,28 @@ then shows, per channel, whether it was sent, the error, and a script's log line
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given a saved rule with channels A and B and an event in its scope, when the owner calls
+- [x] **AC1** Given a saved rule with channels A and B and an event in its scope, when the owner calls
   `POST /rules/{id}/test {event_id}`, then A and B each receive the message a real routing of that event
   by that rule sends, with its summary prefixed `[test] `, and the response has one `ok: true` item per
   channel.
-- [ ] **AC2** A script channel receives `script.InputOf` of the real delivery: real event payload, watch,
+- [x] **AC2** A script channel receives `script.InputOf` of the real delivery: real event payload, watch,
   `rule: {id, name}`, `event.summary` prefixed `[test] ` and `test: true`; the response item carries the
   run's log lines.
-- [ ] **AC3** A Web Push channel on a `high` priority rule is sent with the urgency a real high priority
+- [x] **AC3** A Web Push channel on a `high` priority rule is sent with the urgency a real high priority
   delivery gets; the item has `accepted`.
-- [ ] **AC4** A digest rule's test sends immediately, one single-event message per channel; no digest
+- [x] **AC4** A digest rule's test sends immediately, one single-event message per channel; no digest
   is queued.
-- [ ] **AC5** No row is written to `deliveries` and no inbox item changes; one `rule.tested` audit row
+- [x] **AC5** No row is written to `deliveries` and no inbox item changes; one `rule.tested` audit row
   is written.
-- [ ] **AC6** An event outside the rule's scope, unreadable by the caller, or nonexistent → 404. A rule
+- [x] **AC6** An event outside the rule's scope, unreadable by the caller, or nonexistent → 404. A rule
   the caller does not own → 404.
-- [ ] **AC7** A second rule or channel test within 10 s of the previous one → 429 with `Retry-After`.
-- [ ] **AC8** One channel failing (send error, busy sandbox) does not stop the others; its item has
+- [x] **AC7** A second rule or channel test within 10 s of the previous one → 429 with `Retry-After`.
+- [x] **AC8** One channel failing (send error, busy sandbox) does not stop the others; its item has
   `ok: false` and `error`.
-- [ ] **AC9** A rule with no channel → 200 with an empty list; the UI says the rule has no channel.
-- [ ] **AC10** On `/rules/:id`, each preview row has a "Live test" button; clicking it shows the
+- [x] **AC9** A rule with no channel → 200 with an empty list; the UI says the rule has no channel.
+- [x] **AC10** On `/rules/:id`, each preview row has a "Live test" button; clicking it shows the
   per-channel results; a 429 shows the retry delay. On `/rules/new` there is no button.
-- [ ] **AC11** A webhook channel's body has `"test": true`; a real delivery's body and script input have
+- [x] **AC11** A webhook channel's body has `"test": true`; a real delivery's body and script input have
   no `test` field, and their summary has no prefix.
 
 ## Phases

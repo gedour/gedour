@@ -1,5 +1,5 @@
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, PUSH_KEYS, SEED, test, UPSTREAM } from "./fixtures";
+import { api, expect, PUSH_KEYS, SEED, test, untilNotTooSoon, UPSTREAM } from "./fixtures";
 
 // The headless shell reports notifications denied whatever is granted; the new headless mode does not.
 // Bob: the seed leaves events in his inbox for the notification link to open.
@@ -96,11 +96,11 @@ test("register this browser, send a test and open the notification", async ({
     if (rule) expect.soft((await call("DELETE", `/api/v1/rules/${rule.id}`)).ok()).toBe(true);
   }
   await page.goto("/channels");
-  // Channel tests are rate limited per user, and other specs test alice's channels too.
-  await expect(async () => {
-    await card.getByRole("button", { name: "Send test" }).click();
-    await expect(page.getByText(`Test message sent to ${name}`)).toBeVisible({ timeout: 3000 });
-  }).toPass({ timeout: 30_000 });
+  const res = await untilNotTooSoon(page, /\/api\/v1\/channels\/[^/]+\/test$/, () =>
+    card.getByRole("button", { name: "Send test" }).click(),
+  );
+  expect(res.status()).toBe(200);
+  await expect(page.getByText(`Test message sent to ${name}`)).toBeVisible();
   const got = ((await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[]).find(
     (r) => r.endpoint === `push-${id}`,
   );

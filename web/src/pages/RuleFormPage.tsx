@@ -6,6 +6,7 @@ import {
   FlaskConical,
   Inbox,
   LoaderCircle,
+  Send,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -18,9 +19,10 @@ import {
   listChannels,
   listWatches,
   previewRule,
+  testRule,
   updateRule,
 } from "@/api/client";
-import { ChannelIcon } from "@/components/ChannelBits";
+import { ChannelIcon, DeliveryLogs } from "@/components/ChannelBits";
 import { DeliveryFields } from "@/components/DeliveryFields";
 import { browserTimeZone, channelTarget, digestErrors } from "@/lib/channels";
 import { ErrorState } from "@/components/ErrorState";
@@ -35,7 +37,7 @@ import { fieldErrors, problemText, unplaced } from "@/lib/problems";
 import { formatRelative } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { NotFound } from "@/pages/NotFound";
-import type { PreviewItem, Rule } from "@/types/api";
+import type { PreviewItem, Rule, RuleTestItem } from "@/types/api";
 
 /** /rules/new and /rules/:id. */
 export function RuleFormPage() {
@@ -94,6 +96,11 @@ function useDebounced<T>(value: T, ms: number): T {
     return () => clearTimeout(t);
   }, [value, ms]);
   return v;
+}
+
+/** What a live test reads of the rule: the filter and the digest schedule are not among them. */
+function liveTestKey(name: string, watchId: string, priority: string, channelIds: string[]) {
+  return JSON.stringify([name, watchId, priority, [...channelIds].sort()]);
 }
 
 const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 sm:p-6";
@@ -194,6 +201,20 @@ function RuleForm({ initial }: { initial?: Rule }) {
     setErrors(local);
     if (Object.keys(local).length === 0) save.mutate();
   };
+  // 013: the live test sends through the saved rule, never the form's edits.
+  const liveTest = useMutation({
+    mutationFn: (it: PreviewItem) => testRule(initial?.id ?? "", it.event.id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["audit"] }),
+  });
+  const unsaved =
+    initial !== undefined &&
+    liveTestKey(name.trim(), watchId, priority, channelIds) !==
+      liveTestKey(
+        initial.name,
+        initial.watch_id ?? "",
+        initial.priority,
+        initial.channel_ids ?? [],
+      );
   const saveProblem = filterProblem(save.error);
   const problem = live ?? saveProblem;
   const watchList = watches.data ?? [];
@@ -335,11 +356,38 @@ function RuleForm({ initial }: { initial?: Rule }) {
               <FlaskConical aria-hidden />
               Test against last 20 events
             </Button>
+            {showPreview && initial && unsaved && (
+              <p className="text-xs text-muted">
+                Unsaved changes: a live test uses the saved rule.
+              </p>
+            )}
+            {showPreview && initial && (
+              <div role="status" aria-label="Live test results" className="flex flex-col gap-2">
+                {liveTest.isPending ? (
+                  <p className="text-sm text-muted">Sending…</p>
+                ) : liveTest.isError ? (
+                  <p className="text-sm text-rose-700 dark:text-rose-300">
+                    {problemText(liveTest.error)}
+                  </p>
+                ) : (
+                  liveTest.data &&
+                  liveTest.variables && (
+                    <LiveTestResults items={liveTest.data} item={liveTest.variables} />
+                  )
+                )}
+              </div>
+            )}
             {showPreview && !live && (
               <PreviewTable
                 items={preview.data}
                 loading={preview.isPending}
                 error={preview.isError ? preview.error : null}
+                liveTest={
+                  initial && {
+                    run: (it) => liveTest.mutate(it),
+                    pending: liveTest.isPending ? liveTest.variables.event.id : null,
+                  }
+                }
               />
             )}
           </div>
@@ -525,10 +573,13 @@ export function PreviewTable({
   items,
   loading,
   error,
+  liveTest,
 }: {
   items: PreviewItem[] | undefined;
   loading: boolean;
   error: Error | null;
+  /** Edit page only: a saved rule to send the row's event through; pending is the event under test. */
+  liveTest?: { run: (it: PreviewItem) => void; pending: number | null };
 }) {
   if (error)
     return (
@@ -554,7 +605,9 @@ export function PreviewTable({
         <strong>{matched}</strong> of {items.length} recent events match.
       </p>
       <div className="relative overflow-x-auto rounded-lg border border-line">
-        <table className="w-full min-w-[560px] text-left text-sm">
+        <table
+          className={cn("w-full text-left text-sm", liveTest ? "min-w-[680px]" : "min-w-[560px]")}
+        >
           <caption className="sr-only">Preview against recent events</caption>
           <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">
             <tr>
@@ -570,6 +623,11 @@ export function PreviewTable({
               <th scope="col" className="px-3 py-2 font-medium">
                 Result
               </th>
+              {liveTest && (
+                <th scope="col" className="px-3 py-2">
+                  <span className="sr-only">Live test</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -619,12 +677,81 @@ export function PreviewTable({
                       </span>
                     )}
                   </td>
+                  {liveTest && (
+                    <td className="px-3 py-1.5 text-right">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        title="Sends this event to the rule's channels now"
+                        aria-label={`Live test: ${s.text}`}
+                        disabled={liveTest.pending !== null}
+                        onClick={() => liveTest.run(it)}
+                      >
+                        <Send aria-hidden />
+                        {liveTest.pending === it.event.id ? "Sending…" : "Live test"}
+                      </Button>
+                    </td>
+                  )}
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** Per-channel outcome of a live test (013-AC10); a rule without channel says so (013-AC9). */
+function LiveTestResults({ items, item }: { items: RuleTestItem[]; item: PreviewItem }) {
+  const what = summarizeEvent(item.event).text;
+  if (items.length === 0)
+    return (
+      <p className="text-sm">Nothing sent for {what}: this rule has no channel, only your inbox.</p>
+    );
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm font-medium">Live test of {what}</p>
+      <ul className="flex flex-col gap-2">
+        {items.map((r) => (
+          <li
+            key={r.channel_id}
+            className="flex flex-col gap-1 rounded-lg border border-line px-3 py-2 text-sm"
+          >
+            <p className="flex flex-wrap items-center gap-x-2">
+              <span className="font-medium">{r.channel_name}</span>
+              {r.ok ? (
+                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+                  <CircleCheck aria-hidden className="size-4" />
+                  Sent
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-300">
+                  <CircleAlert aria-hidden className="size-4" />
+                  Failed
+                </span>
+              )}
+              {r.accepted !== undefined && (
+                <span className="text-xs text-muted">
+                  Accepted by {r.accepted} device{r.accepted === 1 ? "" : "s"}
+                </span>
+              )}
+            </p>
+            {r.error && (
+              <p
+                className={cn(
+                  "text-xs break-words",
+                  r.ok ? "text-amber-700 dark:text-amber-300" : "text-rose-700 dark:text-rose-300",
+                )}
+              >
+                {r.error}
+              </p>
+            )}
+            {r.logs != null && <DeliveryLogs logs={r.logs.join("\n")} />}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

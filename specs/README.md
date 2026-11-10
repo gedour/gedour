@@ -14,4 +14,4 @@
 | [010](010-web-push.md) | Web Push channel | shipped |
 | [011](011-github-discussions-reactions.md) | GitHub discussions and reactions | shipped |
 | [012](012-channel-digest.md) | Channel digests | shipped |
-| [013](013-rule-test-send.md) | Send a real event through a rule | in progress |
+| [013](013-rule-test-send.md) | Send a real event through a rule | shipped |

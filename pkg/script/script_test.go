@@ -41,6 +41,11 @@ func sampleInput() Input {
 // logic is measured by coverage here, the subprocess tests below cover the process boundary.
 func inProcess(t *testing.T, r *Runner, src string, dry bool) (*message, Result) {
 	t.Helper()
+	return inProcessWith(t, r, src, dry, sampleInput())
+}
+
+func inProcessWith(t *testing.T, r *Runner, src string, dry bool, in Input) (*message, Result) {
+	t.Helper()
 	toChild, childIn := io.Pipe()
 	childOut, fromChild := io.Pipe()
 	served := make(chan error, 1)
@@ -50,7 +55,7 @@ func inProcess(t *testing.T, r *Runner, src string, dry bool) (*message, Result)
 		served <- err
 	}()
 	s := &session{r: r, dry: dry, deadline: time.Now().Add(r.o.Timeout), enc: json.NewEncoder(childIn)}
-	final, protocol := s.serve(t.Context(), src, sampleInput(), childOut)
+	final, protocol := s.serve(t.Context(), src, in, childOut)
 	_ = childIn.Close()
 	if err := <-served; err != nil {
 		t.Fatalf("serve: %v", err)
@@ -136,6 +141,47 @@ func TestServe(t *testing.T) {
 				t.Fatalf("logs %q, want %q", res.Logs, tt.logs)
 			}
 		})
+	}
+}
+
+// 013-AC2, 013-AC11: a live test's input has test: true, as a global and on ctx, and a prefixed summary; a real
+// delivery's input has no test key, undefined in the script, whatever the script declares at top level.
+func TestInputTestField(t *testing.T) {
+	r := testRunner(t, Options{})
+	src := `function main(e, ctx) { log(e.summary, typeof test, String(test), String(ctx.test), JSON.stringify(ctx)) }`
+	for _, tt := range []struct {
+		test bool
+		log  string
+	}{
+		{false, `v1.2.3 published undefined undefined undefined {"watch":{"id":"w1","name":"cli/cli","kind":"github_repo"},"rule":{"id":"r1","name":"Releases"},"delivery_id":42}`},
+		{true, `[test] v1.2.3 published boolean true true {"watch":{"id":"w1","name":"cli/cli","kind":"github_repo"},"rule":{"id":"r1","name":"Releases"},"delivery_id":42,"test":true}`},
+	} {
+		at := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+		in := InputOf(notify.Delivery{ID: 42, Test: tt.test,
+			Event: notify.Event{Type: "release.published", OccurredAt: &at, Payload: map[string]any{"tag": "v1.2.3"}},
+			Watch: notify.Watch{ID: "w1", Name: "cli/cli", Kind: "github_repo"},
+			Rule:  &notify.Rule{ID: "r1", Name: "Releases", Priority: "high"}})
+		b, _ := json.Marshal(in)
+		if strings.Contains(string(b), `"test"`) != tt.test {
+			t.Errorf("test %v: input %s", tt.test, b)
+		}
+		final, res := inProcessWith(t, r, src, false, in)
+		if final.Outcome != OutcomeOK || len(res.Logs) != 1 || res.Logs[0] != tt.log {
+			t.Errorf("test %v: %s %s, logs %q", tt.test, final.Outcome, final.Error, res.Logs)
+		}
+		// A script's own top-level bindings never replace main's arguments.
+		for _, shadow := range []string{`function test() {}`, `const test = "x";`, `var test = 5;`, `var rule = {name: "shadow"};`,
+			`function rule() {}`, `var watch = 1, delivery_id = -1, event = {type: "shadow"};`} {
+			got := `undefined`
+			if tt.test {
+				got = `boolean`
+			}
+			want := got + ` Releases cli/cli 42 release.published`
+			_, res := inProcessWith(t, r, shadow+` function main(e, ctx) { log(typeof ctx.test, ctx.rule.name, ctx.watch.name, ctx.delivery_id, e.type) }`, false, in)
+			if len(res.Logs) != 1 || res.Logs[0] != want {
+				t.Errorf("test %v, %s: logs %q, want %q", tt.test, shadow, res.Logs, want)
+			}
+		}
 	}
 }
 

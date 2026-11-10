@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,29 @@ func TestFormatIgnoresNotes(t *testing.T) {
 		}
 		if strings.Contains(got.Title+got.Summary+got.Detail+got.URL, "CVE") || strings.Contains(got.Title+got.Summary+got.Detail, "secret") {
 			t.Fatalf("%s: message shows the notes: %+v", typ, got)
+		}
+	}
+}
+
+// 013-AC1, 013-AC11: a live test prefixes the summary, so every title shows it; a real delivery has no prefix.
+func TestFormatTestMarker(t *testing.T) {
+	for _, tt := range []struct {
+		test           bool
+		summary, title string
+	}{
+		{false, "v1.2.3 published", "cli/cli: v1.2.3 published"},
+		{true, "[test] v1.2.3 published", "cli/cli: [test] v1.2.3 published"},
+	} {
+		d := ev("release.published", map[string]any{"tag": "v1.2.3"})
+		d.Test = tt.test
+		m := Format(d)
+		if m.Summary != tt.summary || m.Title != tt.title {
+			t.Errorf("test %v: summary %q title %q", tt.test, m.Summary, m.Title)
+		}
+		var push PushMessage
+		_ = json.Unmarshal(PushPayload(d, false), &push)
+		if push.Title != tt.title {
+			t.Errorf("test %v: push title %q", tt.test, push.Title)
 		}
 	}
 }

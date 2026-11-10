@@ -201,7 +201,8 @@ func (c *child) run(src string, in Input) message {
 	if err != nil {
 		return done(OutcomeError, err.Error(), "")
 	}
-	if err := c.install(in); err != nil {
+	input, err := c.install(in)
+	if err != nil {
 		return c.failure(err)
 	}
 	if _, err := vm.RunProgram(prog); err != nil {
@@ -211,11 +212,12 @@ func (c *child) run(src string, in Input) message {
 	if !ok {
 		return done(OutcomeError, "the script must define function main(event, ctx)", "")
 	}
+	// From the input, not the globals: a top-level `var test` or `function rule` must not reach main.
 	ctx := vm.NewObject()
-	for _, k := range []string{"watch", "rule", "delivery_id"} {
-		_ = ctx.Set(k, vm.Get(k))
+	for _, k := range []string{"watch", "rule", "delivery_id", "test"} {
+		_ = ctx.Set(k, inputField(input, k))
 	}
-	v, err := main(goja.Undefined(), vm.Get("event"), ctx)
+	v, err := main(goja.Undefined(), inputField(input, "event"), ctx)
 	if err != nil {
 		return c.failure(err)
 	}
@@ -252,32 +254,41 @@ func (c *child) failure(err error) message {
 	return done(OutcomeError, err.Error(), "")
 }
 
-// install sets the script's globals: plain JS values parsed from JSON, so no Go object is reachable.
-func (c *child) install(in Input) error {
+// install sets the script's globals: plain JS values parsed from JSON, so no Go object is reachable. It
+// returns the parsed input, which the script's own top-level bindings cannot replace.
+func (c *child) install(in Input) (*goja.Object, error) {
 	vm := c.vm
 	b, err := json.Marshal(in)
 	if err != nil {
-		return fmt.Errorf("input: %w", err)
+		return nil, fmt.Errorf("input: %w", err)
 	}
 	parse, _ := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
 	v, err := parse(goja.Undefined(), vm.ToValue(string(b)))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	o := v.ToObject(vm)
-	for _, k := range []string{"event", "watch", "rule", "delivery_id"} {
-		if err := vm.Set(k, o.Get(k)); err != nil {
-			return err
+	for _, k := range []string{"event", "watch", "rule", "delivery_id", "test"} {
+		if err := vm.Set(k, inputField(o, k)); err != nil {
+			return nil, err
 		}
 	}
 	if err := vm.Set("log", c.log); err != nil {
-		return err
+		return nil, err
 	}
 	h := vm.NewObject()
 	if err := h.Set("fetch", c.fetch); err != nil {
-		return err
+		return nil, err
 	}
-	return vm.Set("http", h)
+	return o, vm.Set("http", h)
+}
+
+// inputField reads k off the parsed input; test is omitted from real deliveries: undefined, as in the JSON, not null.
+func inputField(o *goja.Object, k string) goja.Value {
+	if v := o.Get(k); v != nil {
+		return v
+	}
+	return goja.Undefined()
 }
 
 func (c *child) stringify(v goja.Value) (string, error) {

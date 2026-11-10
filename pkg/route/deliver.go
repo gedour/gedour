@@ -230,6 +230,14 @@ func (d *Deliverer) claimDigests(ctx context.Context, n int, older bool) ([]clai
 	return jobs, nil
 }
 
+// deliveryColumns are the event (e) and watch (w) columns of a delivery, scanned into deliveryFields.
+const deliveryColumns = `e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind`
+
+func deliveryFields(nd *notify.Delivery) []any {
+	e := &nd.Event
+	return []any{&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &nd.Watch.ID, &nd.Watch.Name, &nd.Watch.Kind}
+}
+
 // load gathers what one send needs: the channel with its secret opened, the event, its watch and rule.
 func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify.Delivery, error) {
 	nd := notify.Delivery{ID: j.id}
@@ -237,13 +245,12 @@ func (d *Deliverer) load(ctx context.Context, j claimed) (notify.Channel, notify
 	if err != nil {
 		return ch, nd, err
 	}
-	e := &nd.Event
 	var active bool
 	// The channel owner must still own the watch: a transfer after routing sends nothing more.
-	err = d.pool.QueryRow(ctx, `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind, `+activeOwner+`
+	err = d.pool.QueryRow(ctx, `SELECT `+deliveryColumns+`, `+activeOwner+`
 		FROM events e JOIN watches w ON w.id = e.watch_id JOIN channels c ON c.id = $2 JOIN users u ON u.id = c.owner_id
 		WHERE e.id = $1 AND `+watch.ReadableSQL("w", "c.owner_id"), j.eventID, j.channelID).
-		Scan(&e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &nd.Watch.ID, &nd.Watch.Name, &nd.Watch.Kind, &active)
+		Scan(append(deliveryFields(&nd), &active)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ch, nd, errUnreadable
 	}

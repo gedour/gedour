@@ -35,7 +35,8 @@ const MaxDevices = 20
 // pushParallel bounds one delivery's concurrent pushes: MaxDevices/pushParallel rounds of SendTimeout fit sendTimeout.
 const pushParallel = 5
 
-// pushTestTimeout cuts a "Send test" fan-out short of the write timeout, so the answer still reaches the browser.
+// pushTestTimeout cuts a "Send test" fan-out, or a rule test's channels in a row, short of the write timeout,
+// so the answer still reaches the browser.
 // A var for tests.
 var pushTestTimeout = config.HTTPWriteTimeout - 5*time.Second
 

@@ -15,3 +15,4 @@
 | [011](011-github-discussions-reactions.md) | GitHub discussions and reactions | shipped |
 | [012](012-channel-digest.md) | Channel digests | shipped |
 | [013](013-rule-test-send.md) | Send a real event through a rule | shipped |
+| [015](015-event-driven-worker.md) | Event-driven worker loops | shipped |

@@ -16,6 +16,7 @@ import { Link, useLocation, useSearchParams } from "react-router";
 import { inboxAction, listInbox } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
+import { SelectionBar, SelectTile } from "@/components/Selection";
 import { PriorityBadge } from "@/components/PriorityBadge";
 import { Timestamp } from "@/components/Timestamp";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,40 @@ function ignoresShortcuts(target: EventTarget | null): boolean {
 
 const rowId = (id: number) => `inbox-item-${id}`;
 
+const now = () => new Date().toISOString();
+const PATCH: Record<InboxAction, () => Partial<InboxItem>> = {
+  read: () => ({ read_at: now() }),
+  unread: () => ({ read_at: null, archived_at: null }),
+  archive: () => ({ archived_at: now() }),
+  unarchive: () => ({ archived_at: null }),
+};
+
+const inView = (it: InboxItem, state: InboxState) =>
+  state === "archived"
+    ? Boolean(it.archived_at)
+    : !it.archived_at && (state === "all" || !it.read_at);
+
+/**
+ * The listed items with pending actions applied, minus those that left the tab; the opened item stays
+ * in place (newest first, by id like the server) as long as its panel shows.
+ */
+function visibleItems(
+  fetched: InboxItem[],
+  patches: Map<number, Partial<InboxItem>>,
+  state: InboxState,
+  opened: InboxItem | null,
+): InboxItem[] {
+  const out = fetched
+    .map((it) => (patches.has(it.id) ? { ...it, ...patches.get(it.id) } : it))
+    .filter((it) => it.id === opened?.id || inView(it, state));
+  if (opened && !out.some((it) => it.id === opened.id)) {
+    // Opened from a loaded page, so older than every loaded item means last.
+    const at = out.findIndex((it) => it.id < opened.id);
+    out.splice(at < 0 ? out.length : at, 0, opened);
+  }
+  return out;
+}
+
 // The side panel needs the lg layout's room; below it the detail is a dialog.
 const WIDE_QUERY = "(min-width: 1024px)";
 
@@ -74,15 +109,26 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     initialPageParam: "",
     getNextPageParam: (last) => last.next_cursor,
   });
-  const items = query.data?.pages.flatMap((p) => p.items) ?? [];
   const unread = useInboxCount().data;
   const client = useQueryClient();
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [focus, setFocus] = useState(0);
+  // The j/k cursor shows, and shortcuts act, only once a row was focused or j/k pressed: never on a row
+  // the reader did not pick.
+  const [cursor, setCursor] = useState(false);
   // The opened item itself, not its id: in the Unread tab, reading it drops it from the list, and the
   // panel must stay.
   const [opened, setOpened] = useState<InboxItem | null>(null);
+  // Actions shown before the server confirms them: a row leaves its tab at once, so the next one comes
+  // under the pointer and a quick action can be repeated in place.
+  const [patches, setPatches] = useState<Map<number, Partial<InboxItem>>>(new Map());
+  const items = visibleItems(
+    query.data?.pages.flatMap((p) => p.items) ?? [],
+    patches,
+    state,
+    opened,
+  );
   const wide = useMediaQuery(WIDE_QUERY);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogOpen = Boolean(opened) && !wide;
@@ -107,33 +153,38 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     setFocus((f) => Math.min(f, Math.max(items.length - 1, 0)));
   }
 
+  // Counted here, not with isMutating(): actions settling in one tick would each still see the others.
+  const inFlight = useRef(0);
   const act = useMutation({
-    mutationFn: ({ action, ids }: { action: InboxAction; ids: number[] }) =>
+    mutationFn: ({ action, ids }: { action: InboxAction; ids: number[]; patch?: object }) =>
       inboxAction(action, ids),
-    onSuccess: () => {
-      void client.invalidateQueries({ queryKey: COUNT_KEY });
-      void client.invalidateQueries({ queryKey: LIST_KEY });
+    // Only this action's patches: a later action on the same row keeps its own.
+    onError: (err, { patch }) => {
+      setPatches((m) => new Map([...m].filter(([, p]) => p !== patch)));
+      toast(`Could not update the inbox: ${problemText(err)}`, "error");
     },
-    onError: (err) => toast(`Could not update the inbox: ${problemText(err)}`, "error"),
+    // Patches go once the list reflects every action sent: a refetch landing between two actions
+    // would bring back a row the later one already hid.
+    onSettled: async () => {
+      void client.invalidateQueries({ queryKey: COUNT_KEY });
+      if (--inFlight.current > 0) return;
+      await client.invalidateQueries({ queryKey: LIST_KEY });
+      if (inFlight.current === 0) setPatches(new Map());
+    },
   });
-  const busy = act.isPending;
   const run = (action: InboxAction, ids: number[]) => {
-    if (ids.length > 0 && !busy) act.mutate({ action, ids });
-  };
-  const now = () => new Date().toISOString();
-  const PATCH: Record<InboxAction, Partial<InboxItem>> = {
-    read: { read_at: now() },
-    unread: { read_at: null },
-    archive: { archived_at: now() },
-    unarchive: { archived_at: null },
+    if (ids.length === 0) return;
+    const patch = PATCH[action]();
+    setPatches((m) => new Map([...m, ...ids.map((id) => [id, patch] as const)]));
+    setOpened((o) => (o && ids.includes(o.id) ? { ...o, ...patch } : o));
+    inFlight.current++;
+    act.mutate({ action, ids, patch });
   };
   const actOnOpened = (a: InboxAction) => {
-    if (!opened || busy) return;
-    run(a, [opened.id]);
-    setOpened({ ...opened, ...PATCH[a] });
+    if (opened) run(a, [opened.id]);
   };
   const open = (it: InboxItem) => {
-    setOpened(it.read_at ? it : { ...it, read_at: now() });
+    setOpened(it);
     if (!it.read_at) run("read", [it.id]);
   };
   // A notification's link (/inbox?event=<id>, 010-AC13) opens that event's item once the list holds it.
@@ -147,12 +198,15 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
   if (linked && link?.key !== key && (query.isSuccess || query.isError) && !query.isFetching) {
     setLink({ key, event: linked });
     const hit = items.find((i) => i.event.id === linked);
-    if (hit) setOpened(hit.read_at ? hit : { ...hit, read_at: now() });
+    if (hit) setOpened(hit.read_at ? hit : { ...hit, ...PATCH.read() });
   }
   const dropLink = useEffectEvent(() => {
     const hit = items.find((i) => i.event.id === link?.event);
-    // Not run(): the read must go out even while another action is pending.
-    if (hit && !hit.read_at) act.mutate({ action: "read", ids: [hit.id] });
+    // Not run(): its patch is state, set above while rendering.
+    if (hit && !hit.read_at) {
+      inFlight.current++;
+      act.mutate({ action: "read", ids: [hit.id] });
+    }
     if (!hit)
       toast(
         "That event is not among the inbox items loaded here: it may be archived or older.",
@@ -184,6 +238,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     const it = items[i];
     if (!it) return;
     setFocus(i);
+    setCursor(true);
     document.getElementById(rowId(it.id))?.focus();
   };
 
@@ -191,13 +246,14 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || ignoresShortcuts(e.target)) {
       return;
     }
-    const it = items[focus];
+    const it = cursor ? items[focus] : undefined;
+    const step = cursor ? 1 : 0;
     switch (e.key) {
       case "j":
-        moveTo(Math.min(focus + 1, items.length - 1));
+        moveTo(Math.min(focus + step, items.length - 1));
         break;
       case "k":
-        moveTo(Math.max(focus - 1, 0));
+        moveTo(Math.max(focus - step, 0));
         break;
       case "e":
         if (it) run(it.archived_at ? "unarchive" : "archive", [it.id]);
@@ -233,13 +289,13 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     setSelected(new Set());
     setOpened(null);
     setFocus(0);
+    setCursor(false);
   };
 
   const chosen = [...selected];
   const empty = highOnly
     ? { title: "Nothing high priority here", body: "High priority rules bring their events here." }
     : (EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody });
-  const allSelected = items.length > 0 && selected.size === items.length;
   const tabsId = useId();
 
   return (
@@ -341,63 +397,24 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
           )}
         >
           <div className="flex min-w-0 flex-col gap-3">
-            <div className="flex min-h-9 flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5">
-              <input
-                type="checkbox"
-                aria-label="Select all"
-                checked={allSelected}
-                ref={(el) => {
-                  if (el) el.indeterminate = selected.size > 0 && !allSelected;
-                }}
-                onChange={() =>
-                  setSelected(allSelected ? new Set() : new Set(items.map((i) => i.id)))
-                }
-                className="size-4 accent-beacon"
-              />
-              {selected.size === 0 ? (
-                <span className="text-sm text-muted">
-                  {items.length} item{items.length === 1 ? "" : "s"}
-                </span>
+            <SelectionBar
+              count={`${items.length} item${items.length === 1 ? "" : "s"}`}
+              selected={selected.size}
+              total={items.length}
+              onSelect={(all) => setSelected(new Set(all ? items.map((i) => i.id) : []))}
+            >
+              <BulkButton icon={MailOpen} label="Mark read" onClick={() => run("read", chosen)} />
+              <BulkButton icon={Mail} label="Mark unread" onClick={() => run("unread", chosen)} />
+              {state === "archived" ? (
+                <BulkButton
+                  icon={ArchiveRestore}
+                  label="Unarchive"
+                  onClick={() => run("unarchive", chosen)}
+                />
               ) : (
-                <div
-                  role="toolbar"
-                  aria-label="Bulk actions"
-                  className="flex flex-wrap items-center gap-1"
-                >
-                  <span className="mr-2 text-sm font-medium">{selected.size} selected</span>
-                  <BulkButton
-                    disabled={busy}
-                    icon={MailOpen}
-                    label="Mark read"
-                    onClick={() => run("read", chosen)}
-                  />
-                  <BulkButton
-                    disabled={busy}
-                    icon={Mail}
-                    label="Mark unread"
-                    onClick={() => run("unread", chosen)}
-                  />
-                  {state === "archived" ? (
-                    <BulkButton
-                      disabled={busy}
-                      icon={ArchiveRestore}
-                      label="Unarchive"
-                      onClick={() => run("unarchive", chosen)}
-                    />
-                  ) : (
-                    <BulkButton
-                      disabled={busy}
-                      icon={Archive}
-                      label="Archive"
-                      onClick={() => run("archive", chosen)}
-                    />
-                  )}
-                  <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-                    Clear
-                  </Button>
-                </div>
+                <BulkButton icon={Archive} label="Archive" onClick={() => run("archive", chosen)} />
               )}
-            </div>
+            </SelectionBar>
             {groupByDay(items).map((g) => (
               <section key={g.label} aria-label={g.label} className="flex flex-col gap-1.5">
                 <h2 className="px-1 text-xs font-semibold tracking-wide text-muted uppercase">
@@ -413,13 +430,18 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                       <InboxRow
                         key={it.id}
                         item={it}
-                        focused={idx === focus}
+                        focused={cursor && idx === focus}
                         selected={selected.has(it.id)}
+                        selecting={selected.size > 0}
                         active={it.id === opened?.id}
                         arrived={arrived.has(it.id)}
                         onToggle={() => toggle(it.id)}
                         onOpen={() => open(it)}
-                        onFocus={() => setFocus(idx)}
+                        onFocus={() => {
+                          setFocus(idx);
+                          setCursor(true);
+                        }}
+                        onAction={(a) => run(a, [it.id])}
                       />
                     );
                   })}
@@ -437,9 +459,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
               </Button>
             )}
           </div>
-          {opened && wide && (
-            <InboxPanel item={opened} busy={busy} onClose={close} onAction={actOnOpened} />
-          )}
+          {opened && wide && <InboxPanel item={opened} onClose={close} onAction={actOnOpened} />}
         </div>
       )}
       {/* Narrow screens: a modal dialog, which traps focus and gives it back on close. */}
@@ -451,7 +471,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
       >
         {opened && !wide && (
           <>
-            <DetailBody item={opened} busy={busy} onAction={actOnOpened} />
+            <DetailBody item={opened} onAction={actOnOpened} />
             <DialogActions>
               <Button variant="ghost" ref={closeRef} onClick={close}>
                 Close
@@ -468,15 +488,13 @@ function BulkButton({
   icon: Icon,
   label,
   onClick,
-  disabled,
 }: {
   icon: LucideIcon;
   label: string;
   onClick: () => void;
-  disabled: boolean;
 }) {
   return (
-    <Button variant="ghost" size="sm" disabled={disabled} onClick={onClick}>
+    <Button variant="ghost" size="sm" onClick={onClick}>
       <Icon aria-hidden />
       {label}
     </Button>
@@ -487,20 +505,24 @@ function InboxRow({
   item,
   focused,
   selected,
+  selecting,
   active,
   arrived,
   onToggle,
   onOpen,
   onFocus,
+  onAction,
 }: {
   item: InboxItem;
   focused: boolean;
   selected: boolean;
+  selecting: boolean;
   active: boolean;
   arrived: boolean;
   onToggle: () => void;
   onOpen: () => void;
   onFocus: () => void;
+  onAction: (a: InboxAction) => void;
 }) {
   const s = summarizeEvent(item.event);
   const unread = !item.read_at;
@@ -510,7 +532,7 @@ function InboxRow({
       data-unread={unread}
       data-focused={focused}
       className={cn(
-        "flex items-center gap-3 border-b border-line px-3 py-2.5 last:border-0",
+        "group relative flex items-center gap-3 border-b border-line px-3 py-2.5 last:border-0",
         unread ? "bg-surface" : "bg-bg/40",
         selected && "bg-beacon-soft/50",
         active && "bg-beacon-soft",
@@ -518,13 +540,15 @@ function InboxRow({
         arrived && "animate-arrive",
       )}
     >
-      <input
-        type="checkbox"
-        aria-label={`Select: ${s.text}`}
-        checked={selected}
-        onChange={onToggle}
-        className="size-4 shrink-0 accent-beacon"
-      />
+      <SelectTile
+        label={s.text}
+        selected={selected}
+        selecting={selecting}
+        onToggle={onToggle}
+        className="size-9"
+      >
+        <KindIcon kind={item.watch.kind} className="size-9" />
+      </SelectTile>
       <button
         id={rowId(item.id)}
         type="button"
@@ -533,7 +557,6 @@ function InboxRow({
         aria-current={active || undefined}
         className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-offset-4"
       >
-        <KindIcon kind={item.watch.kind} className="size-9" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span
             className={cn(
@@ -564,6 +587,31 @@ function InboxRow({
           className={cn("size-2 shrink-0 rounded-full", unread ? "bg-beacon" : "bg-transparent")}
         />
       </button>
+      {/* Pinned to the row's right edge: the next row lands under the pointer at the same spot. */}
+      <div
+        role="group"
+        aria-label={`Actions: ${s.text}`}
+        className="absolute top-1/2 right-2 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-line bg-surface p-0.5 shadow-xs group-hover:flex group-has-[:focus-visible]:flex"
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          title={unread ? "Mark as read" : "Mark as unread"}
+          aria-label={unread ? "Mark as read" : "Mark as unread"}
+          onClick={() => onAction(unread ? "read" : "unread")}
+        >
+          {unread ? <MailOpen aria-hidden /> : <Mail aria-hidden />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          title={item.archived_at ? "Unarchive item" : "Archive item"}
+          aria-label={item.archived_at ? "Unarchive item" : "Archive item"}
+          onClick={() => onAction(item.archived_at ? "unarchive" : "archive")}
+        >
+          {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+        </Button>
+      </div>
     </li>
   );
 }
@@ -588,12 +636,10 @@ const isEmptyList = (v: unknown) => Array.isArray(v) && v.length === 0;
 
 function InboxPanel({
   item,
-  busy,
   onClose,
   onAction,
 }: {
   item: InboxItem;
-  busy: boolean;
   onClose: () => void;
   onAction: (a: InboxAction) => void;
 }) {
@@ -614,7 +660,7 @@ function InboxPanel({
           <X aria-hidden />
         </Button>
       </div>
-      <DetailBody item={item} busy={busy} onAction={onAction} />
+      <DetailBody item={item} onAction={onAction} />
     </aside>
   );
 }
@@ -638,15 +684,7 @@ function DetailHeader({ item }: { item: InboxItem }) {
   );
 }
 
-function DetailBody({
-  item,
-  busy,
-  onAction,
-}: {
-  item: InboxItem;
-  busy: boolean;
-  onAction: (a: InboxAction) => void;
-}) {
+function DetailBody({ item, onAction }: { item: InboxItem; onAction: (a: InboxAction) => void }) {
   const s = summarizeEvent(item.event);
   const rows = payloadRows(item.event.payload);
   const notes = item.event.payload.body;
@@ -705,17 +743,12 @@ function DetailBody({
             </a>
           </Button>
         )}
-        <Button
-          variant="outline"
-          disabled={busy}
-          onClick={() => onAction(item.read_at ? "unread" : "read")}
-        >
+        <Button variant="outline" onClick={() => onAction(item.read_at ? "unread" : "read")}>
           {item.read_at ? <Mail aria-hidden /> : <MailOpen aria-hidden />}
           {item.read_at ? "Mark unread" : "Mark read"}
         </Button>
         <Button
           variant="outline"
-          disabled={busy}
           onClick={() => onAction(item.archived_at ? "unarchive" : "archive")}
         >
           {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}

@@ -61,7 +61,7 @@ var rows = []row{
 	{name: "list_deliveries", op: "list-deliveries", scope: scopeRead, readOnly: true, limitMax: 50, shape: dropDeliveryDiagnostics,
 		desc: "List notification deliveries, newest first, without script logs or errors."},
 	{name: "mark_inbox_read", op: "read-inbox", scope: scopeWrite, desc: "Mark inbox items read. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
-	{name: "mark_inbox_unread", op: "unread-inbox", scope: scopeWrite, desc: "Mark inbox items unread. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "mark_inbox_unread", op: "unread-inbox", scope: scopeWrite, desc: "Mark inbox items unread, taking archived ones out of the archive. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
 	{name: "archive_inbox", op: "archive-inbox", scope: scopeWrite, desc: "Archive inbox items. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
 	{name: "unarchive_inbox", op: "unarchive-inbox", scope: scopeWrite, desc: "Take inbox items out of the archive. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
 	{name: "run_watch", op: "run-watch", scope: scopeWrite, openWorld: true, limited: true,

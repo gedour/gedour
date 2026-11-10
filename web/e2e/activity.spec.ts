@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import type { Page } from "@playwright/test";
+
 import { addDevice, api, expect, setFixture, TALK_SECRET, test, UPSTREAM } from "./fixtures";
 
 // Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
@@ -7,6 +9,18 @@ test.describe.configure({ mode: "serial" });
 
 const MAILPIT = process.env.E2E_MAILPIT_URL ?? "http://127.0.0.1:18026";
 const tag = () => `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+
+/** Selects every inbox row: one row's tile, then the bar's Select all. */
+async function selectAll(page: Page) {
+  await page
+    .getByRole("checkbox", { name: /^Select: / })
+    .first()
+    .click();
+  await page
+    .getByRole("toolbar", { name: "Bulk actions" })
+    .getByRole("button", { name: /^Select all / })
+    .click();
+}
 
 // 001-AC7, 001-AC8, 001-AC12: the worker records a baseline, then after the upstream changes and
 // "Run now", the timeline shows exactly the fixture's events.
@@ -227,11 +241,11 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
     .toEqual([`${watch.name}: v2.103.3 published`, `${watch.name}: v2.105.0 published`]);
 
   // 001-AC20: bulk read, then bulk archive.
-  await page.getByRole("checkbox", { name: "Select all" }).check();
+  await selectAll(page);
   await page.getByRole("button", { name: "Mark read" }).click();
   await expect(page.getByRole("link", { name: /^Inbox, \d+ unread$/ })).toHaveCount(0);
   await expect(page.getByTestId("unread-badge")).toHaveCount(0);
-  await page.getByRole("checkbox", { name: "Select all" }).check();
+  await selectAll(page);
   await page.getByRole("button", { name: "Archive", exact: true }).click();
   await expect(page.getByRole("region", { name: "Nothing to read yet" })).toBeVisible();
   await page.getByRole("button", { name: "Archived" }).click();

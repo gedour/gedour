@@ -4316,6 +4316,7 @@
     },
     "/api/v1/inbox/unread": {
       "post": {
+        "description": "Archived items also leave the archive.",
         "operationId": "unread-inbox",
         "requestBody": {
           "content": {

@@ -88,18 +88,19 @@ func (s *Service) registerInbox(api huma.API) {
 		}
 		return out, nil
 	})
-	for _, op := range []struct{ name, set string }{
-		{"read", "read_at = now()"},
-		{"unread", "read_at = NULL"},
-		{"archive", "archived_at = now()"},
-		{"unarchive", "archived_at = NULL"},
+	for _, op := range []struct{ name, set, desc string }{
+		{"read", "read_at = now()", ""},
+		// Unread means back in the queue: an archived item comes out of the archive.
+		{"unread", "read_at = NULL, archived_at = NULL", "Archived items also leave the archive."},
+		{"archive", "archived_at = now()", ""},
+		{"unarchive", "archived_at = NULL", ""},
 	} {
 		// Only rows whose state changes: updated counts real changes, and times of the first read stay.
-		cond := map[string]string{"read": "read_at IS NULL", "unread": "read_at IS NOT NULL",
+		cond := map[string]string{"read": "read_at IS NULL", "unread": "(read_at IS NOT NULL OR archived_at IS NOT NULL)",
 			"archive": "archived_at IS NULL", "unarchive": "archived_at IS NOT NULL"}[op.name]
 		huma.Register(api, huma.Operation{
 			OperationID: op.name + "-inbox", Method: http.MethodPost, Path: "/api/v1/inbox/" + op.name,
-			Summary: "Mark the caller's items " + op.name, Tags: tags,
+			Summary: "Mark the caller's items " + op.name, Description: op.desc, Tags: tags,
 		}, func(ctx context.Context, in *bulkInput) (*bulkOutput, error) {
 			return s.bulk(ctx, op.name, op.set, cond, in.Body.IDs)
 		})

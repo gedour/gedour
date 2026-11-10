@@ -110,6 +110,11 @@ describe("InboxPage", () => {
     renderApp("/inbox");
     await screen.findByText("v3.0.0 published");
     const focused = () => rows().findIndex((r) => r.dataset.focused === "true");
+    // No cursor until one is asked for: a shortcut never acts on a row nobody picked.
+    expect(focused()).toBe(-1);
+    await userEvent.keyboard("e");
+    expect(srv.items().every((i) => !i.archived_at)).toBe(true);
+    await userEvent.keyboard("j");
     expect(focused()).toBe(0);
     await userEvent.keyboard("j");
     expect(focused()).toBe(1);
@@ -150,11 +155,12 @@ describe("InboxPage", () => {
     const srv = inboxServer([inboxItem(3), inboxItem(2), inboxItem(1)]);
     renderApp("/inbox");
     await screen.findByText("v3.0.0 published");
-    const all = screen.getByRole("checkbox", { name: "Select all" });
-    await userEvent.click(all);
-    expect(screen.getByRole("toolbar")).toHaveTextContent("3 selected");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: v3.0.0 published" }));
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    await userEvent.click(within(bar).getByRole("button", { name: "Select all 3" }));
+    expect(bar).toHaveTextContent("3 selected");
     await userEvent.click(screen.getByRole("checkbox", { name: "Select: v1.0.0 published" }));
-    expect(all).toHaveProperty("indeterminate", true);
+    expect(within(bar).getByRole("button", { name: "Select all 3" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
     await waitFor(() =>
       expect(lastCall(srv.fn, "/api/v1/inbox/read", "POST")?.body).toEqual({ ids: [3, 2] }),
@@ -174,7 +180,8 @@ describe("InboxPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Archived" }));
     await screen.findByText("v3.0.0 published");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: v3.0.0 published" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Select all/ }));
     await userEvent.click(screen.getByRole("button", { name: "Unarchive" }));
     await waitFor(() => expect(srv.items().every((i) => !i.archived_at)).toBe(true));
   });
@@ -208,9 +215,9 @@ describe("InboxPage", () => {
     await waitFor(() => expect(srv.items()[0]?.read_at).toBeNull());
     await userEvent.click(within(panel).getByRole("button", { name: "Archive" }));
     await waitFor(() => expect(srv.items()[0]?.archived_at).not.toBeNull());
-    expect(
-      screen.queryByRole("complementary", { name: "v1.0.0 published" }),
-    ).not.toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Close details" }));
+    await waitFor(() => expect(rows()).toHaveLength(0));
   });
 
   // 004-AC7: the ids as one row; the notes behind a closed disclosure, never as a row.
@@ -324,7 +331,7 @@ describe("InboxPage", () => {
     });
     renderApp("/inbox");
     await screen.findByText("v1.0.0 published");
-    await userEvent.keyboard("u");
+    await userEvent.keyboard("ju");
     expect(await screen.findByText(/Could not update the inbox/)).toBeInTheDocument();
   });
 
@@ -491,7 +498,7 @@ describe("InboxPage", () => {
     });
     const { router } = renderApp("/inbox");
     expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
-    await userEvent.keyboard("e");
+    await userEvent.keyboard("je");
     await waitFor(() => expect(archive).toHaveBeenCalled());
     await act(() => router.navigate("/inbox?event=1"));
     expect(
@@ -560,16 +567,24 @@ describe("InboxPage", () => {
   it("keeps the opened item in the Unread tab", async () => {
     const srv = inboxServer([inboxItem(2), inboxItem(1)]);
     renderApp("/inbox?state=unread");
-    await userEvent.click(await screen.findByRole("button", { name: /v2\.0\.0 published/ }));
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /v2\.0\.0 published/ })).not.toBeInTheDocument(),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: /v1\.0\.0 published/ }));
+    await waitFor(() => expect(srv.items().find((i) => i.id === 1)?.read_at).not.toBeNull());
+    // Read, refetched without it, the oldest row still holds its place while its panel shows.
+    await waitFor(() => expect(lastCall(srv.fn, "/api/v1/inbox", "GET")).toBeDefined());
+    expect(rows().map((r) => r.dataset.unread)).toEqual(["true", "false"]);
+    await userEvent.click(screen.getByRole("button", { name: /v2\.0\.0 published/ }));
+    await waitFor(() => expect(srv.items().find((i) => i.id === 2)?.read_at).not.toBeNull());
+    // Another item opened: the first one leaves.
+    await waitFor(() => expect(rows()).toHaveLength(1));
     const panel = screen.getByRole("complementary", { name: "v2.0.0 published" });
-    expect(srv.items().find((i) => i.id === 2)?.read_at).not.toBeNull();
+    expect(rows()[0]?.dataset.unread).toBe("false");
     await userEvent.click(within(panel).getByRole("button", { name: "Mark unread" }));
     await waitFor(() => expect(srv.items().find((i) => i.id === 2)?.read_at).toBeNull());
     expect(within(panel).getByRole("button", { name: "Mark read" })).toBeInTheDocument();
+    expect(rows()[0]?.dataset.unread).toBe("true");
+    await userEvent.click(screen.getByRole("button", { name: "Close details" }));
     expect(await screen.findByRole("button", { name: /v2\.0\.0 published/ })).toBeInTheDocument();
+    expect(screen.queryByText("v1.0.0 published")).not.toBeInTheDocument();
   });
 
   // Below lg the detail is a modal dialog: focus moves into it and goes back to the row on close.
@@ -599,7 +614,7 @@ describe("InboxPage", () => {
     await userEvent.click(
       await screen.findByRole("checkbox", { name: "Select: v2.0.0 published" }),
     );
-    await userEvent.keyboard("j");
+    await userEvent.keyboard("jj");
     expect(rows()[1]?.dataset.focused).toBe("true");
     for (const host of [
       Object.assign(document.createElement("div"), { role: "menu" }),
@@ -615,18 +630,41 @@ describe("InboxPage", () => {
     expect(srv.items().every((i) => !i.archived_at)).toBe(true);
   });
 
-  it("disables actions while one is pending", async () => {
-    let release: (r: Response) => void = () => {};
+  // The row's own actions: in the Unread tab a read row leaves at once, so the next one comes under
+  // the same button, even before the server answers.
+  it("repeats a row action in place", async () => {
+    const releases: ((r: Response) => void)[] = [];
+    const read = vi.fn(() => new Promise<Response>((r) => releases.push(r)));
+    mockApi({
+      "/api/v1/inbox": { items: [inboxItem(3), inboxItem(2), inboxItem(1)] },
+      "/api/v1/inbox/read": read,
+    });
+    renderApp("/inbox?state=unread");
+    const quick = (text: string, name: string) =>
+      within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });
+    await screen.findByText("v3.0.0 published");
+    await userEvent.click(quick("v3.0.0 published", "Mark as read"));
+    await userEvent.click(quick("v2.0.0 published", "Mark as read"));
+    expect(rows()).toHaveLength(1);
+    expect(read).toHaveBeenCalledTimes(2);
+    for (const r of releases) act(() => r(Response.json({ updated: 1, unread: 1 })));
+    await waitFor(() => expect(rows()).toHaveLength(3));
+  });
+
+  // Even while another action is still out.
+  it("brings a row back when its action fails", async () => {
     mockApi({
       "/api/v1/inbox": { items: [inboxItem(2), inboxItem(1)] },
-      "/api/v1/inbox/read": () => new Promise<Response>((r) => (release = r)),
+      "/api/v1/inbox/read": pending,
+      "/api/v1/inbox/archive": () => new Response(null, { status: 500 }),
     });
     renderApp("/inbox");
-    await userEvent.click(await screen.findByRole("checkbox", { name: "Select all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
-    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Mark unread" })).toBeDisabled();
-    act(() => release(Response.json({ updated: 2, unread: 0 })));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Archive" })).toBeEnabled());
+    await screen.findByText("v2.0.0 published");
+    const quick = (text: string, name: string) =>
+      within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });
+    await userEvent.click(quick("v1.0.0 published", "Mark as read"));
+    await userEvent.click(quick("v2.0.0 published", "Archive item"));
+    expect(await screen.findByText(/Could not update the inbox/)).toBeInTheDocument();
+    expect(rows()).toHaveLength(2);
   });
 });

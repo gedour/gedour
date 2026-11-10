@@ -192,26 +192,26 @@ describe("WatchesPage", () => {
     });
     renderApp("/watches");
     // 009-AC10: every tile is selectable.
-    expect(await screen.findByRole("button", { name: "Select: C" })).toBeEnabled();
+    expect(await screen.findByRole("checkbox", { name: "Select: C" })).toBeEnabled();
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Select: B" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: B" }));
     let bar = screen.getByRole("toolbar", { name: "Bulk actions" });
     expect(bar).toHaveTextContent("1 selected");
     await userEvent.click(within(bar).getByRole("button", { name: "Select all 3" }));
-    expect(screen.getByRole("button", { name: "Select: A" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("checkbox", { name: "Select: A" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Select: C" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("checkbox", { name: "Select: C" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
     expect(bar).toHaveTextContent("3 selected");
     expect(within(bar).getByRole("button", { name: "Select none" })).toBeInTheDocument();
     await userEvent.click(within(bar).getByRole("button", { name: "Clear" }));
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Select: A" }));
-    await userEvent.click(screen.getByRole("button", { name: "Select: B" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: A" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: B" }));
     bar = screen.getByRole("toolbar", { name: "Bulk actions" });
 
     await userEvent.click(within(bar).getByRole("button", { name: "Delete" }));
@@ -233,7 +233,7 @@ describe("WatchesPage", () => {
   it("names everything the delete removes", async () => {
     mockApi({ "/api/v1/watches": { items: [watch()] } });
     renderApp("/watches");
-    await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select: Go releases" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 watch?" });
     expect(dialog).toHaveTextContent(
@@ -254,7 +254,7 @@ describe("WatchesPage", () => {
       "/api/v1/watches/b": () => new Response(null, { status: 204 }),
     });
     renderApp("/watches");
-    await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select: A" }));
     const search = screen.getByRole("searchbox", { name: "Search" });
     const hideA = async () => {
       await userEvent.type(search, "b");
@@ -262,12 +262,12 @@ describe("WatchesPage", () => {
     };
     await hideA();
     await userEvent.clear(search);
-    expect(await screen.findByRole("button", { name: "Select: A" })).toHaveAttribute(
-      "aria-pressed",
+    expect(await screen.findByRole("checkbox", { name: "Select: A" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
     await hideA();
-    await userEvent.click(screen.getByRole("button", { name: "Select: B" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select: B" }));
     const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
     expect(bar).toHaveTextContent("1 selected");
     expect(within(bar).getByRole("button", { name: "Select none" })).toBeInTheDocument();
@@ -287,7 +287,7 @@ describe("WatchesPage", () => {
       "/api/v1/watches/w1": pending,
     });
     renderApp("/watches");
-    await userEvent.click(await screen.findByRole("button", { name: "Select: Go releases" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select: Go releases" }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
@@ -310,7 +310,7 @@ describe("WatchesPage", () => {
         "/api/v1/watches/b": () => new Response(null, { status: 204 }),
       });
       renderApp("/watches");
-      await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+      await userEvent.click(await screen.findByRole("checkbox", { name: "Select: A" }));
       await userEvent.click(screen.getByRole("button", { name: "Select all 2" }));
       return screen.getByRole("toolbar", { name: "Bulk actions" });
     };
@@ -344,7 +344,7 @@ describe("WatchesPage", () => {
           }),
       });
       renderApp("/watches");
-      await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
+      await userEvent.click(await screen.findByRole("checkbox", { name: "Select: A" }));
       const search = screen.getByRole("searchbox", { name: "Search" });
       await userEvent.type(search, "x");
       await waitFor(() => expect(screen.queryByRole("toolbar")).not.toBeInTheDocument());
@@ -354,7 +354,7 @@ describe("WatchesPage", () => {
     it("the page does not take the focus on load", async () => {
       mockApi({ "/api/v1/watches": { items: [watch()] } });
       renderApp("/watches");
-      await screen.findByRole("button", { name: "Select: Go releases" });
+      await screen.findByRole("checkbox", { name: "Select: Go releases" });
       expect(document.body).toHaveFocus();
     });
   });
@@ -366,23 +366,23 @@ describe("WatchesPage", () => {
       "/api/v1/watches/b": () => problem(403, "nope"),
     });
     renderApp("/watches");
-    await userEvent.click(await screen.findByRole("button", { name: "Select: A" }));
-    const b = screen.getByRole("button", { name: "Select: B" });
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select: A" }));
+    const b = screen.getByRole("checkbox", { name: "Select: B" });
     await userEvent.click(b);
     await userEvent.click(b);
-    expect(b).toHaveAttribute("aria-pressed", "false");
+    expect(b).toHaveAttribute("aria-checked", "false");
     await userEvent.click(b);
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await userEvent.click(
       within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }),
     );
     expect(await screen.findByText("Could not delete 1 of 2: nope")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Select: A" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("checkbox", { name: "Select: A" })).toHaveAttribute(
+      "aria-checked",
       "false",
     );
-    expect(screen.getByRole("button", { name: "Select: B" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("checkbox", { name: "Select: B" })).toHaveAttribute(
+      "aria-checked",
       "true",
     );
   });

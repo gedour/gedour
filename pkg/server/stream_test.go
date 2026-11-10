@@ -17,6 +17,7 @@ import (
 	"github.com/gedour/gedour/pkg/auth"
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/route"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 type replica struct {
@@ -122,7 +123,7 @@ func TestInboxStreamAcrossReplicas(t *testing.T) {
 
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{"tag":"v1"}', 'k')`, w.ID)
 	start := time.Now()
-	if n, err := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second).RouteOnce(context.Background()); err != nil || n != 1 {
+	if n, err := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("router", time.Second, nil, nil)).RouteOnce(context.Background()); err != nil || n != 1 {
 		t.Fatalf("route: %d %v", n, err)
 	}
 	if ev := next(t, events, "inbox", 2*time.Second); ev.data != `{"unread":1}` {

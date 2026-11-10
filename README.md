@@ -64,7 +64,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 | `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
 | `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`), a webhook, a Nextcloud Talk URL or a script fetch may reach over plain http; others need https |
 | `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry or a Nextcloud on a private network; also opens webhook targets |
-| `GEDOUR_WORKER_POLL` | `2s` | How often an idle worker looks for due watches |
+| `GEDOUR_WORKER_POLL` | `60s` | Safety poll: how long a worker loop sleeps at most without a notification or a due time |
 | `GEDOUR_WORKER_CONCURRENCY` | `8` | Runs (and deliveries) one worker process executes at once |
 | `GEDOUR_TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram Bot API base URL |
 | `GEDOUR_SMTP_ADDR` | | `host:port` of the SMTP server; email channels are disabled without it |
@@ -279,6 +279,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 
 ## Collection
 
+- The worker role's three loops (watch runs, routing, deliveries) sleep until the next watch or delivery falls
+  due or a write wakes them: triggers on `watches`, `events` and `deliveries` send `NOTIFY gedour_work` at commit,
+  and each worker process holds one `LISTEN` connection (reconnected with backoff, 1 s to 30 s). A wake waits a
+  random 0 to 250 ms, two passes of a loop are at least 1 s apart, and a failed pass retries after 1 s doubling to
+  `GEDOUR_WORKER_POLL`, the safety poll that also catches notifications lost while the connection was down. The
+  jitter is at most a quarter of `GEDOUR_WORKER_POLL`, and the 1 s at most `GEDOUR_WORKER_POLL`, when it is shorter.
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Watches of a disabled owner are not claimed, and `gedour_watches_due` leaves them out.
@@ -350,7 +356,9 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   redirects included; a redirect to another host drops `Authorization`, `PRIVATE-TOKEN` and `Referer`. Environment
   proxies are ignored. `GEDOUR_ALLOW_PRIVATE_NETS` opens chosen ranges.
 - Metrics: `gedour_collector_runs_total{kind,status}`, `gedour_collector_run_duration_seconds{kind}`,
-  `gedour_events_total{kind,type}`, `gedour_watches_due`.
+  `gedour_events_total{kind,type}`, `gedour_watches_due` (due watches left unclaimed at the end of the watch loop's last pass: no free slot, or row locked by another transaction),
+  `gedour_worker_wakeups_total{loop,reason}` (`loop`: `watches`, `router`, `deliveries`; `reason`: `deadline`,
+  `notify` (a database notification or a freed slot), `poll`, `retry`).
 
 ## Routing and channels
 
@@ -476,7 +484,7 @@ Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throt
   other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.
 - Nextcloud throttles every bot of an IP after repeated 401s. A 401 pauses that channel for 30 minutes or until
   it is edited: its deliveries wait without using an attempt. One Talk request per channel runs at a time, about
-  one message per `GEDOUR_WORKER_POLL`. "Send test" and a manual retry of the refused delivery stay direct.
+  one message per second. "Send test" and a manual retry of the refused delivery stay direct.
   A repair made only on the Nextcloud side can wait up to 30 minutes unless the channel is edited.
 - Nextcloud 32 or later is required for this to hold: it answers 429 past 10 failures in 30 minutes, and it takes
   11 broken channels on one IP to get there. Older servers slow bot posts past gedour's timeout at 7 failures in
@@ -743,7 +751,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `rate_limited`), `last_error`, `consecutive_failures`.
 - `GET /api/v1/watches/{id}/events?cursor=&limit=`: events, newest first. `GET /api/v1/watches/{id}/states?limit=`:
   state history, latest first. `POST /api/v1/watches/{id}/run` (409 when paused):
-  runs at the next poll. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
+  runs at once: the change wakes a worker. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
   watch the caller owns and answers `{scheduled}`.
 - Watches are private to their owner: another user's watch answers 404 on every watch route, as an unknown one does.
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses

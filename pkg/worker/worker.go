@@ -22,6 +22,7 @@ import (
 	"github.com/gedour/gedour/pkg/collect"
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/secret"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/watch"
 )
 
@@ -46,6 +47,9 @@ type Options struct {
 	UserAgent    string
 	HTTPHosts    []string
 	RunTimeout   time.Duration // defaults to RunTimeout
+	// Wake signals a change to the watches (nil: none, the poll only); Wakeups counts the passes (nil: not counted).
+	Wake    <-chan struct{}
+	Wakeups *wake.Metrics
 }
 
 // Worker claims and runs due watches.
@@ -57,6 +61,7 @@ type Worker struct {
 	collectors map[string]collect.Collector
 	metrics    *Metrics
 	opts       Options
+	loop       *wake.Loop
 	// now and jitter are swapped by tests for a controllable clock and exact intervals.
 	now    func() time.Time
 	jitter func() float64
@@ -72,7 +77,8 @@ func New(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, client *http.Clie
 		return nil, fmt.Errorf("worker run timeout %s exceeds the lease %s minus the finish time %s", o.RunTimeout, Lease, finishTimeout)
 	}
 	return &Worker{pool: pool, log: log, box: box, client: client, collectors: collectors, metrics: m, opts: o,
-		now: time.Now, jitter: func() float64 { return rand.Float64()*2 - 1 }}, nil //nolint:gosec // jitter, not a secret
+		loop: wake.NewLoop("watches", o.Poll, o.Wake, o.Wakeups),
+		now:  time.Now, jitter: func() float64 { return rand.Float64()*2 - 1 }}, nil //nolint:gosec // jitter, not a secret
 }
 
 type job struct {
@@ -83,30 +89,36 @@ type job struct {
 	due   time.Time
 }
 
-// Run polls until ctx ends, then stops claiming and lets in-flight runs finish within DrainTimeout;
-// runs still going after that are cancelled and their claims released.
+// Run claims due watches until ctx ends, sleeping in between until the next is due or a change wakes it,
+// then stops claiming and lets in-flight runs finish within DrainTimeout; runs still going after that are
+// cancelled and their claims released.
 func (w *Worker) Run(ctx context.Context) {
 	hard, stopHard := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopHard()
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, w.opts.Concurrency)
-	tick := time.NewTicker(w.opts.Poll)
-	defer tick.Stop()
 	w.log.Info("worker_started", zap.Int("concurrency", w.opts.Concurrency), zap.Duration("poll", w.opts.Poll))
 	for ctx.Err() == nil {
-		w.updateDue(ctx)
+		var err error
 		for ctx.Err() == nil {
-			n, err := w.dispatch(ctx, hard, sem, &wg)
-			if err != nil && ctx.Err() == nil {
-				w.log.Error("worker_claim_failed", zap.Error(err))
-			}
-			if err != nil || n == 0 {
+			var n int
+			if n, err = w.dispatch(ctx, hard, sem, &wg); err != nil || n == 0 {
 				break
 			}
 		}
-		select {
-		case <-ctx.Done():
-		case <-tick.C:
+		var next time.Time
+		if err == nil {
+			next, err = w.deadline(ctx)
+		}
+		// No slot free: a due watch cannot be claimed before a run ends, and its end kicks the loop.
+		if len(sem) == cap(sem) {
+			next = time.Time{}
+		}
+		if err != nil && ctx.Err() == nil {
+			w.log.Error("worker_claim_failed", zap.Error(err))
+		}
+		if !w.loop.Wait(ctx, next, err != nil) {
+			break
 		}
 	}
 	done := make(chan struct{})
@@ -134,7 +146,7 @@ func (w *Worker) dispatch(ctx, hard context.Context, sem chan struct{}, wg *sync
 	for _, j := range jobs {
 		sem <- struct{}{}
 		wg.Go(func() {
-			defer func() { <-sem }()
+			defer func() { <-sem; w.loop.Kick() }()
 			w.run(hard, j)
 		})
 	}
@@ -172,11 +184,20 @@ func (w *Worker) claim(ctx context.Context, n int) ([]job, error) {
 	return jobs, nil
 }
 
-func (w *Worker) updateDue(ctx context.Context) {
+// deadline sets the due gauge and returns when the next claimable watch falls due (zero: none), over the
+// claim's predicates. It is read as an offset from the claim's clock, so the wait is right on the local one.
+func (w *Worker) deadline(ctx context.Context) (time.Time, error) {
 	var n int
-	if err := w.pool.QueryRow(ctx, `SELECT count(*) FROM watches WHERE NOT paused AND next_run_at <= $1 AND `+leaseFree+` AND `+ownerEnabled, w.now()).Scan(&n); err == nil {
-		w.metrics.due.Set(float64(n))
+	var in *float64
+	if err := w.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE next_run_at <= $1), EXTRACT(EPOCH FROM min(next_run_at) - $1)::float8
+		FROM watches WHERE NOT paused AND `+leaseFree+` AND `+ownerEnabled, w.now()).Scan(&n, &in); err != nil {
+		return time.Time{}, fmt.Errorf("next due watch: %w", err)
 	}
+	w.metrics.due.Set(float64(n))
+	if in == nil {
+		return time.Time{}, nil
+	}
+	return time.Now().Add(time.Duration(*in * float64(time.Second))), nil
 }
 
 // run executes one claimed watch and records its outcome; it never returns an error, it logs it.
@@ -223,7 +244,7 @@ func (w *Worker) run(hard context.Context, j job) {
 	log.Debug("watch_run_done", zap.Int("events", len(events)), hosts, zap.Duration("took", time.Since(start)))
 }
 
-// release hands an unfinished claim back; next_run_at is still due, so the next poll, on any replica, runs it.
+// release hands an unfinished claim back; next_run_at is still due, so the next pass, on any replica, runs it.
 func (w *Worker) release(log *zap.Logger, j job) {
 	ctx, cancel := context.WithTimeout(context.Background(), finishTimeout)
 	defer cancel()

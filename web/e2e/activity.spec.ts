@@ -49,7 +49,7 @@ test("the worker turns upstream changes into timeline events", async ({ page }) 
       semver_only: true,
     },
   });
-  // Both baselines in: the worker polls every 500 ms in e2e.
+  // Both baselines in: a new watch wakes the worker; the 500 ms safety poll backs it up.
   for (const id of [releases, tags]) {
     await expect
       .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {

@@ -21,6 +21,7 @@ import (
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/notify/webpush"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 // pushEnv is a fake push service whose /push/flaky answers 500 while failing is set.
@@ -59,7 +60,7 @@ func pushSender(t *testing.T) *notify.Sender {
 
 func (p *pushEnv) deliverer(t *testing.T) *Deliverer {
 	t.Helper()
-	return NewDeliverer(p.pool, zap.NewNop(), p.box, pushSender(t), nil, p.m, 10*time.Millisecond, 4, time.Second)
+	return NewDeliverer(p.pool, zap.NewNop(), p.box, pushSender(t), nil, p.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 }
 
 // device registers a subscription to the fake service at /push/<id>; auth zeros make it undecryptable (400).
@@ -285,7 +286,7 @@ func TestPushRefused(t *testing.T) {
 	p.device(t, alice, "bad", true)
 	p.rule(t, alice, nil, "", p.channel(t, alice, false))
 	core, logs := observer.New(zap.DebugLevel)
-	d := NewDeliverer(p.pool, zap.New(core), p.box, pushSender(t), nil, p.m, 10*time.Millisecond, 4, time.Second)
+	d := NewDeliverer(p.pool, zap.New(core), p.box, pushSender(t), nil, p.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 	id := p.deliver(t, d, w, "v1")
 	if got := p.delivery(t, id); got.status != "sent" || !strings.HasPrefix(deref(got.lastErr), "1 of 2 devices refused") || !strings.Contains(deref(got.lastErr), "HTTP 400") {
 		t.Fatalf("partly refused: %+v %v", got, deref(got.lastErr))
@@ -553,7 +554,7 @@ func TestPushDrainKeepsPartlySent(t *testing.T) {
 	defer cancel()
 	sender := pushSender(t)
 	sender.Client = &http.Client{Transport: cancelAt{sender.Client.Transport, new(atomic.Int32), 2, cancel}, CheckRedirect: sender.Client.CheckRedirect}
-	d := NewDeliverer(p.pool, zap.NewNop(), p.box, sender, nil, p.m, 10*time.Millisecond, 4, time.Second)
+	d := NewDeliverer(p.pool, zap.NewNop(), p.box, sender, nil, p.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 	if _, err := d.DeliverOnce(stop); err != nil {
 		t.Fatal(err)
 	}

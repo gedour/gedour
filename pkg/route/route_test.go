@@ -26,6 +26,7 @@ import (
 	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/testpg"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 func TestMain(m *testing.M) {
@@ -127,7 +128,7 @@ func (e *env) webhook(t *testing.T, owner, url string) string {
 }
 
 func (e *env) router() *Router {
-	return NewRouter(e.pool, zap.NewNop(), e.m, 10*time.Millisecond)
+	return NewRouter(e.pool, zap.NewNop(), e.m, wake.NewLoop("router", 10*time.Millisecond, nil, nil))
 }
 
 func routeAll(t *testing.T, r *Router) {
@@ -251,7 +252,7 @@ func TestRoutingExactlyOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	var routed atomic.Int64
 	for range 2 {
-		r := NewRouter(connect(t, e.url), zap.NewNop(), e.m, time.Millisecond)
+		r := NewRouter(connect(t, e.url), zap.NewNop(), e.m, wake.NewLoop("router", time.Millisecond, nil, nil))
 		wg.Go(func() {
 			for {
 				n, err := r.RouteOnce(context.Background())
@@ -276,7 +277,7 @@ func (e *env) deliverer(t *testing.T) *Deliverer {
 	t.Helper()
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
 	s := &notify.Sender{Client: g.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: []string{"127.0.0.1"}, NoRedirects: true}), UserAgent: "gedour/test"}
-	return NewDeliverer(e.pool, zap.NewNop(), e.box, s, testRunner(t, s.Client, g), e.m, 10*time.Millisecond, 4, time.Second)
+	return NewDeliverer(e.pool, zap.NewNop(), e.box, s, testRunner(t, s.Client, g), e.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 }
 
 // testRunner starts this test binary as the sandbox (TestMain hands it to script.MaybeSandbox).
@@ -706,6 +707,7 @@ func TestDeliverySlowDoesNotBlock(t *testing.T) {
 }
 
 // On stop, a hanging send gets the drain time, then is cancelled; the claim goes back, not an attempt.
+// 015-AC13: the loop is asleep on its 60 s safety poll meanwhile.
 func TestDeliveryDrain(t *testing.T) {
 	e := newEnv(t)
 	alice := e.user(t, "alice")
@@ -724,6 +726,7 @@ func TestDeliveryDrain(t *testing.T) {
 	routeAll(t, e.router())
 	d := e.deliverer(t)
 	d.drain = 200 * time.Millisecond
+	d.loop = wake.NewLoop("deliveries", time.Minute, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { d.Run(ctx); close(done) }()
@@ -776,7 +779,7 @@ func TestRouteOnceRetryDropsStaleCount(t *testing.T) {
 	e.scalar(t, &ev, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id`, w)
 	retries := testpg.AllowDeadlockRetries(t)
 	release := testpg.ForceDeadlockOnce(t, e.pool, "events")
-	r := NewRouter(e.pool, zap.NewNop(), e.m, time.Hour)
+	r := NewRouter(e.pool, zap.NewNop(), e.m, wake.NewLoop("router", time.Hour, nil, nil))
 	type result struct {
 		n   int
 		err error

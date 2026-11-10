@@ -15,6 +15,7 @@ import (
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/watch"
 )
 
@@ -28,6 +29,8 @@ const (
 	// talkPause holds a Talk channel after a 401. Nextcloud 32 and later answer 429 to every bot of the
 	// sending IP past 10 failures in 30 min, and a success resets nothing: one failure per channel in any 30 min.
 	talkPause = 30 * time.Minute
+	// talkBusyDelay holds a delivery behind a Talk request in flight: one request per channel at a time.
+	talkBusyDelay = time.Second
 )
 
 const talkPausedError = "held: channel paused after Nextcloud Talk answered HTTP 401; it resumes on its own or when the channel is edited"
@@ -54,15 +57,15 @@ type Deliverer struct {
 	sender      *notify.Sender
 	runner      *script.Runner
 	metrics     *Metrics
-	poll        time.Duration
+	loop        *wake.Loop
 	concurrency int
 	drain       time.Duration
 }
 
-// NewDeliverer builds a delivery loop sending up to concurrency deliveries at once (runner runs the
-// script channels); on stop, sends in flight get drain to finish before they are cancelled.
-func NewDeliverer(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, m *Metrics, poll time.Duration, concurrency int, drain time.Duration) *Deliverer {
-	return &Deliverer{pool: pool, log: log, box: box, sender: sender, runner: runner, metrics: m, poll: poll, concurrency: max(concurrency, 1), drain: drain}
+// NewDeliverer builds a delivery loop paced by loop, sending up to concurrency deliveries at once (runner runs
+// the script channels); on stop, sends in flight get drain to finish before they are cancelled.
+func NewDeliverer(pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, sender *notify.Sender, runner *script.Runner, m *Metrics, loop *wake.Loop, concurrency int, drain time.Duration) *Deliverer {
+	return &Deliverer{pool: pool, log: log, box: box, sender: sender, runner: runner, metrics: m, loop: loop, concurrency: max(concurrency, 1), drain: drain}
 }
 
 type claimed struct {
@@ -75,28 +78,35 @@ type claimed struct {
 	batch []claimed
 }
 
-// Run delivers until ctx ends, claiming as slots free up. Then sends in flight get the drain time to
-// finish; past it they are cancelled and their claims released, attempts unchanged.
+// Run delivers until ctx ends, claiming as slots free up and sleeping until the next delivery is due or a
+// change wakes it. Then sends in flight get the drain time to finish; past it they are cancelled and their
+// claims released, attempts unchanged.
 func (d *Deliverer) Run(ctx context.Context) {
 	hard, stopHard := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopHard()
 	sem := make(chan struct{}, d.concurrency)
 	var wg sync.WaitGroup
-	tick := time.NewTicker(d.poll)
-	defer tick.Stop()
 	for ctx.Err() == nil {
+		var err error
 		for ctx.Err() == nil {
-			n, err := d.dispatch(ctx, hard, sem, &wg)
-			if err != nil && ctx.Err() == nil {
-				d.log.Error("delivery_claim_failed", zap.Error(err))
-			}
-			if err != nil || n == 0 {
+			var n int
+			if n, err = d.dispatch(ctx, hard, sem, &wg); err != nil || n == 0 {
 				break
 			}
 		}
-		select {
-		case <-ctx.Done():
-		case <-tick.C:
+		var next time.Time
+		if err == nil {
+			next, err = d.deadline(ctx)
+		}
+		// No slot free: a due delivery cannot be claimed before a send ends, and its end kicks the loop.
+		if len(sem) == cap(sem) {
+			next = time.Time{}
+		}
+		if err != nil && ctx.Err() == nil {
+			d.log.Error("delivery_claim_failed", zap.Error(err))
+		}
+		if !d.loop.Wait(ctx, next, err != nil) {
+			break
 		}
 	}
 	done := make(chan struct{})
@@ -124,14 +134,28 @@ func (d *Deliverer) dispatch(ctx, hard context.Context, sem chan struct{}, wg *s
 	for _, j := range jobs {
 		sem <- struct{}{}
 		wg.Go(func() {
-			defer func() { <-sem }()
+			defer func() { <-sem; d.loop.Kick() }()
 			d.deliver(hard, j)
 		})
 	}
 	return len(jobs), nil
 }
 
-// DeliverOnce claims up to concurrency due deliveries, sends them and waits for them: one poll, for tests.
+// deadline returns when the next claimable delivery, single or digest, falls due (zero: none), read as an
+// offset from the database clock the claims use.
+func (d *Deliverer) deadline(ctx context.Context) (time.Time, error) {
+	var in *float64
+	if err := d.pool.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM min(next_attempt_at) - now())::float8 FROM deliveries
+		WHERE status IN ('pending', 'failed') AND (leased_until IS NULL OR leased_until <= now())`).Scan(&in); err != nil {
+		return time.Time{}, fmt.Errorf("next due delivery: %w", err)
+	}
+	if in == nil {
+		return time.Time{}, nil
+	}
+	return time.Now().Add(time.Duration(*in * float64(time.Second))), nil
+}
+
+// DeliverOnce claims up to concurrency due deliveries, sends them and waits for them: one pass, for tests.
 func (d *Deliverer) DeliverOnce(ctx context.Context) (int, error) {
 	var wg sync.WaitGroup
 	n, err := d.dispatch(ctx, ctx, make(chan struct{}, d.concurrency), &wg)
@@ -155,7 +179,7 @@ func (d *Deliverer) claim(ctx context.Context, n int) ([]claimed, error) {
 	}
 	digests, err := d.claimDigests(ctx, n-len(jobs), false)
 	if err != nil && len(jobs) > 0 {
-		// The deliveries already leased still go out; the digests wait for the next poll.
+		// The deliveries already leased still go out; the digests wait for the next pass.
 		d.log.Error("delivery_claim_failed", zap.Error(err))
 		return jobs, nil
 	}
@@ -306,7 +330,7 @@ func (d *Deliverer) deliver(stop context.Context, j claimed) {
 	}
 	d.metrics.duration.WithLabelValues(typ).Observe(time.Since(start).Seconds())
 	if drained(err, stop) {
-		// Cut by the shutdown drain, not by the receiver: not an attempt. The next poll, on any
+		// Cut by the shutdown drain, not by the receiver: not an attempt. The next pass, on any
 		// replica, sends it again.
 		d.release(log, []int64{j.id}, j.token)
 		return
@@ -365,8 +389,7 @@ func (d *Deliverer) holdTalk(ctx context.Context, log *zap.Logger, j claimed) bo
 	if !paused && !busy {
 		return false
 	}
-	// Half a poll: due again at the next tick, not the one after.
-	status, lastErr, delay := (*string)(nil), (*string)(nil), d.poll/2
+	status, lastErr, delay := (*string)(nil), (*string)(nil), talkBusyDelay
 	if paused {
 		failed, msg := "failed", talkPausedError
 		status, lastErr, delay = &failed, &msg, Backoff[0]

@@ -34,7 +34,8 @@ describe("AppShell", () => {
       "API keys",
       "Settings",
     ]);
-    expect(await screen.findByText("Nothing to read yet")).toBeInTheDocument();
+    expect(await screen.findByText("You are all caught up")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Set up a rule" })).toHaveAttribute("href", "/rules");
   });
 
   it("navigates and shows the section's empty state", async () => {

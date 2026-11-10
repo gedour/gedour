@@ -111,7 +111,7 @@ interface Received {
 test("a rule routes upstream changes to the inbox and the channels", async ({ page }) => {
   const t = tag();
   await setFixture(page, "a");
-  await page.goto("/inbox");
+  await page.goto("/inbox?state=all");
   const call = await api(page);
   // The counts below take alice's whole inbox, and a retry reruns the serial group: archive what earlier attempts left.
   const left = (await (await call("GET", "/api/v1/inbox?limit=200")).json()).items as {
@@ -245,6 +245,8 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   await page.getByRole("button", { name: "Mark read" }).click();
   await expect(page.getByRole("link", { name: /^Inbox, \d+ unread$/ })).toHaveCount(0);
   await expect(page.getByTestId("unread-badge")).toHaveCount(0);
+  // Read rows left the Unread tab: archive them from All.
+  await page.getByRole("button", { name: "All", exact: true }).click();
   await selectAll(page);
   await page.getByRole("button", { name: "Archive", exact: true }).click();
   await expect(page.getByRole("region", { name: "Nothing to read yet" })).toBeVisible();

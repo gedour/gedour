@@ -219,7 +219,7 @@ for (const [width, height] of [
       await page.setViewportSize({ width, height });
       await longLists(page, acting);
 
-      await page.goto("/inbox");
+      await page.goto("/inbox?state=all");
       await expect(page.locator("#inbox-item-40")).toBeAttached();
       expect(await barBottom(page)).toBe(acting ? 100 : 56);
       // The first j shows the cursor on the first row, 39 more reach the last.

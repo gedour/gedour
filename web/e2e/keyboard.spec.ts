@@ -96,6 +96,10 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await tabTo(page, nav(page, /^Inbox/), true);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+  // The inbox opens on Unread; these rows include read ones.
+  await tabTo(page, page.getByRole("button", { name: "All", exact: true }));
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/state=all/);
   const list = page.getByRole("list", { name: /^Inbox, / });
   const button = page.getByRole("button", { name: /promoted to release/ });
   const item = list.getByRole("listitem").filter({ has: button });
@@ -151,6 +155,10 @@ test("set a rule's priority and filter the inbox, by keyboard only", async ({ pa
   await tabTo(page, nav(page, /^Inbox/), true);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Inbox" })).toBeVisible();
+  // The inbox opens on Unread; these rows include read ones.
+  await tabTo(page, page.getByRole("button", { name: "All", exact: true }));
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/state=all/);
   const filter = page.getByRole("button", { name: "High priority", exact: true });
   await tabTo(page, filter);
   await page.keyboard.press("Enter");

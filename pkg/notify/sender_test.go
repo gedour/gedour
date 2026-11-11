@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gedour/gedour/internal/testupstream"
+	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/netguard"
 )
 
@@ -514,6 +515,45 @@ func TestTalkTextEscapes(t *testing.T) {
 		d.Event.Payload = map[string]any{"tag": "a" + c + "b", "title": "c" + c + "d"}
 		if got := TalkText(Format(d)); strings.Contains(got, "\r") || strings.Count(got, "\n") != 1 {
 			t.Errorf("line break %q: %q", c, got)
+		}
+	}
+}
+
+type deadlineRT struct {
+	mu   sync.Mutex
+	left map[string]time.Duration
+}
+
+func (rt *deadlineRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	dl, _ := r.Context().Deadline()
+	rt.mu.Lock()
+	rt.left[r.URL.Host] = time.Until(dl)
+	rt.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusCreated, Body: io.NopCloser(strings.NewReader("{}")), Request: r}, nil
+}
+
+// A slow Telegram answer must not time out a message it already posted: Telegram waits longer than the rest.
+func TestSendTimeoutPerChannel(t *testing.T) {
+	if TelegramTimeout <= SendTimeout || TelegramTimeout >= config.HTTPWriteTimeout {
+		t.Fatalf("TelegramTimeout %s must sit between SendTimeout %s and HTTPWriteTimeout %s", TelegramTimeout, SendTimeout, config.HTTPWriteTimeout)
+	}
+	rt := &deadlineRT{left: map[string]time.Duration{}}
+	s := &Sender{Client: &http.Client{Transport: rt}, UserAgent: "gedour/test", TelegramURL: "https://tg.test"}
+	tg, _ := json.Marshal(TelegramConfig{ChatID: "-1001"})
+	wh, _ := json.Marshal(WebhookConfig{URL: "https://hook.test/x"})
+	talk, _ := json.Marshal(NextcloudTalkConfig{URL: "https://talk.test", Conversation: "abcd"})
+	for _, ch := range []Channel{
+		{Type: TypeTelegram, Config: tg, Secret: "1:tok"},
+		{Type: TypeWebhook, Config: wh, Secret: "k"},
+		{Type: TypeNextcloudTalk, Config: talk, Secret: "k"},
+	} {
+		if err := s.Send(context.Background(), ch, sample); err != nil {
+			t.Fatalf("%s: %v", ch.Type, err)
+		}
+	}
+	for host, want := range map[string]time.Duration{"tg.test": TelegramTimeout, "hook.test": SendTimeout, "talk.test": SendTimeout} {
+		if got := rt.left[host]; got > want || got < want-time.Second {
+			t.Errorf("%s: deadline in %s, want %s", host, got, want)
 		}
 	}
 }

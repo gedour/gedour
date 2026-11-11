@@ -187,7 +187,8 @@ const vapidContact = "https://github.com/gedour/gedour"
 // newSender builds the channel sender; webhooks, Telegram and Nextcloud Talk go through the guard and follow no redirect.
 func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo) (*notify.Sender, error) {
 	s := &notify.Sender{
-		Client:      guard.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: cfg.AllowHTTPHosts, NoRedirects: true}),
+		// The longest per-send bound: post sets each channel's own.
+		Client:      guard.Client(netguard.Options{Timeout: notify.TelegramTimeout, HTTPHosts: cfg.AllowHTTPHosts, NoRedirects: true}),
 		UserAgent:   "gedour/" + build.Version,
 		TelegramURL: cfg.TelegramAPIURL,
 		HTTPHosts:   cfg.AllowHTTPHosts,

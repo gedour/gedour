@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockApi } from "@/test/api";
 import { setMedia } from "@/test/media";
 import { renderApp } from "@/test/render";
-import { FakeEventSource, inboxItem } from "@/test/routing";
+import { FakeEventSource, inboxItem, rule } from "@/test/routing";
 import { lastCall, pending } from "@/test/watches";
 import type { InboxItem } from "@/types/api";
 
@@ -21,7 +21,7 @@ afterEach(() => {
 const yesterday = () => new Date(Date.now() - 24 * 3600 * 1000).toISOString();
 
 /** A small inbox server: lists by state and applies bulk actions, so the UI's refetches see changes. */
-function inboxServer(initial: InboxItem[]) {
+function inboxServer(initial: InboxItem[], extra: Parameters<typeof mockApi>[0] = {}) {
   let items = initial;
   const unread = () => items.filter((i) => !i.read_at && !i.archived_at).length;
   const act = (patch: (i: InboxItem) => InboxItem) => (_: URL, init?: RequestInit) => {
@@ -43,11 +43,16 @@ function inboxServer(initial: InboxItem[]) {
       );
       return Response.json({ items: list });
     },
-    "/api/v1/inbox/count": () => Response.json({ unread: unread() }),
+    "/api/v1/inbox/count": () =>
+      Response.json({
+        unread: unread(),
+        read: items.filter((i) => i.read_at && !i.archived_at).length,
+      }),
     "/api/v1/inbox/read": act((i) => ({ ...i, read_at: now })),
     "/api/v1/inbox/unread": act((i) => ({ ...i, read_at: null })),
     "/api/v1/inbox/archive": act((i) => ({ ...i, archived_at: now })),
     "/api/v1/inbox/unarchive": act((i) => ({ ...i, archived_at: null })),
+    ...extra,
   });
   return { fn, items: () => items };
 }
@@ -72,6 +77,21 @@ describe("InboxPage", () => {
     expect(within(today).getAllByText(/^Unread:/)).toHaveLength(1);
     expect(await screen.findByRole("link", { name: "Inbox, 2 unread" })).toBeInTheDocument();
     expect(screen.getByTestId("unread-badge")).toHaveTextContent("2");
+  });
+
+  it("offers a rule only while none exists, and counts read items quietly", async () => {
+    inboxServer([inboxItem(2, { read_at: yesterday() }), inboxItem(1, { read_at: yesterday() })], {
+      "/api/v1/rules": { items: [rule()] },
+    });
+    renderApp("/inbox");
+    const empty = await screen.findByRole("region", { name: "You are all caught up" });
+    expect(await within(empty).findByText(/2 read/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Set up a rule" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All", description: "2 read" })).toHaveTextContent(
+      "2",
+    );
+    await userEvent.click(within(empty).getByRole("button", { name: "View all" }));
+    expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
   });
 
   // 001-AC24: loading, empty (per tab) and error states.

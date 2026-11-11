@@ -48,6 +48,7 @@ type listInboxOutput struct {
 type countOutput struct {
 	Body struct {
 		Unread int `json:"unread" doc:"Unread items not archived"`
+		Read   int `json:"read" doc:"Read items not archived"`
 	}
 }
 
@@ -68,6 +69,10 @@ type bulkOutput struct {
 var unreadCount = `SELECT count(*) FROM inbox_items i JOIN events e ON e.id = i.event_id JOIN watches w ON w.id = e.watch_id
 	WHERE i.user_id = $1 AND i.read_at IS NULL AND i.archived_at IS NULL AND ` + watch.ReadableSQL("w", "$1::uuid")
 
+var inboxCounts = `SELECT count(*) FILTER (WHERE i.read_at IS NULL), count(*) FILTER (WHERE i.read_at IS NOT NULL)
+	FROM inbox_items i JOIN events e ON e.id = i.event_id JOIN watches w ON w.id = e.watch_id
+	WHERE i.user_id = $1 AND i.archived_at IS NULL AND ` + watch.ReadableSQL("w", "$1::uuid")
+
 func (s *Service) registerInbox(api huma.API) {
 	tags := []string{"inbox"}
 	huma.Register(api, huma.Operation{
@@ -76,14 +81,14 @@ func (s *Service) registerInbox(api huma.API) {
 	}, s.listInbox)
 	huma.Register(api, huma.Operation{
 		OperationID: "count-inbox", Method: http.MethodGet, Path: "/api/v1/inbox/count",
-		Summary: "Unread items in the caller's inbox", Tags: tags,
+		Summary: "Unread and read items in the caller's inbox, archive excluded", Tags: tags,
 	}, func(ctx context.Context, _ *struct{}) (*countOutput, error) {
 		me, err := s.me(ctx)
 		if err != nil {
 			return nil, err
 		}
 		out := &countOutput{}
-		if err := s.pool.QueryRow(ctx, unreadCount, me).Scan(&out.Body.Unread); err != nil {
+		if err := s.pool.QueryRow(ctx, inboxCounts, me).Scan(&out.Body.Unread, &out.Body.Read); err != nil {
 			return nil, s.fail("count-inbox", err)
 		}
 		return out, nil

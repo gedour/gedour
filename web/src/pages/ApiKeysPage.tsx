@@ -30,7 +30,7 @@ const SCOPES: { scope: ApiKeyScope; label: string; allows: string }[] = [
   {
     scope: "manage",
     label: "Manage",
-    allows: "Also creates and edits watches and rules, and lists channels.",
+    allows: "Also creates and edits watches and rules, and lists channels and credentials.",
   },
 ];
 
@@ -293,8 +293,9 @@ function CreateDialog({ open, onClose }: { open: boolean; onClose: () => void })
           {scope === "manage" && (
             <p className="inline-flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
               <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />A hijacked manage key
-              can silence alerts by disabling a rule or pausing a watch, and route events to your
-              existing channels: give it only to clients that confirm writes with a person.
+              can silence alerts by disabling a rule or pausing a watch, route events to your
+              existing channels, and read your private repositories into the inbox with your
+              credentials: give it only to clients that confirm writes with a person.
             </p>
           )}
           <Field

@@ -82,14 +82,23 @@ func dropDeliveryDiagnostics(data any, _ map[string]any) {
 	}
 }
 
-// briefChannels keeps what a rule needs: config names the target, last4 is part of a secret, and any field added later stays out.
-func briefChannels(data any, _ map[string]any) {
-	for _, it := range items(data) {
-		if item, ok := it.(map[string]any); ok {
-			maps.DeleteFunc(item, func(k string, _ any) bool { return k != "id" && k != "name" && k != "type" })
+// keepFields is a whitelist, so any field added later stays out.
+func keepFields(keep ...string) func(any, map[string]any) {
+	return func(data any, _ map[string]any) {
+		for _, it := range items(data) {
+			if item, ok := it.(map[string]any); ok {
+				maps.DeleteFunc(item, func(k string, _ any) bool { return !slices.Contains(keep, k) })
+			}
 		}
 	}
 }
+
+var (
+	// briefChannels keeps what a rule needs: config names the target, last4 is part of a secret.
+	briefChannels = keepFields("id", "name", "type")
+	// briefCredentials keeps what a watch needs: last4 and username are part of a secret.
+	briefCredentials = keepFields("id", "name", "kind")
+)
 
 // markTruncated says when a listing may have been cut, as this REST operation has no cursor.
 func markTruncated(data any, args map[string]any) {

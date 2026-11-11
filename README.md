@@ -422,7 +422,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   redirects are not followed; 10 s timeout. Same SSRF guard as collectors; a literal private IP is refused
   on save. A signing secret left empty is generated and returned once, in the create response.
 - Telegram: `sendMessage` in HTML mode with the bot token as secret; a Silent channel sends
-  `disable_notification: true`, which notifies without sound. Email: multipart text + HTML through
+  `disable_notification: true`, which notifies without sound. 20 s timeout: Telegram may post a message
+  and answer late, and a retry after a timeout sends it twice. Email: multipart text + HTML through
   the instance's SMTP server, at most 10 recipients per channel.
 - Nextcloud Talk: see [below](#nextcloud-talk-channels).
 - Digest: a rule's `delivery` is `immediate` (default) or `digest`, with `at`, 1 to 24 local times (`HH:MM`),

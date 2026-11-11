@@ -20,6 +20,7 @@ import (
 	"github.com/gedour/gedour/pkg/config"
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/netguard"
+	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/notify/webpush"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/server"
@@ -177,6 +178,10 @@ func TestNewSender(t *testing.T) {
 	s, err := newSender(cfg, guard, server.BuildInfo{Version: "v1"})
 	if err != nil || s.Mailer != nil || s.UserAgent != "gedour/v1" {
 		t.Fatalf("without SMTP: %+v %v", s, err)
+	}
+	// The client bound caps every send: below TelegramTimeout it cuts Telegram's own.
+	if s.Client.Timeout < notify.TelegramTimeout {
+		t.Fatalf("client timeout %s below TelegramTimeout %s", s.Client.Timeout, notify.TelegramTimeout)
 	}
 	for _, tt := range []struct{ role, public, sub string }{
 		{config.RoleWorker, "", vapidContact},

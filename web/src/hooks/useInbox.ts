@@ -1,17 +1,24 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-import { auth, inboxCount } from "@/api/client";
+import { auth, inboxCount, inboxReadCount } from "@/api/client";
 import { useMe } from "@/hooks/useMe";
 import { connectInbox } from "@/lib/inbox";
 import type { Me } from "@/types/api";
 
 export const COUNT_KEY = ["inbox", "count"] as const;
 export const LIST_KEY = ["inbox", "list"] as const;
+// Under LIST_KEY: whatever refreshes the list refreshes the read count.
+export const READ_KEY = [...LIST_KEY, "read"] as const;
 
 /** Unread count for the sidebar badge; the stream keeps it live, the poll covers a stream that is down. */
 export function useInboxCount() {
   return useQuery({ queryKey: COUNT_KEY, queryFn: inboxCount, refetchInterval: 60_000 });
+}
+
+/** Read items outside the archive; the stream carries no read count. */
+export function useInboxReadCount() {
+  return useQuery({ queryKey: READ_KEY, queryFn: inboxReadCount });
 }
 
 /** Holds the inbox stream for the whole shell (001-AC19); any count change, polled or streamed, refetches the list. */

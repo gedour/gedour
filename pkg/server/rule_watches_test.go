@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -271,11 +272,116 @@ func TestTransferKeepsSeveralWatchRule(t *testing.T) {
 	}
 }
 
-// 014-AC10: the preview on [A, B] evaluates the last events of A and B only, however busy C is; watch_id scopes it too.
+// 014-AC8, 014-AC6: a rule keeps a transferred watch through an update that sends its list back, and can drop
+// the kept one; another user's watch it never listed is still refused. Once back, A routes again.
+func TestRuleUpdateKeepsTransferredWatch(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	w := a.watches(t, alice, 2)
+	c := a.watches(t, bob, 1)[0]
+	var r, kept ruleJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "ab", "watch_ids": []string{w[0], w[1]}}, http.StatusCreated, &r)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "kept", "watch_ids": []string{w[0], w[1]}}, http.StatusCreated, &kept)
+	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w[0]+"/transfer", map[string]any{"to_user_id": bob.id}, http.StatusOK, nil)
+
+	var got ruleJSON
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"name": "renamed", "watch_ids": []string{w[0], w[1]}}, http.StatusOK, &got)
+	if got.Name != "renamed" || !slices.Equal(got.WatchIDs, sortedIDs(w[0], w[1])) {
+		t.Fatalf("round trip with the transferred watch: %+v", got)
+	}
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"watch_ids": []string{w[0]}}, http.StatusOK, &got)
+	if !slices.Equal(got.WatchIDs, []string{w[0]}) {
+		t.Fatalf("keeping the transferred watch alone: %+v", got)
+	}
+	p := a.problemOf(t, alice, http.MethodPatch, "/api/v1/rules/"+kept.ID, map[string]any{"watch_ids": []string{w[0], w[1], c}}, http.StatusBadRequest)
+	if len(p.Errors) != 1 || p.Errors[0].Location != "body.watch_ids[2]" {
+		t.Fatalf("adding bob's watch: %+v", p)
+	}
+	// A watch the rule dropped is a new one again: it must be owned to come back.
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+kept.ID, map[string]any{"watch_ids": []string{w[1]}}, http.StatusOK, nil)
+	a.problemOf(t, alice, http.MethodPatch, "/api/v1/rules/"+kept.ID, map[string]any{"watch_ids": []string{w[0], w[1]}}, http.StatusBadRequest)
+
+	a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w[0]+"/transfer", map[string]any{"to_user_id": alice.id}, http.StatusOK, nil)
+	if !a.routedTo(t, alice, w[0]) {
+		t.Error("the kept rule did not route the watch once back")
+	}
+}
+
+// 014-AC12: alice edits her rule on [A, B], sending A back though A moved to bob, while bob deletes A. Edit first:
+// it keeps A, then the delete takes A out of the rule. Delete first: the edit no longer finds A listed, so
+// sending it is a 400. Either way no deadlock (testpg fails on an unallowed retry) and no row on a deleted watch.
+func TestRuleEditKeepingTransferredWatchRacingDelete(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob, admin := a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "admin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	ctx := context.Background()
+	for _, editFirst := range []bool{true, false} {
+		// A func per case: its deferred rollback frees a held lock when a check fails, or the waiters hang to the go test timeout.
+		func() {
+			w := a.watches(t, alice, 2)
+			var r ruleJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "race " + strconv.FormatBool(editFirst), "watch_ids": w}, http.StatusCreated, &r)
+			a.mustCall(t, admin, http.MethodPost, "/api/v1/admin/watches/"+w[0]+"/transfer", map[string]any{"to_user_id": bob.id}, http.StatusOK, nil)
+			hold, err := a.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = hold.Rollback(ctx) }()
+			var edited, deleted <-chan int
+			body := map[string]any{"name": "edited", "watch_ids": w}
+			if editFirst {
+				// The edit holds the rule and waits on A; the delete then waits on the rule.
+				if _, err := hold.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR UPDATE`, w[0]); err != nil {
+					t.Fatal(err)
+				}
+				edited = a.callAsync(alice, http.MethodPatch, "/api/v1/rules/"+r.ID, body)
+				a.waitQueryLocked(t, "%FOR KEY SHARE OF w")
+				deleted = a.callAsync(bob, http.MethodDelete, "/api/v1/watches/"+w[0], nil)
+				a.waitQueryLocked(t, "SELECT 1 FROM rules WHERE id IN (SELECT rule_id FROM rule_watches%")
+			} else {
+				// The delete holds the rule and waits on A; the edit then waits on the rule.
+				if _, err := hold.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w[0]); err != nil {
+					t.Fatal(err)
+				}
+				deleted = a.callAsync(bob, http.MethodDelete, "/api/v1/watches/"+w[0], nil)
+				a.waitQueryLocked(t, "%FROM watches w%FOR UPDATE OF w")
+				edited = a.callAsync(alice, http.MethodPatch, "/api/v1/rules/"+r.ID, body)
+				a.waitQueryLocked(t, "%FROM rules WHERE id = $1 AND owner_id%")
+			}
+			if err := hold.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+			wantEdit := http.StatusOK
+			if !editFirst {
+				wantEdit = http.StatusBadRequest
+			}
+			if code := <-edited; code != wantEdit {
+				t.Fatalf("edit first %v: edit %d, want %d", editFirst, code, wantEdit)
+			}
+			if code := <-deleted; code != http.StatusNoContent {
+				t.Fatalf("edit first %v: delete %d, want 204", editFirst, code)
+			}
+			var got ruleJSON
+			a.mustCall(t, alice, http.MethodGet, "/api/v1/rules/"+r.ID, nil, http.StatusOK, &got)
+			if !slices.Equal(got.WatchIDs, []string{w[1]}) {
+				t.Fatalf("edit first %v: rule after the race: %+v", editFirst, got)
+			}
+		}()
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM rule_watches rw LEFT JOIN watches x ON x.id = rw.watch_id WHERE x.id IS NULL`); n != 0 {
+		t.Fatalf("%d rule_watches rows on a deleted watch", n)
+	}
+}
+
+// 014-AC10: the preview on [A, B] evaluates the last events of A and B only, however busy C is; watch_id scopes it
+// too. Another user's watch adds no event.
 func TestPreviewOnSeveralWatches(t *testing.T) {
 	a := newDevApp(t)
-	alice := a.signIn(t, "alice")
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
 	w := a.watches(t, alice, 3)
+	bw := a.watches(t, bob, 1)[0]
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'bob')`, bw)
 	for _, x := range []struct {
 		watch string
 		n     int
@@ -289,6 +395,8 @@ func TestPreviewOnSeveralWatches(t *testing.T) {
 		{map[string]any{"filter": "", "watch_ids": []string{w[1], w[0]}}, map[string]int{w[0]: 2, w[1]: 3}},
 		{map[string]any{"filter": "", "watch_id": w[0]}, map[string]int{w[0]: 2}},
 		{map[string]any{"filter": "", "watch_ids": []string{}}, map[string]int{w[2]: 20}},
+		// Bob's watch is no 400: a rule may keep a transferred watch, and it adds no event.
+		{map[string]any{"filter": "", "watch_ids": []string{w[0], bw}}, map[string]int{w[0]: 2}},
 	} {
 		var pv previewJSON
 		a.mustCall(t, alice, http.MethodPost, "/api/v1/rules/preview", tt.body, http.StatusOK, &pv)

@@ -86,6 +86,16 @@
       "enabled": true,
       "credentials": [{ "type": "password", "value": "dave", "temporary": false }],
       "clientRoles": { "gedour": ["gedour-user"] }
+    },
+    {
+      "username": "erin",
+      "email": "erin@example.test",
+      "emailVerified": true,
+      "firstName": "Erin",
+      "lastName": "Fleet",
+      "enabled": true,
+      "credentials": [{ "type": "password", "value": "erin", "temporary": false }],
+      "clientRoles": { "gedour": ["gedour-user"] }
     }
   ],
   "roles": {

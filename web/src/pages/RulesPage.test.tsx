@@ -24,13 +24,13 @@ describe("RulesPage", () => {
       rule({
         id: "r2",
         name: "Tags",
-        watch_id: "w1",
-        watch_name: "Postgres tags",
+        watch_ids: ["w1"],
+        watches: [{ id: "w1", name: "Postgres tags" }],
         filter: "",
         channel_ids: [],
         enabled: false,
       }),
-      rule({ id: "r3", name: "Lost", watch_id: "w9", watch_name: null }),
+      rule({ id: "r3", name: "Lost", watch_ids: ["w9"], watches: [{ id: "w9", name: null }] }),
     ];
     const fn = mockApi({
       "/api/v1/rules": { items: rules },
@@ -57,6 +57,67 @@ describe("RulesPage", () => {
     await userEvent.click(sw);
     expect(lastCall(fn, "/api/v1/rules/r2", "PATCH")?.body).toEqual({ enabled: true });
     expect(await screen.findByText("Tags enabled")).toBeInTheDocument();
+  });
+
+  // 014-AC19: all watches, the one name, two names, or the first two and a "+N" button opening every name.
+  it("names the watches a rule covers", async () => {
+    mockApi({
+      "/api/v1/rules": {
+        items: [
+          rule({ id: "r1", name: "All", watch_ids: null, watches: null }),
+          rule({ id: "r2", name: "One", watch_ids: ["w0"], watches: [{ id: "w0", name: "Go" }] }),
+          rule({
+            id: "r3",
+            name: "Two",
+            watch_ids: ["w0", "w9"],
+            watches: [
+              { id: "w0", name: "Go" },
+              { id: "w9", name: null },
+            ],
+          }),
+          rule({
+            id: "r4",
+            name: "Four",
+            watch_ids: ["w0", "w1", "w2", "w3"],
+            // In id order: the label sorts them by name, the lost one last.
+            watches: ["Redis", null, "Postgres", "Go"].map((name, i) => ({ id: `w${i}`, name })),
+          }),
+        ],
+      },
+    });
+    renderApp("/rules");
+    const list = await screen.findByRole("list", { name: "Rules" });
+    const items = within(list)
+      .getAllByRole("listitem")
+      .filter((li) => li.parentElement === list);
+    expect(items.map((li) => li.querySelector("p")?.firstElementChild?.textContent)).toEqual([
+      "All watches",
+      "Go",
+      "Go, A watch you no longer own",
+      "Go, Postgres+2",
+    ]);
+    // "+2" opens every name, focus in the list; Escape closes it and hands focus back.
+    const more = within(items[3] as HTMLElement).getByRole("button", {
+      name: "Show all 4 watches",
+    });
+    expect(more).toHaveTextContent("+2");
+    await userEvent.click(more);
+    const dialog = await screen.findByRole("dialog", { name: "Watches of Four" });
+    expect(
+      within(dialog)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Go", "Postgres", "Redis", "A watch you no longer own"]);
+    expect(within(dialog).getByRole("list")).toHaveFocus();
+    expect(within(dialog).getByRole("list")).toHaveClass("overflow-y-auto");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(more).toHaveFocus();
+    // An outside click closes it too.
+    await userEvent.click(more);
+    await screen.findByRole("dialog", { name: "Watches of Four" });
+    await userEvent.click(list);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   // 005-AC7: a high rule says so in the list, by text; a normal one shows nothing.
@@ -142,7 +203,7 @@ describe("RuleFormPage", () => {
   it("tests the filter against recent events", async () => {
     const fn = mockApi({
       "/api/v1/watches": {
-        // 009-AC10: every watch of the caller is an option, a paused one too.
+        // 009-AC10: every watch of the caller can be picked, a paused one too.
         items: [watch(), watch({ id: "w2", name: "Postgres", paused: true })],
       },
       "/api/v1/rules/preview": {
@@ -154,10 +215,14 @@ describe("RuleFormPage", () => {
       },
     });
     renderApp("/rules/new");
-    await screen.findByRole("option", { name: "Postgres" });
+    await userEvent.click(await screen.findByRole("radio", { name: /^Selected watches/ }));
+    const pick = await screen.findByRole("list", { name: "Watches to pick" });
+    expect(within(pick).getByRole("checkbox", { name: /^Postgres/ })).toHaveAccessibleName(
+      /Paused$/,
+    );
     // 009-AC10: the rule form names no share.
     expect(document.body).not.toHaveTextContent(/shar/i);
-    await userEvent.selectOptions(screen.getByLabelText("Watches"), "w1");
+    await userEvent.click(within(pick).getByRole("checkbox", { name: /^Go releases/ }));
     await userEvent.click(screen.getByRole("button", { name: "Test against last 20 events" }));
     const table = await screen.findByRole("table", { name: "Preview against recent events" });
     const rows = within(table).getAllByRole("row").slice(1);
@@ -175,7 +240,7 @@ describe("RuleFormPage", () => {
     await waitFor(() =>
       expect(lastCall(fn, "/api/v1/rules/preview", "POST")?.body).toEqual({
         filter: "",
-        watch_id: "w1",
+        watch_ids: ["w1"],
       }),
     );
   });
@@ -229,6 +294,7 @@ describe("RuleFormPage", () => {
       enabled: true,
       priority: "normal",
       channel_ids: ["c2"],
+      watch_ids: [],
       delivery: "immediate",
     });
   });
@@ -308,7 +374,9 @@ describe("RuleFormPage", () => {
       "/api/v1/rules/r1": (_: URL, init?: RequestInit) =>
         init?.method === "DELETE"
           ? new Response(null, { status: 204 })
-          : Response.json(rule({ watch_id: "w1" })),
+          : Response.json(
+              rule({ watch_ids: ["w1"], watches: [{ id: "w1", name: "Go releases" }] }),
+            ),
       "/api/v1/watches": { items: [watch()] },
       "/api/v1/channels": { items: [channel()] },
       "/api/v1/rules/preview": { items: [] },
@@ -317,7 +385,15 @@ describe("RuleFormPage", () => {
     expect(await screen.findByRole("heading", { name: "Edit Releases" })).toBeInTheDocument();
     expect(await screen.findByRole("checkbox", { name: /Deploy bot/ })).toBeChecked();
     await userEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
-    await userEvent.selectOptions(screen.getByLabelText("Watches"), "");
+    // 014-AC13: the rule opens on its scope, its watch picked.
+    expect(screen.getByRole("radio", { name: /^Selected watches/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Remove Go releases" })).toBeInTheDocument();
+    expect(
+      within(await screen.findByRole("list", { name: "Watches to pick" })).getByRole("checkbox", {
+        name: /^Go releases/,
+      }),
+    ).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: /^All watches/ }));
     await userEvent.click(screen.getByRole("button", { name: "Save rule" }));
     await waitFor(() =>
       expect(lastCall(fn, "/api/v1/rules/r1", "PATCH")?.body).toEqual({
@@ -326,8 +402,8 @@ describe("RuleFormPage", () => {
         enabled: false,
         priority: "normal",
         channel_ids: ["c1"],
+        watch_ids: [],
         delivery: "immediate",
-        watch_id: "",
       }),
     );
     await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));

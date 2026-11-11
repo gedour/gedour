@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clock, Play, Plus, Search, Trash2 } from "lucide-react";
-import { createContext, use, useEffect, useId, useRef, useState, type Ref } from "react";
+import { Clock, Play, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { Link } from "react-router";
 
 import { deleteWatch, listWatches, runAllWatches } from "@/api/client";
@@ -9,40 +9,22 @@ import { ErrorState } from "@/components/ErrorState";
 import { SelectionBar, SelectTile } from "@/components/Selection";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
-import { inputClass } from "@/components/ui/field";
-import { DeleteWatchWarning, KindIcon, PausedBadge, StatusDot } from "@/components/WatchBits";
+import {
+  DeleteWatchWarning,
+  Highlight,
+  KindIcon,
+  PausedBadge,
+  SearchTerm,
+  StatusDot,
+  WatchSearchFields,
+} from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { problemText } from "@/lib/problems";
-import { describeSchedule, KINDS, targetSummary } from "@/lib/watchKinds";
+import { describeSchedule, targetSummary } from "@/lib/watchKinds";
 import { nextRunLabel } from "@/lib/watchStatus";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
 import type { Watch, WatchKind } from "@/types/api";
-
-// The search term, marked in the name and target a row shows. The server also matches the whole
-// config, so a row can match with no mark.
-const SearchTerm = createContext("");
-
-function Highlight({ text }: { text: string }) {
-  const term = use(SearchTerm).toLowerCase();
-  if (!term) return text;
-  const lower = text.toLowerCase();
-  // Some characters change length when lowercased (İ): offsets would no longer line up.
-  if (lower.length !== text.length) return text;
-  const parts = [];
-  let at = 0;
-  for (let i = lower.indexOf(term); i !== -1; i = lower.indexOf(term, at)) {
-    parts.push(
-      text.slice(at, i),
-      <mark key={i} className="rounded-sm bg-beacon-soft text-ink ring-1 ring-beacon/40">
-        {text.slice(i, i + term.length)}
-      </mark>,
-    );
-    at = i + term.length;
-  }
-  parts.push(text.slice(at));
-  return parts;
-}
 
 export function NewWatchButton({ ref }: { ref?: Ref<HTMLAnchorElement> }) {
   return (
@@ -159,7 +141,6 @@ export function WatchesPage({ item }: { item: NavItem }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<WatchKind | "">("");
-  const ids = { q: useId(), kind: useId() };
   const filters = { q: q.trim() || undefined, kind: kind || undefined };
   const filtered = Boolean(filters.q || filters.kind);
   const query = useQuery({
@@ -215,43 +196,7 @@ export function WatchesPage({ item }: { item: NavItem }) {
           className="flex flex-wrap items-end gap-3"
           onSubmit={(e) => e.preventDefault()}
         >
-          <div className="flex min-w-56 flex-1 flex-col gap-1 sm:max-w-80">
-            <label htmlFor={ids.q} className="text-xs font-medium text-muted">
-              Search
-            </label>
-            <div className="relative">
-              <Search
-                aria-hidden
-                className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted"
-              />
-              <input
-                id={ids.q}
-                type="search"
-                value={q}
-                placeholder="Name, repository, image…"
-                onChange={(e) => setQ(e.target.value)}
-                className={cn(inputClass, "pl-8")}
-              />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={ids.kind} className="text-xs font-medium text-muted">
-              Kind
-            </label>
-            <select
-              id={ids.kind}
-              value={kind}
-              onChange={(e) => setKind(e.target.value as WatchKind | "")}
-              className={cn(inputClass, "w-auto pr-8")}
-            >
-              <option value="">All kinds</option>
-              {KINDS.map((k) => (
-                <option key={k.kind} value={k.kind}>
-                  {k.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <WatchSearchFields q={q} setQ={setQ} kind={kind} setKind={setKind} />
         </form>
 
         {query.isError && !query.data ? (

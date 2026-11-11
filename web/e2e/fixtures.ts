@@ -6,6 +6,8 @@ export const BOB = { username: "bob", password: "bob", name: "Bob Builder" };
 export const CAROL = { username: "carol", password: "carol", name: "Carol Nora" };
 /** Disposable: admin.spec.ts purges it, so no other spec may sign in as dave. */
 export const DAVE = { username: "dave", password: "dave", name: "Dave Purged" };
+/** Holds the 2000 watches of rule-picker.spec.ts, kept out of alice's and bob's lists. */
+export const ERIN = { username: "erin", password: "erin", name: "Erin Fleet" };
 
 // Every test fails on a CSP violation on our origin (the provider's pages carry their own policy).
 // Collected on the Node side so reloads and navigations cannot wipe them; the console listener is a
@@ -91,6 +93,18 @@ export async function api(page: Page) {
 /** Switches the fake upstream's global fixture set; only seed.setup.ts and activity.spec.ts may. */
 export async function setFixture(page: Page, set: "a" | "b") {
   expect((await page.request.post(`${UPSTREAM}/_fixture/${set}`)).status()).toBe(204);
+}
+
+/** Picks one watch by name in the rule form's watch picker, "Selected watches" on. */
+export async function pickWatch(page: Page, name: string) {
+  await page.getByRole("radio", { name: /^Selected watches/ }).check();
+  await page.getByRole("searchbox", { name: "Search" }).fill(name);
+  // The checkbox's name is the watch's name, then its target.
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await page
+    .getByRole("list", { name: "Watches to pick" })
+    .getByRole("checkbox", { name: new RegExp(`^${escaped} `) })
+    .check();
 }
 
 /** Enters a rule filter until its preview reads "Valid filter"; a retry adds parentheses, so it is a new query, not a cached 429. */

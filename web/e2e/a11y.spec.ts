@@ -96,6 +96,18 @@ for (const theme of ["light", "dark"] as const) {
           await expect(page.getByText(/2 to 3 more requests/)).toBeVisible();
         }
         found[path] = await violations(page);
+        // 014-AC18: the watch picker open, a watch picked and the search term marked.
+        if (path === "/rules/new") {
+          await page.getByRole("radio", { name: /^Selected watches/ }).check();
+          await page.getByRole("searchbox", { name: "Search" }).fill("seeded");
+          const box = page
+            .getByRole("list", { name: "Watches to pick" })
+            .getByRole("checkbox", { name: new RegExp(`^${SEED.watch} `) });
+          await box.check();
+          await expect(page.getByRole("button", { name: `Remove ${SEED.watch}` })).toBeVisible();
+          await expect(box.locator("xpath=..").locator("mark").first()).toBeVisible();
+          found[`${path} picker`] = await violations(page);
+        }
         // 011-AC17: the github_discussion form too.
         if (path === "/watches/new") {
           await page
@@ -109,6 +121,7 @@ for (const theme of ["light", "dark"] as const) {
       expect(found).toEqual({
         ...Object.fromEntries(views.map(([p]) => [p, []])),
         "/watches/new github_discussion": [],
+        "/rules/new picker": [],
       });
     });
 

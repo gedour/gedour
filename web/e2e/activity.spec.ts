@@ -2,7 +2,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 import type { Page } from "@playwright/test";
 
-import { addDevice, api, expect, setFixture, TALK_SECRET, test, UPSTREAM } from "./fixtures";
+import {
+  addDevice,
+  api,
+  expect,
+  pickWatch,
+  setFixture,
+  TALK_SECRET,
+  test,
+  UPSTREAM,
+} from "./fixtures";
 
 // Both tests switch the fake upstream's fixture set, a global: they must not run side by side.
 test.describe.configure({ mode: "serial" });
@@ -164,7 +173,7 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   // 001-AC13: a syntax error is shown with its position before anything is saved.
   await page.goto("/rules/new");
   await page.getByLabel("Name").fill(`Releases ${t}`);
-  await page.getByLabel("Watches").selectOption({ label: watch.name });
+  await pickWatch(page, watch.name);
   const expression = page.getByLabel("Expression");
   await expression.fill('event.type == "release.published" &&');
   await expect(page.getByRole("alert")).toContainText("(line 1, column");

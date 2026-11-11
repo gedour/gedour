@@ -21,7 +21,7 @@ export function SamplePicker({
 }) {
   const recent = useQuery({
     queryKey: ["script-samples"],
-    queryFn: () => previewRule("", ""),
+    queryFn: () => previewRule("", []),
     staleTime: 60_000,
     retry: false,
   });

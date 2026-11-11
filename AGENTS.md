@@ -42,8 +42,9 @@
   even when granted (`push.spec.ts`, which also stubs `PushManager.subscribe` to point at the fake push service).
 - Clear-text SMTP (`GEDOUR_SMTP_TLS=none`) is opened by `GEDOUR_SMTP_PLAIN_NETS`, never by
   `GEDOUR_ALLOW_PRIVATE_NETS` (that one also opens webhook and Nextcloud Talk targets).
-- Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project signs alice and
-  bob in from the gate (`signInFromGate`) and stores their sessions in `web/playwright/.auth/`.
+- Playwright specs import `test` from `e2e/fixtures.ts` (CSP guard); the `setup` project signs alice,
+  bob and erin in from the gate (`signInFromGate`) and stores their sessions in `web/playwright/.auth/`.
+  Erin belongs to `rule-picker.spec.ts` (2000 paused watches): no other spec signs in as erin.
 
 ## Go tests without a frontend build
 

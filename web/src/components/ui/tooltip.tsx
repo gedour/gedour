@@ -22,7 +22,7 @@ export function Tooltip({
         <Primitive.Content
           side={side}
           sideOffset={8}
-          className="z-50 rounded-md bg-ink px-2 py-1 text-xs font-medium text-bg"
+          className="z-50 max-w-[min(24rem,var(--radix-tooltip-content-available-width))] rounded-md bg-ink px-2 py-1 text-xs font-medium break-words text-bg"
         >
           {label}
         </Primitive.Content>

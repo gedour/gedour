@@ -1,7 +1,17 @@
 import type { Page } from "@playwright/test";
 
 import { BOB_AUTH_FILE } from "./auth-file";
-import { addDevice, api, enterFilter, expect, gate, SEED, test, UPSTREAM } from "./fixtures";
+import {
+  addDevice,
+  api,
+  enterFilter,
+  expect,
+  gate,
+  pickWatch,
+  SEED,
+  test,
+  UPSTREAM,
+} from "./fixtures";
 
 test.use({ storageState: BOB_AUTH_FILE, viewport: { width: 375, height: 812 }, hasTouch: true });
 
@@ -271,6 +281,47 @@ test("drawer, create watch and inbox dialog at 375 px", async ({ page }) => {
 });
 
 // 001-AC26: the rule form and the script editor are usable at 375 px.
+// 014-AC19: a tap on "+N" opens every name of a rule's scope, long ones wrapped within 375 px.
+test("the rules list's scope list opens by tap and fits 375 px", async ({ page }) => {
+  const t = tag();
+  await page.goto("/rules");
+  const call = await api(page);
+  const ids: string[] = [];
+  try {
+    for (let i = 0; i < 4; i++) {
+      const res = await call("POST", "/api/v1/watches", {
+        name: `Scope ${t} ${i} ${"long".repeat(12)}`,
+        kind: "github_repo",
+        paused: true,
+        config: { repo: `tip/repo-${i}`, api_url: UPSTREAM },
+      });
+      expect(res.status()).toBe(201);
+      ids.push(((await res.json()) as { id: string }).id);
+    }
+    const name = `Scope rule ${t}`;
+    expect((await call("POST", "/api/v1/rules", { name, watch_ids: ids })).status()).toBe(201);
+    await page.reload();
+    const more = page
+      .getByRole("listitem")
+      .filter({ hasText: name })
+      .getByRole("button", { name: "Show all 4 watches" });
+    await more.tap();
+    const dialog = page.getByRole("dialog", { name: `Watches of ${name}` });
+    await expect(dialog.getByRole("listitem")).toHaveCount(4);
+    await expect(dialog).toContainText(`Scope ${t} 3`);
+    const box = await dialog.boundingBox();
+    expect(box?.x).toBeGreaterThanOrEqual(0);
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(375);
+    await expectNoHorizontalScroll(page);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(more).toBeFocused();
+  } finally {
+    // The rule goes with its last watch.
+    for (const id of ids) expect((await call("DELETE", `/api/v1/watches/${id}`)).ok()).toBe(true);
+  }
+});
+
 test("rule form and script editor at 375 px", async ({ page }) => {
   const t = tag();
   await page.goto("/channels");
@@ -294,7 +345,9 @@ test("rule form and script editor at 375 px", async ({ page }) => {
   await expect(page.getByRole("checkbox", { name: new RegExp(`Long${t}`) })).toBeVisible();
   await expectNoHorizontalScroll(page);
   await page.getByLabel("Name").fill(`Mobile rule ${t}`);
-  await page.getByLabel("Watches").selectOption({ label: SEED.watch });
+  await pickWatch(page, SEED.watch);
+  // 014-AC17: the picker, a chip and its list too.
+  await expectNoHorizontalScroll(page);
   await enterFilter(page, 'event.type == "release.published"', (text) =>
     page.getByLabel("Expression").fill(text),
   );

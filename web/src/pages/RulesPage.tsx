@@ -8,8 +8,10 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { PriorityBadge } from "@/components/PriorityBadge";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/toast";
 import { digestSummary } from "@/lib/channels";
+import { LOST_WATCH } from "@/lib/watchPicks";
 import { problemText } from "@/lib/problems";
 import { cn } from "@/lib/utils";
 import type { NavItem } from "@/nav";
@@ -40,8 +42,8 @@ export function RulesPage({ item }: { item: NavItem }) {
         <div className="flex flex-col gap-2">
           <h1 className="font-display text-3xl font-semibold tracking-tight">{item.label}</h1>
           <p className="max-w-prose text-muted">
-            A rule lets the changes of a watch (or of all of them) through a filter, into your inbox
-            and the channels you pick.
+            A rule lets the changes of the watches you pick (or of all of them) through a filter,
+            into your inbox and the channels you pick.
           </p>
         </div>
         <NewRuleButton />
@@ -78,6 +80,43 @@ export function RulesPage({ item }: { item: NavItem }) {
   );
 }
 
+/** 014-AC19: all watches, the one watch, or the first two and "+N", which opens every name. */
+function Scope({ rule }: { rule: Rule }) {
+  const names = (rule.watches ?? [])
+    .map((w) => w.name)
+    // By name, lost watches last: the two shown do not depend on the ids.
+    .sort((a, b) => (a === b ? 0 : a === null ? 1 : b === null ? -1 : a.localeCompare(b)))
+    .map((n) => n ?? LOST_WATCH);
+  if (names.length === 0) return <span>All watches</span>;
+  if (names.length <= 2) return <span>{names.join(", ")}</span>;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <span className="min-w-0 break-words">{names.slice(0, 2).join(", ")}</span>
+      {/* A popover, not a tooltip: a tap opens it, and its list scrolls by keyboard. */}
+      <Popover>
+        <PopoverTrigger
+          aria-label={`Show all ${names.length} watches`}
+          className="rounded px-1 font-medium text-ink underline-offset-4 hover:underline"
+        >
+          +{names.length - 2}
+        </PopoverTrigger>
+        <PopoverContent align="start" aria-label={`Watches of ${rule.name}`}>
+          <ul
+            tabIndex={0}
+            className="max-h-[min(16rem,var(--radix-popover-content-available-height))] overflow-y-auto rounded-md px-2 py-1 text-xs break-words"
+          >
+            {names.map((n, i) => (
+              <li key={i} className="py-0.5">
+                {n}
+              </li>
+            ))}
+          </ul>
+        </PopoverContent>
+      </Popover>
+    </span>
+  );
+}
+
 function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel> }) {
   const client = useQueryClient();
   const toast = useToast();
@@ -107,9 +146,7 @@ function RuleRow({ rule, channels }: { rule: Rule; channels: Map<string, Channel
         {rule.priority === "high" && <PriorityBadge />}
         {digest && <span className="text-xs text-muted">{digest}</span>}
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-          <span>
-            {rule.watch_id ? (rule.watch_name ?? "A watch you no longer own") : "All watches"}
-          </span>
+          <Scope rule={rule} />
           <span aria-hidden>·</span>
           <code className="max-w-md truncate rounded bg-bg px-1.5 py-px font-mono text-ink">
             {rule.filter || "every event"}

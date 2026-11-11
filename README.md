@@ -26,7 +26,7 @@ docker compose --profile oidc up --build   # adds Keycloak on :8081 and gedour w
 
 <http://localhost:8082> signs in through Keycloak's test realm (`deploy/keycloak/realm.json`): `alice`/`alice`
 (admin), `bob`/`bob` (user), `carol`/`carol` (no role, refused), `dave`/`dave` (user; the e2e suite
-purges it).
+purges it), `erin`/`erin` (user; the e2e suite gives it 2000 watches).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -152,8 +152,9 @@ The compose realm (`deploy/keycloak/realm.json`) is set up this way.
   (a transfer back restores routing).
   Audited as `watch.transfer` (owners, credential; never the secret).
 - Purge (disabled accounts only): one transaction deletes the account's watches, channels, rules,
-  scripts, credentials, API keys and inbox, and blanks its email and name. It also deletes the rules other
-  users still hold on its watches after a transfer; the confirmation lists them. The account row stays
+  scripts, credentials, API keys and inbox, and blanks its email and name. It also takes its watches out of
+  the rules other users still hold on them after a transfer, and deletes those left with no watch; the
+  confirmation lists them. The account row stays
   as "purged", with its provider subject, so the same person stays refused at sign-in. The audit log is
   append-only and untouched: entries written before the purge (such as the account's creation) keep
   what they recorded. Audited as `user.purge` with the deleted counts, never the email or name.
@@ -242,7 +243,7 @@ Or per project, in `.mcp.json`, with the key in an environment variable:
 | `list_channels` | Your channels: ID, name and type, nothing else | `manage` key |
 | `create_watch` | Creates a watch without a credential | `manage` key; shared budget; refused past 200 owned watches |
 | `update_watch` | Changes a watch's name, config, schedule or paused state | `manage` key; shared budget |
-| `create_rule`, `update_rule` | Create or change a routing rule, with the same checks as the UI | `manage` key; shared budget; at most 100 rules |
+| `create_rule`, `update_rule` | Create or change a routing rule, with the same checks as the UI; `watch_ids` as in the API | `manage` key; shared budget; at most 100 rules |
 
 A key sees what its owner sees through the REST API. A `read` key reaches the first nine rows and gets `-32602` on the
 others. A `write` key also changes inbox state and schedules watch runs, nothing else. A `manage` key reaches every row.
@@ -384,9 +385,11 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `"+1" in event.payload.added && event.payload.added["+1"] >= 5` (the `in` check first: a missing kind fails the
   rule). Previews are limited to 2/s per user (burst 5, per replica). A user holds at most 100
   rules and 50 channels.
+- A rule covers all its owner's watches, new ones too, or a list of 1 to 500 of them. Deleting a watch takes it
+  out of every list; a rule left with none is deleted with it.
 - The worker role routes each new event once (`FOR UPDATE SKIP LOCKED`): every enabled rule of the watch's
-  owner now, on that watch or on all watches, is evaluated; a match adds one inbox item and one delivery
-  per channel. A filter failing on an event counts as no match (`gedour_rule_eval_errors_total`).
+  owner now, listing that watch or covering all watches, is evaluated; a match adds one inbox item and one
+  delivery per channel. A filter failing on an event counts as no match (`gedour_rule_eval_errors_total`).
   A rule's `priority` is `normal` or `high`: an event taken by a high rule of a user is high in that user's
   inbox, with a badge and a "High priority" filter, for example on `len(event.payload.cves) > 0`. The level is
   set once at routing: editing a rule leaves existing items as they are. The list stays newest first.
@@ -745,7 +748,13 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.
   Secrets are write-only (`last4` only).
 - `/api/v1/rules` (`GET`, `POST`), `/api/v1/rules/{id}` (`GET`, `PATCH`, `DELETE`),
-  `POST /api/v1/rules/preview {watch_id, filter}`: the filter on the last 20 events of your watches in scope.
+  `POST /api/v1/rules/preview {watch_ids, filter}`: the filter on the last 20 events of the watches in scope.
+  A rule's `watch_ids` (create, update, preview): `[]`, or absent on create and preview, for all your watches;
+  an update without `watch_ids` keeps the list. At most 500, a duplicate counts once. Create and update refuse
+  an id you do not own (400 on `body.watch_ids[i]`); update accepts one the rule already lists (a transferred
+  watch). On preview, an id you do not own adds no events. Rules return `watch_ids` (sorted) and `watches`
+  (`id`, `name`). Deprecated: `watch_id` in a body (one watch, empty for all; a 400 with `watch_ids`), and
+  `watch_id`/`watch_name` in a rule (a one-watch rule's watch, null for all watches and for several).
   `GET /api/v1/filters/reference`: what a filter may use, and its limits.
 - `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
 - `GET /api/v1/push/key`, `/api/v1/push/devices` (`GET`, `POST`), `/api/v1/push/devices/{id}` (`PATCH {name}`,
@@ -758,7 +767,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only; `unread` also unarchives), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer
-  owns are hidden, and a rule's `watch_name` is null then.
+  owns are hidden, and that watch's `name` in a rule's `watches` is null then.
 
 - `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/disable|enable` (204; 404 unknown account; 409
   on your own account, a purged one, or one already in the asked state). Every `/api/v1/admin/` call needs

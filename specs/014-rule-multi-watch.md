@@ -32,8 +32,10 @@ one-watch rule is today.
 
 - Rule scope: all watches, or a set of 1 to 500 of the owner's watches (500 is the `listWatches` page
   maximum, so "select all matching" fits one call). REST has no cap on owned watches.
-- API: `watch_ids` on create, update and preview: absent or `[]` means all watches, a duplicate counts
-  once, any id the caller does not own is a 400 naming it. Rule output gains `watch_ids` (sorted) and
+- API: `watch_ids` on create, update and preview: `[]`, or absent on create and preview, means all
+  watches; an update without `watch_ids` keeps the list. A duplicate counts once. On create and update, an id the caller does not own is a 400 naming it, except on update an id the
+  rule already lists (a transferred watch stays listed, AC8). On preview, an id the caller does not own adds
+  no events. Rule output gains `watch_ids` (sorted) and
   `watches` (`id`, `name`, `name` null while the owner does not own that watch).
 - `watch_id` stays as a deprecated alias: accepted on input (one id, or empty for all watches), a 400 when
   sent with `watch_ids`; in the output it holds the watch only for a one-watch rule and is null otherwise,
@@ -59,7 +61,8 @@ one-watch rule is today.
   - Chips of the picked watches above the list, each removable; past 10 they fold into "+N more", which
     unfolds; a watch the user no longer owns shows as "A watch you no longer own", still removable.
   - Empty states: no watch at all (link to create one), no watch matching the search.
-- Rules list: "All watches", the watch name, or the first two names and "+N", the full list in a tooltip.
+- Rules list: "All watches", the watch name, or the first two names and "+N", a button opening the full
+  list (works by tap and keyboard).
 - Preview on the picked watches, refreshed when the selection changes.
 - OpenAPI regenerated (`make openapi`), README.
 
@@ -113,7 +116,7 @@ one-watch rule is today.
 - [ ] **AC18** The picker works with the keyboard alone (Tab to the search, the filters and each checkbox,
   Space toggles) and the rule form, picker open, passes the axe check of `web/e2e/a11y.spec.ts`.
 - [ ] **AC19** The rules list shows "All watches", the watch name, or the first two names and "+N" with the
-  full list in a tooltip.
+  full list behind "+N", opened by tap or keyboard.
 - [ ] **AC20** The preview runs on the picked watches and reruns when the selection changes.
 
 ## Phases
@@ -177,3 +180,6 @@ one-watch rule is today.
 - The down migration refuses multi-watch rules rather than keeping one watch or widening to all.
 - Spec 013 (rule test send) checks that an event is in the rule's scope; whichever lands second uses the
   other's scope check.
+- An update accepts an id the rule already lists even when its owner no longer owns it: a round trip of
+  `get_rule` then `update_rule`, or an edit in the form, keeps a transferred watch listed (found in phase 2
+  review, 2026-11-11).

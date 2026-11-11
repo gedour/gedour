@@ -264,14 +264,16 @@ func parseScope(ids []string, alias *string) (watchScope, []error) {
 	return sc, errs
 }
 
-// check verifies owner owns every watch of the scope.
-func (sc watchScope) check(ctx context.Context, tx pgx.Tx, owner string) error {
+// check verifies owner owns every watch of the scope, except those in kept: the rule already lists them, and
+// keeps a transferred one until it comes back (014-AC8).
+func (sc watchScope) check(ctx context.Context, tx pgx.Tx, owner string, kept []string) error {
 	if len(sc.ids) == 0 {
 		return nil
 	}
 	// KEY SHARE by id (lock order in AGENTS.md): a concurrent delete of a watch waits for this rule to land.
-	rows, err := tx.Query(ctx, `SELECT w.id::text FROM watches w WHERE w.id = ANY($1::uuid[]) AND `+watch.ReadableSQL("w", "$2::uuid")+`
-		ORDER BY w.id FOR KEY SHARE OF w`, sc.ids, owner)
+	rows, err := tx.Query(ctx, `SELECT w.id::text FROM watches w WHERE w.id = ANY($1::uuid[])
+		AND (`+watch.ReadableSQL("w", "$2::uuid")+` OR w.id = ANY($3::uuid[]))
+		ORDER BY w.id FOR KEY SHARE OF w`, sc.ids, owner, kept)
 	if err != nil {
 		return err
 	}
@@ -449,7 +451,7 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 		if err := underCap(ctx, tx, me, "rules", "rules", MaxRules); err != nil {
 			return err
 		}
-		if err := scope.check(ctx, tx, me); err != nil {
+		if err := scope.check(ctx, tx, me, []string{}); err != nil {
 			return err
 		}
 		var id string
@@ -527,7 +529,7 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 		if errs = append(errs, serrs...); len(errs) > 0 {
 			return huma.Error400BadRequest("invalid rule", errs...)
 		}
-		if err := scope.check(ctx, tx, me); err != nil {
+		if err := scope.check(ctx, tx, me, before.WatchIDs); err != nil {
 			return err
 		}
 		at, tz := scheduleArgs(sched)

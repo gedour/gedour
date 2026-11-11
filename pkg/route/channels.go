@@ -53,7 +53,7 @@ func underCap(ctx context.Context, tx pgx.Tx, owner, table, noun string, limit i
 	return nil
 }
 
-// TestInterval is the minimum gap between two channel tests of one user.
+// TestInterval is the minimum gap between two tests, channel or rule, of one user.
 const TestInterval = 10 * time.Second
 
 // Channel is a channel as the API returns it. It has no field for the secret, so neither the API nor
@@ -120,13 +120,18 @@ type ChannelType struct {
 	Hint      string `json:"hint,omitempty" doc:"Why it is unavailable"`
 }
 
+// SendOutcome is how a test send went on one channel, for channel and rule tests.
+type SendOutcome struct {
+	OK    bool     `json:"ok"`
+	Error string   `json:"error,omitempty" doc:"Why the message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it"`
+	Logs  []string `json:"logs,omitempty" doc:"Script channels: the log lines of the run (a live run: its fetches were sent)"`
+	// Accepted is a pointer: 0 accepted is an answer for a web_push channel, absent for the other types.
+	Accepted *int `json:"accepted,omitempty" doc:"Web Push channels: how many devices accepted the message"`
+}
+
 type testResult struct {
 	Body struct {
-		OK    bool     `json:"ok"`
-		Error string   `json:"error,omitempty" doc:"Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it"`
-		Logs  []string `json:"logs,omitempty" doc:"Script channels: the log lines of the run (a live run: its fetches were sent)"`
-		// Accepted is a pointer: 0 accepted is an answer for a web_push test, absent for the other types.
-		Accepted *int `json:"accepted,omitempty" doc:"Web Push channels: how many devices accepted the test"`
+		SendOutcome
 	}
 }
 
@@ -672,7 +677,7 @@ func (s *Service) deleteChannel(ctx context.Context, in *idPath) (*struct{}, err
 	return nil, nil
 }
 
-// errTooSoon carries the wait of a rate-limited channel test.
+// errTooSoon carries the wait of a rate-limited test.
 type errTooSoon struct{ wait time.Duration }
 
 func (e errTooSoon) Error() string { return "too soon" }
@@ -708,17 +713,8 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 		if err != nil {
 			return err
 		}
-		var waitMS float64
-		// The account's last test, its own or an admin's acting as it: one index per branch (on_behalf_of, actor).
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM (GREATEST(
-				(SELECT max(at) FROM audit_log WHERE on_behalf_of = $1 AND at > now() - make_interval(secs => $2) AND action = 'channel.tested'),
-				(SELECT max(at) FROM audit_log WHERE actor_user_id = $1 AND on_behalf_of IS NULL AND at > now() - make_interval(secs => $2) AND action = 'channel.tested')
-			) + make_interval(secs => $2) - now())) * 1000, 0)`,
-			me, TestInterval.Seconds()).Scan(&waitMS); err != nil {
-			return fmt.Errorf("last channel test: %w", err)
-		}
-		if waitMS > 0 {
-			return errTooSoon{time.Duration(waitMS) * time.Millisecond}
+		if err := testWait(ctx, tx, me); err != nil {
+			return err
 		}
 		if ch, err = loadChannel(ctx, tx, s.box, in.ID); errors.Is(err, pgx.ErrNoRows) {
 			// Deleted since ownChannel read it (no row lock, the user lock orders this transaction).
@@ -728,11 +724,8 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 		}
 		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "channel.tested", TargetType: "channel", TargetID: in.ID, After: c})
 	})
-	var soon errTooSoon
-	if errors.As(err, &soon) {
-		secs := int(soon.wait.Seconds()) + 1
-		return nil, huma.ErrorWithHeaders(huma.Error429TooManyRequests(fmt.Sprintf("you sent a test less than %s ago: retry in %d s", TestInterval, secs)),
-			http.Header{"Retry-After": {strconv.Itoa(secs)}})
+	if soon := tooSoon(err); soon != nil {
+		return nil, soon
 	}
 	if err != nil {
 		return nil, s.fail("test-channel", err)
@@ -751,14 +744,47 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 	} else {
 		out.Body.Logs, sendErr = send(ctx, s.pool, s.sender, s.runner, ch, notify.TestDelivery(now), true)
 	}
-	if refusals, ok := partlySent(sendErr); ok {
-		// Some devices took it: the test worked, the error names the ones that refused.
-		out.Body.Error, sendErr = truncate(refusals), nil
-	} else if sendErr != nil {
-		out.Body.Error = truncate(sendErr.Error())
-	}
-	out.Body.OK = sendErr == nil
+	out.Body.OK, out.Body.Error = testOutcome(sendErr)
 	return out, nil
+}
+
+// testWait refuses a test within TestInterval of the account's last one, channel or rule, its own or an
+// admin's acting as it: one index per branch (on_behalf_of, actor). The caller holds the user row lock.
+func testWait(ctx context.Context, tx pgx.Tx, me string) error {
+	var waitMS float64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(EXTRACT(EPOCH FROM (GREATEST(
+			(SELECT max(at) FROM audit_log WHERE on_behalf_of = $1 AND at > now() - make_interval(secs => $2) AND action IN ('channel.tested', 'rule.tested')),
+			(SELECT max(at) FROM audit_log WHERE actor_user_id = $1 AND on_behalf_of IS NULL AND at > now() - make_interval(secs => $2) AND action IN ('channel.tested', 'rule.tested'))
+		) + make_interval(secs => $2) - now())) * 1000, 0)`,
+		me, TestInterval.Seconds()).Scan(&waitMS); err != nil {
+		return fmt.Errorf("last test: %w", err)
+	}
+	if waitMS > 0 {
+		return errTooSoon{time.Duration(waitMS) * time.Millisecond}
+	}
+	return nil
+}
+
+// tooSoon is the 429 of a test testWait refused, nil for any other error.
+func tooSoon(err error) error {
+	var soon errTooSoon
+	if !errors.As(err, &soon) {
+		return nil
+	}
+	secs := int(soon.wait.Seconds()) + 1
+	return huma.ErrorWithHeaders(huma.Error429TooManyRequests(fmt.Sprintf("you sent a test less than %s ago: retry in %d s", TestInterval, secs)),
+		http.Header{"Retry-After": {strconv.Itoa(secs)}})
+}
+
+// testOutcome reads a test send's error: a push some devices took worked, the error names the ones that refused.
+func testOutcome(err error) (ok bool, msg string) {
+	if refusals, partly := partlySent(err); partly {
+		return true, truncate(refusals)
+	}
+	if err != nil {
+		return false, truncate(err.Error())
+	}
+	return true, ""
 }
 
 // loadChannel reads a channel with its secret opened, for one send.

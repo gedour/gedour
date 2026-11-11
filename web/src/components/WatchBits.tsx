@@ -34,7 +34,7 @@ export function PausedBadge() {
   );
 }
 
-/** What a delete takes with it, for everyone: the cascades of migrations 00004, 00005 and 00025. */
+/** What a delete takes with it, for everyone: the cascades of migrations 00004, 00005 and 00026. */
 export function DeleteWatchWarning() {
   return (
     <p className="text-sm text-muted">

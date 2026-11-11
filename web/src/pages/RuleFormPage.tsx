@@ -6,8 +6,17 @@ import {
   FlaskConical,
   Inbox,
   LoaderCircle,
+  Send,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import {
@@ -17,9 +26,10 @@ import {
   getRule,
   listChannels,
   previewRule,
+  testRule,
   updateRule,
 } from "@/api/client";
-import { ChannelIcon } from "@/components/ChannelBits";
+import { ChannelIcon, DeliveryLogs } from "@/components/ChannelBits";
 import { DeliveryFields } from "@/components/DeliveryFields";
 import { browserTimeZone, channelTarget, digestErrors } from "@/lib/channels";
 import { ErrorState } from "@/components/ErrorState";
@@ -37,7 +47,7 @@ import { namedScopeErrors, type WatchPick } from "@/lib/watchPicks";
 import { formatRelative } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { NotFound } from "@/pages/NotFound";
-import type { PreviewItem, Rule } from "@/types/api";
+import type { PreviewItem, Rule, RuleTestItem } from "@/types/api";
 
 /** /rules/new and /rules/:id. */
 export function RuleFormPage() {
@@ -87,6 +97,11 @@ function Page({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+/** What a live test reads of the rule: the filter and the digest schedule are not among them. */
+function liveTestKey(name: string, scope: string, priority: string, channelIds: string[]) {
+  return JSON.stringify([name, scope, priority, [...channelIds].sort()]);
 }
 
 const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 sm:p-6";
@@ -201,6 +216,20 @@ function RuleForm({ initial }: { initial?: Rule }) {
     setErrors(local);
     if (Object.keys(local).length === 0) save.mutate(allWatches ? [] : picks);
   };
+  // 013: the live test sends through the saved rule, never the form's edits.
+  const liveTest = useMutation({
+    mutationFn: (it: PreviewItem) => testRule(initial?.id ?? "", it.event.id),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["audit"] }),
+  });
+  const unsaved =
+    initial !== undefined &&
+    liveTestKey(name.trim(), scopeNow, priority, channelIds) !==
+      liveTestKey(
+        initial.name,
+        [...(initial.watch_ids ?? [])].sort().join(","),
+        initial.priority,
+        initial.channel_ids ?? [],
+      );
   const saveProblem = filterProblem(save.error);
   const problem = live ?? saveProblem;
   // The scope's errors are about the scope that was there: they go when it changes.
@@ -345,6 +374,11 @@ function RuleForm({ initial }: { initial?: Rule }) {
               <FlaskConical aria-hidden />
               Test against last 20 events
             </Button>
+            {showPreview && initial && unsaved && (
+              <p className="text-xs text-muted">
+                Unsaved changes: a live test uses the saved rule.
+              </p>
+            )}
             {showPreview &&
               !live &&
               (!allWatches && picks.length === 0 ? (
@@ -355,6 +389,25 @@ function RuleForm({ initial }: { initial?: Rule }) {
                   loading={preview.isPending}
                   stale={settling}
                   error={preview.isError ? preview.error : null}
+                  liveTest={
+                    initial && {
+                      run: (it) => liveTest.mutate(it),
+                      pending: liveTest.isPending ? liveTest.variables.event.id : null,
+                      tested: liveTest.variables?.event.id ?? null,
+                      results: liveTest.isPending ? (
+                        <p className="text-sm text-muted">Sending…</p>
+                      ) : liveTest.isError ? (
+                        <p className="text-sm text-rose-700 dark:text-rose-300">
+                          {problemText(liveTest.error)}
+                        </p>
+                      ) : (
+                        liveTest.data &&
+                        liveTest.variables && (
+                          <LiveTestResults items={liveTest.data} item={liveTest.variables} />
+                        )
+                      ),
+                    }
+                  }
                 />
               ))}
           </div>
@@ -541,12 +594,20 @@ export function PreviewTable({
   loading,
   stale = false,
   error,
+  liveTest,
 }: {
   items: PreviewItem[] | undefined;
   loading: boolean;
   /** The filter or scope changed and the new result is not in yet. */
   stale?: boolean;
   error: Error | null;
+  /** Edit page only: a saved rule to send the row's event through; results show under the tested row. */
+  liveTest?: {
+    run: (it: PreviewItem) => void;
+    pending: number | null;
+    tested: number | null;
+    results: ReactNode;
+  };
 }) {
   if (error)
     return (
@@ -574,8 +635,10 @@ export function PreviewTable({
       <p className="text-sm">
         <strong>{matched}</strong> of {items.length} recent events match.
       </p>
-      <div className="relative overflow-x-auto rounded-lg border border-line">
-        <table className="w-full min-w-[560px] text-left text-sm">
+      <div className="@container relative overflow-x-auto rounded-lg border border-line">
+        <table
+          className={cn("w-full text-left text-sm", liveTest ? "min-w-[680px]" : "min-w-[560px]")}
+        >
           <caption className="sr-only">Preview against recent events</caption>
           <thead className="border-b border-line text-xs tracking-wide text-muted uppercase">
             <tr>
@@ -591,61 +654,150 @@ export function PreviewTable({
               <th scope="col" className="px-3 py-2 font-medium">
                 Result
               </th>
+              {liveTest && (
+                <th scope="col" className="px-3 py-2">
+                  <span className="sr-only">Live test</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
             {items.map((it) => {
               const s = summarizeEvent(it.event);
               return (
-                <tr
-                  key={it.event.id}
-                  className={cn(
-                    "border-b border-line last:border-0",
-                    it.matched && "bg-emerald-500/5",
-                  )}
-                >
-                  <td className="px-3 py-2">
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "rounded px-1.5 py-px text-xs ring-1 ring-inset",
-                          TONE_CLASS[s.tone],
-                        )}
-                      >
-                        {s.badge}
-                      </span>
-                      <span className="truncate">{s.text}</span>
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-muted">{it.watch.name}</td>
-                  <td className="px-3 py-2 text-xs whitespace-nowrap text-muted">
-                    {formatRelative(new Date(it.event.observed_at))}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {it.error ? (
-                      <span
-                        title={it.error}
-                        className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300"
-                      >
-                        <CircleAlert aria-hidden className="size-4" />
-                        Error
-                      </span>
-                    ) : it.matched ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
-                        <span aria-hidden>✓</span> Match
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-muted">
-                        <span aria-hidden>✗</span> No match
-                      </span>
+                <Fragment key={it.event.id}>
+                  <tr
+                    className={cn(
+                      "border-b border-line last:border-0",
+                      it.matched && "bg-emerald-500/5",
                     )}
-                  </td>
-                </tr>
+                  >
+                    <td className="px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            "rounded px-1.5 py-px text-xs ring-1 ring-inset",
+                            TONE_CLASS[s.tone],
+                          )}
+                        >
+                          {s.badge}
+                        </span>
+                        <span className="truncate">{s.text}</span>
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-muted">{it.watch.name}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap text-muted">
+                      {formatRelative(new Date(it.event.observed_at))}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {it.error ? (
+                        <span
+                          title={it.error}
+                          className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300"
+                        >
+                          <CircleAlert aria-hidden className="size-4" />
+                          Error
+                        </span>
+                      ) : it.matched ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+                          <span aria-hidden>✓</span> Match
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-muted">
+                          <span aria-hidden>✗</span> No match
+                        </span>
+                      )}
+                    </td>
+                    {liveTest && (
+                      <td className="px-3 py-1.5 text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          title="Sends this event to the rule's channels now"
+                          aria-label={`Live test: ${s.text}`}
+                          disabled={liveTest.pending !== null}
+                          onClick={() => liveTest.run(it)}
+                        >
+                          <Send aria-hidden />
+                          {liveTest.pending === it.event.id ? "Sending…" : "Live test"}
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                  {liveTest?.tested === it.event.id && (
+                    <tr className="border-b border-line last:border-0">
+                      <td colSpan={5} className="px-3 py-2">
+                        {/* Scrollport width, pinned left: on a phone the table scrolls to the button. */}
+                        <div
+                          role="status"
+                          aria-label="Live test results"
+                          className="sticky left-3 flex w-[calc(100cqw-1.5rem)] flex-col gap-2"
+                        >
+                          {liveTest.results}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/** Per-channel outcome of a live test (013-AC10); a rule without channel says so (013-AC9). */
+function LiveTestResults({ items, item }: { items: RuleTestItem[]; item: PreviewItem }) {
+  const what = summarizeEvent(item.event).text;
+  if (items.length === 0)
+    return (
+      <p className="text-sm">Nothing sent for {what}: this rule has no channel, only your inbox.</p>
+    );
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm font-medium">Live test of {what}</p>
+      <ul className="flex flex-col gap-2">
+        {items.map((r) => (
+          <li
+            key={r.channel_id}
+            className="flex flex-col gap-1 rounded-lg border border-line px-3 py-2 text-sm"
+          >
+            <p className="flex flex-wrap items-center gap-x-2">
+              <span className="font-medium">{r.channel_name}</span>
+              {r.ok ? (
+                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+                  <CircleCheck aria-hidden className="size-4" />
+                  Sent
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-rose-700 dark:text-rose-300">
+                  <CircleAlert aria-hidden className="size-4" />
+                  Failed
+                </span>
+              )}
+              {r.accepted !== undefined && (
+                <span className="text-xs text-muted">
+                  Accepted by {r.accepted} device{r.accepted === 1 ? "" : "s"}
+                </span>
+              )}
+            </p>
+            {r.error && (
+              <p
+                className={cn(
+                  "text-xs break-words",
+                  r.ok ? "text-amber-700 dark:text-amber-300" : "text-rose-700 dark:text-rose-300",
+                )}
+              >
+                {r.error}
+              </p>
+            )}
+            {r.logs != null && <DeliveryLogs logs={r.logs.join("\n")} />}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

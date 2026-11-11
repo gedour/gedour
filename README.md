@@ -64,7 +64,7 @@ same change in `realm.json`. The `make e2e` entry follows `E2E_PORT`.
 | `GEDOUR_ENCRYPTION_KEY` | (required) | Base64 of 32 random bytes (`openssl rand -base64 32`); AES-256-GCM key of stored credentials. Losing it makes them unreadable |
 | `GEDOUR_ALLOW_HTTP_HOSTS` | | Comma-separated hosts a watch URL (`api_url`, `base_url`, an OCI `registry`), a webhook, a Nextcloud Talk URL or a script fetch may reach over plain http; others need https |
 | `GEDOUR_ALLOW_PRIVATE_NETS` | | Comma-separated CIDRs outbound requests may reach despite the SSRF guard, e.g. `10.20.0.0/16` for an internal registry or a Nextcloud on a private network; also opens webhook targets |
-| `GEDOUR_WORKER_POLL` | `2s` | How often an idle worker looks for due watches |
+| `GEDOUR_WORKER_POLL` | `60s` | Safety poll: how long a worker loop sleeps at most without a notification or a due time |
 | `GEDOUR_WORKER_CONCURRENCY` | `8` | Runs (and deliveries) one worker process executes at once |
 | `GEDOUR_TELEGRAM_API_URL` | `https://api.telegram.org` | Telegram Bot API base URL |
 | `GEDOUR_SMTP_ADDR` | | `host:port` of the SMTP server; email channels are disabled without it |
@@ -280,6 +280,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
 
 ## Collection
 
+- The worker role's three loops (watch runs, routing, deliveries) sleep until the next watch or delivery falls
+  due or a write wakes them: triggers on `watches`, `events` and `deliveries` send `NOTIFY gedour_work` at commit,
+  and each worker process holds one `LISTEN` connection (reconnected with backoff, 1 s to 30 s). A wake waits a
+  random 0 to 250 ms, two passes of a loop are at least 1 s apart, and a failed pass retries after 1 s doubling to
+  `GEDOUR_WORKER_POLL`, the safety poll that also catches notifications lost while the connection was down. The
+  jitter is at most a quarter of `GEDOUR_WORKER_POLL`, and the 1 s at most `GEDOUR_WORKER_POLL`, when it is shorter.
 - The worker role claims due watches from PostgreSQL (`FOR UPDATE SKIP LOCKED`, 5 min lease): replicas
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Watches of a disabled owner are not claimed, and `gedour_watches_due` leaves them out.
@@ -351,7 +357,9 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   redirects included; a redirect to another host drops `Authorization`, `PRIVATE-TOKEN` and `Referer`. Environment
   proxies are ignored. `GEDOUR_ALLOW_PRIVATE_NETS` opens chosen ranges.
 - Metrics: `gedour_collector_runs_total{kind,status}`, `gedour_collector_run_duration_seconds{kind}`,
-  `gedour_events_total{kind,type}`, `gedour_watches_due`.
+  `gedour_events_total{kind,type}`, `gedour_watches_due` (due watches left unclaimed at the end of the watch loop's last pass: no free slot, or row locked by another transaction),
+  `gedour_worker_wakeups_total{loop,reason}` (`loop`: `watches`, `router`, `deliveries`; `reason`: `deadline`,
+  `notify` (a database notification or a freed slot), `poll`, `retry`).
 
 ## Routing and channels
 
@@ -398,8 +406,19 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   dead delivery can be retried by hand. Lease and backoff use the database clock. A delivery whose
   channel owner no longer owns the watch is not sent (`dead`). On SIGTERM, sends in flight get
   `GEDOUR_SHUTDOWN_TIMEOUT`; past it they are cancelled and released, not counted as attempts.
-- Webhooks: `POST` JSON `{delivery_id, event, watch, rule, sent_at}` with `X-Gedour-Signature:
-  sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
+- Live test: `POST /api/v1/rules/{id}/test {event_id}` sends an event of the saved rule's scope (its listed
+  watches, or any of yours) to each of its channels now, one after the other in channel id order, as routing would:
+  same event, watch, rule name and priority (Web Push urgency included), the filter not checked. The summary
+  reads `[test] ` first on every channel type; webhook bodies and script inputs carry `"test": true` and, as
+  in a channel test, `delivery_id` 0 (`X-Gedour-Delivery: 0` on webhooks). No delivery is written, the inbox
+  is untouched, a digest rule sends the single-event message at once and a Nextcloud Talk hold does not
+  apply. The answer lists `{channel_id, channel_name, ok, error, logs, accepted}` per channel (`[]` without
+  one); a script with no free sandbox fails its item only. An event out of scope, not yours or missing, or
+  another user's rule, is a 404. Channel and rule tests count together: one test per 10 s per user (429 with
+  `Retry-After`). Each live test is audited as `rule.tested` with the event id. In the UI, each row of a
+  saved rule's preview ("Test against last 20 events") has a "Live test" button that lists these results.
+- Webhooks: `POST` JSON `{delivery_id, event, watch, rule, sent_at}`, plus `"test": true` on a live test,
+  with `X-Gedour-Signature: sha256=<hex HMAC-SHA256(secret, raw body)>`, `X-Gedour-Event`, `X-Gedour-Delivery`. 2xx is success;
   redirects are not followed; 10 s timeout. Same SSRF guard as collectors; a literal private IP is refused
   on save. A signing secret left empty is generated and returned once, in the create response.
 - Telegram: `sendMessage` in HTML mode with the bot token as secret; a Silent channel sends
@@ -468,7 +487,7 @@ Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throt
   other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.
 - Nextcloud throttles every bot of an IP after repeated 401s. A 401 pauses that channel for 30 minutes or until
   it is edited: its deliveries wait without using an attempt. One Talk request per channel runs at a time, about
-  one message per `GEDOUR_WORKER_POLL`. "Send test" and a manual retry of the refused delivery stay direct.
+  one message per second. "Send test" and a manual retry of the refused delivery stay direct.
   A repair made only on the Nextcloud side can wait up to 30 minutes unless the channel is edited.
 - Nextcloud 32 or later is required for this to hold: it answers 429 past 10 failures in 30 minutes, and it takes
   11 broken channels on one IP to get there. Older servers slow bot posts past gedour's timeout at 7 failures in
@@ -483,7 +502,8 @@ Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throt
 
 - A script (JavaScript, [goja](https://github.com/dop251/goja), 64 KiB at most, 50 per user) defines
   `function main(event, ctx)`. It sees `event` (`type`, `occurred_at`, `payload`, `summary`, `url`),
-  `watch` (`id`, `name`, `kind`), `rule` (`id`, `name`), `delivery_id` (also on `ctx`), `log(...)` and
+  `watch` (`id`, `name`, `kind`), `rule` (`id`, `name`), `delivery_id` (also on `ctx`), `test` (`true` on a
+  rule's live test, `undefined` otherwise, also on `ctx`), `log(...)` and
   `http.fetch(url, {method, headers, body})` → `{status, ok, headers, text}`. Nothing else: no `require`,
   timers, filesystem, process or environment. A throw (or a missing `main`) fails the delivery, which
   retries like any other. A delivery keeps only the logs; the return value (JSON, 16 KiB) shows in dry
@@ -495,8 +515,8 @@ Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throt
   (the timeout). The parent interrupts it at 5 s (fetches
   included) and kills it 0.5 s later, and caps its output (2 MiB a message, 8 MiB a run). A child whose
   parent is gone, or still running 2 s past its timeout, exits by itself. Per process, deliveries run
-  4 children at once (others wait); dry runs and channel tests 2 more, a 429 when both are busy, and
-  their child dies when the client goes away.
+  4 children at once (others wait); dry runs, channel and rule tests 2 more, a 429 when both are busy (a
+  rule test fails that channel's item instead), and their child dies when the client goes away.
 - `http.fetch` is made by the parent with the webhook rules: SSRF guard, https (http for
   `GEDOUR_ALLOW_HTTP_HOSTS`), no redirect followed, 10 s, 10 calls per run, 256 KiB body, 1 MiB answer;
   `Host`, `Content-Length` and hop-by-hop headers are refused. Logs: 200 lines, 16 KiB, stored on the
@@ -569,7 +589,7 @@ Secret: create it first. Pods stay in `CreateContainerConfigError` until it exis
 | `GEDOUR_DATABASE_URL` | required | required | |
 | `GEDOUR_ENCRYPTION_KEY` | required | required | Same value on every replica |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | required | unused | |
-| `GEDOUR_SMTP_ADDR`, `GEDOUR_SMTP_FROM`, `GEDOUR_SMTP_USERNAME`, `GEDOUR_SMTP_PASSWORD` | optional | optional | Worker sends deliveries, web sends channel tests |
+| `GEDOUR_SMTP_ADDR`, `GEDOUR_SMTP_FROM`, `GEDOUR_SMTP_USERNAME`, `GEDOUR_SMTP_PASSWORD` | optional | optional | Worker sends deliveries, web sends channel and rule tests |
 
 ```sh
 kubectl create secret generic gedour \
@@ -734,7 +754,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `rate_limited`), `last_error`, `consecutive_failures`.
 - `GET /api/v1/watches/{id}/events?cursor=&limit=`: events, newest first. `GET /api/v1/watches/{id}/states?limit=`:
   state history, latest first. `POST /api/v1/watches/{id}/run` (409 when paused):
-  runs at the next poll. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
+  runs at once: the change wakes a worker. Resume also runs at once. `POST /api/v1/watches/run` does the same for every unpaused
   watch the caller owns and answers `{scheduled}`.
 - Watches are private to their owner: another user's watch answers 404 on every watch route, as an unknown one does.
 - `/api/v1/credentials` (`GET`, `POST`), `/api/v1/credentials/{id}` (`GET`, `DELETE`, 409 while a watch uses
@@ -745,7 +765,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `DELETE /api/v1/api-keys/{id}` (204, again on a revoked key; 404 for another user's). Only the `POST` answer holds the key.
 
 - `/api/v1/channels` (`GET`, `POST`), `/api/v1/channels/{id}` (`GET`, `PATCH`, `DELETE`, 409 while a rule
-  uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, 429 otherwise), `GET /api/v1/channel-types`.
+  uses it), `POST /api/v1/channels/{id}/test` (one test per 10 s per user, rule tests included, 429 otherwise), `GET /api/v1/channel-types`.
   Secrets are write-only (`last4` only).
 - `/api/v1/rules` (`GET`, `POST`), `/api/v1/rules/{id}` (`GET`, `PATCH`, `DELETE`),
   `POST /api/v1/rules/preview {watch_ids, filter}`: the filter on the last 20 events of the watches in scope.
@@ -755,6 +775,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   watch). On preview, an id you do not own adds no events. Rules return `watch_ids` (sorted) and `watches`
   (`id`, `name`). Deprecated: `watch_id` in a body (one watch, empty for all; a 400 with `watch_ids`), and
   `watch_id`/`watch_name` in a rule (a one-watch rule's watch, null for all watches and for several).
+  `POST /api/v1/rules/{id}/test {event_id}`: [live test](#routing-and-channels), in the channel tests' 10 s limit.
   `GET /api/v1/filters/reference`: what a filter may use, and its limits.
 - `GET /api/v1/deliveries?channel_id=&status=&cursor=`, `POST /api/v1/deliveries/{id}/retry`.
 - `GET /api/v1/push/key`, `/api/v1/push/devices` (`GET`, `POST`), `/api/v1/push/devices/{id}` (`PATCH {name}`,
@@ -766,7 +787,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&cursor=`, `GET /api/v1/inbox/count`,
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only; `unread` also unarchives), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
-  tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer
+  and rule tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer
   owns are hidden, and that watch's `name` in a rule's `watches` is null then.
 
 - `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/disable|enable` (204; 404 unknown account; 409

@@ -23,6 +23,7 @@ import (
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/testpg"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 type channelJSON struct {
@@ -848,7 +849,7 @@ func TestRulePriorityEditKeepsItems(t *testing.T) {
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	var r ruleJSON
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "all", "watch_id": w.ID, "priority": "high"}, http.StatusCreated, &r)
-	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second)
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("router", time.Second, nil, nil))
 	nextEvent := func(key string) {
 		t.Helper()
 		a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', $2)`, w.ID, key)

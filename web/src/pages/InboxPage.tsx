@@ -100,8 +100,9 @@ const WIDE_QUERY = "(min-width: 1024px)";
 
 export function InboxPage({ item: nav }: { item: NavItem }) {
   const [params, setParams] = useSearchParams();
-  const raw = params.get("state");
-  const state: InboxState = raw === "unread" || raw === "archived" ? raw : "all";
+  // A notification's link must find its item even if already read elsewhere, so it opens All.
+  const raw = params.get("state") ?? (params.has("event") ? "all" : null);
+  const state: InboxState = raw === "all" || raw === "archived" ? raw : "unread";
   const highOnly = params.get("priority") === "high";
   const query = useInfiniteQuery({
     queryKey: [...LIST_KEY, state, highOnly],
@@ -215,6 +216,8 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     setParams(
       (p) => {
         p.delete("event");
+        // Keep the tab the link opened, not the Unread default.
+        if (!p.has("state")) p.set("state", "all");
         return p;
       },
       { replace: true },
@@ -283,7 +286,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
 
   const show = (next: InboxState, nextHighOnly: boolean) => {
     setParams({
-      ...(next !== "all" && { state: next }),
+      ...(next !== "unread" && { state: next }),
       ...(nextHighOnly && { priority: "high" }),
     });
     setSelected(new Set());
@@ -379,7 +382,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
           title={empty.title}
           body={empty.body}
           action={
-            state === "all" ? (
+            state !== "archived" ? (
               <Button variant="outline" asChild>
                 <Link to="/rules">
                   <Telescope aria-hidden />

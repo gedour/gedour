@@ -15,6 +15,7 @@ import (
 	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/secret"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 // 012-AC13, 012-AC14, 012-AC11: a channel config with delivery, at or tz is a 400; a rule carries the digest,
@@ -147,7 +148,7 @@ func TestPurgeRacingDigestClaim(t *testing.T) {
 	a.waitQueryLocked(t, "%FROM watches WHERE owner_id = $1 ORDER BY id FOR UPDATE%")
 
 	box, _ := secret.New(testKey)
-	d := route.NewDeliverer(a.pool, zap.NewNop(), box, a.sender, nil, route.NewMetrics(prometheus.NewRegistry()), time.Hour, 4, time.Second)
+	d := route.NewDeliverer(a.pool, zap.NewNop(), box, a.sender, nil, route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("deliveries", time.Hour, nil, nil), 4, time.Second)
 	claimed := make(chan error, 1)
 	go func() {
 		_, err := d.DeliverOnce(ctx)

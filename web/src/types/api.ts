@@ -94,6 +94,7 @@ export type Rule = Schemas["Rule"];
 export type CreateRuleBody = Schemas["CreateRuleInputBody"];
 export type UpdateRuleBody = Schemas["UpdateRuleInputBody"];
 export type PreviewItem = Schemas["PreviewItem"];
+export type RuleTestItem = Schemas["RuleTestItem"];
 export type Delivery = Schemas["Delivery"];
 export type DeliveryStatus = Delivery["status"];
 export type InboxItem = Schemas["InboxItem"];

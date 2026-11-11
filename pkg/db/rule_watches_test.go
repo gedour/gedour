@@ -43,8 +43,8 @@ func TestRuleWatchesMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.UpTo(ctx, 24); err != nil {
-		t.Fatalf("up to 24: %v", err)
+	if _, err := provider.UpTo(ctx, 25); err != nil {
+		t.Fatalf("up to 25: %v", err)
 	}
 	for _, sql := range []string{
 		`INSERT INTO users (oidc_sub, email) VALUES ('a', 'a@x.test')`,
@@ -80,7 +80,7 @@ func TestRuleWatchesMigration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, all_watches) SELECT id, 'none', false FROM users RETURNING id::text`).Scan(&none); err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.DownTo(ctx, 24)
+	_, err = provider.DownTo(ctx, 25)
 	if err == nil {
 		t.Fatal("down ran with a rule on several watches")
 	}
@@ -97,7 +97,7 @@ func TestRuleWatchesMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `DELETE FROM rules WHERE id IN ($1, $2)`, several, none); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.DownTo(ctx, 24); err != nil {
+	if _, err := provider.DownTo(ctx, 25); err != nil {
 		t.Fatalf("down: %v", err)
 	}
 	var got []string

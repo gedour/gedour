@@ -630,6 +630,23 @@ export interface paths {
     patch: operations["update-rule"];
     trace?: never;
   };
+  "/api/v1/rules/{id}/test": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Send an event through the saved rule's channels now, marked as a test (one test per 10 s per user, channel tests included) */
+    post: operations["test-rule"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/scripts": {
     parameters: {
       query?: never;
@@ -1703,6 +1720,21 @@ export interface components {
       id: string;
       name: string;
     };
+    RuleTestItem: {
+      /**
+       * Format: int64
+       * @description Web Push channels: how many devices accepted the message
+       */
+      accepted?: number;
+      /** Format: uuid */
+      channel_id: string;
+      channel_name: string;
+      /** @description Why the message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it */
+      error?: string;
+      /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
+      logs?: string[] | null;
+      ok: boolean;
+    };
     RuleWatch: {
       /** Format: uuid */
       id: string;
@@ -1786,14 +1818,25 @@ export interface components {
     TestResultBody: {
       /**
        * Format: int64
-       * @description Web Push channels: how many devices accepted the test
+       * @description Web Push channels: how many devices accepted the message
        */
       accepted?: number;
-      /** @description Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it */
+      /** @description Why the message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it */
       error?: string;
       /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
       logs?: string[] | null;
       ok: boolean;
+    };
+    TestRuleInputBody: {
+      /**
+       * Format: int64
+       * @description An event of the rule's scope; the filter is not checked
+       */
+      event_id: number;
+    };
+    TestRuleOutputBody: {
+      /** @description One per channel of the rule, in the rule's channel order */
+      items: components["schemas"]["RuleTestItem"][] | null;
     };
     TransferInputBody: {
       /**
@@ -3396,6 +3439,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["Rule"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "test-rule": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TestRuleInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TestRuleOutputBody"];
         };
       };
       /** @description Error */

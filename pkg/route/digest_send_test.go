@@ -18,6 +18,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 // tgMessage is one sendMessage call the fake Telegram got.
@@ -68,7 +69,7 @@ func (e *digestEnv) deliverer(t *testing.T, pool *pgxpool.Pool) *Deliverer {
 	g, _ := netguard.New([]string{"127.0.0.0/8"})
 	s := &notify.Sender{Client: g.Client(netguard.Options{Timeout: notify.SendTimeout, HTTPHosts: []string{"127.0.0.1"}, NoRedirects: true}),
 		UserAgent: "gedour/test", TelegramURL: e.tg, PublicURL: "https://gedour.test"}
-	return NewDeliverer(pool, zap.NewNop(), e.box, s, nil, e.m, 10*time.Millisecond, 4, time.Second)
+	return NewDeliverer(pool, zap.NewNop(), e.box, s, nil, e.m, wake.NewLoop("deliveries", 10*time.Millisecond, nil, nil), 4, time.Second)
 }
 
 func (e *digestEnv) namedWatch(t *testing.T, name string) string {
@@ -80,7 +81,7 @@ func (e *digestEnv) namedWatch(t *testing.T, name string) string {
 	return w
 }
 
-// round makes every waiting delivery due and polls once.
+// round makes every waiting delivery due and runs one pass.
 func (e *digestEnv) round(t *testing.T, d *Deliverer) {
 	t.Helper()
 	e.makeDue(t)
@@ -238,7 +239,7 @@ func TestDigestRetry(t *testing.T) {
 	}
 }
 
-// 012-AC10: two deliverers on their own pools, polling side by side, send each channel's digest exactly once
+// 012-AC10: two deliverers on their own pools, claiming side by side, send each channel's digest exactly once
 // and whole, wave after wave.
 func TestDigestTwoDeliverers(t *testing.T) {
 	e := newDigestEnv(t)
@@ -405,7 +406,7 @@ func TestDigestClaimSkipsHeldChannel(t *testing.T) {
 	}
 }
 
-// 012-AC3: a full backlog of single deliveries still leaves one slot of the poll to a due digest.
+// 012-AC3: a full backlog of single deliveries still leaves one slot of the pass to a due digest.
 func TestDigestThroughBacklog(t *testing.T) {
 	e := newDigestEnv(t)
 	dig, now := e.tgChannel(t, e.alice), e.tgChannel(t, e.alice)
@@ -534,7 +535,7 @@ func TestDigestDrainAndTakeover(t *testing.T) {
 }
 
 // 012-AC10: a due row held by a rule delete in flight (rule_id SET NULL) keeps the whole channel back this
-// poll, without waiting; the next poll sends the digest whole.
+// pass, without waiting; the next pass sends the digest whole.
 func TestDigestClaimSkipsHeldRow(t *testing.T) {
 	e := newDigestEnv(t)
 	ch := e.tgChannel(t, e.alice)
@@ -625,7 +626,7 @@ func TestDigestOneSlot(t *testing.T) {
 		found = found || strings.Contains(m.Text, "unread event")
 	}
 	if !found {
-		t.Errorf("no digest within 2 polls of one slot: %d messages", len(e.messages()))
+		t.Errorf("no digest within 2 passes of one slot: %d messages", len(e.messages()))
 	}
 }
 

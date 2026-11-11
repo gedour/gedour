@@ -122,7 +122,7 @@ one-watch rule is today.
 ## Phases
 
 ### Phase 1 — Scope in the database and the router
-- Work: migration 00025 (join table, explicit all-watches flag, backfill, drop `rules.watch_id`); router
+- Work: migration 00026 (join table, explicit all-watches flag, backfill, drop `rules.watch_id`); router
   query on the new scope; watch delete and purge locking, emptied-rule delete, purge preview; rule
   read/create/update and preview on `watch_ids`, with the `watch_id` alias.
 - **Covers**: AC1, AC2, AC3, AC4, AC5, AC6, AC7, AC8, AC9, AC10, AC11, AC12, AC14

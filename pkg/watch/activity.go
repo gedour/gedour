@@ -180,7 +180,7 @@ func (s *Service) listStates(ctx context.Context, in *listStatesInput) (*listSta
 	return out, nil
 }
 
-// runWatch makes the watch due now; any worker replica picks it up at its next poll.
+// runWatch makes the watch due now; its write wakes every worker replica, and one picks it up.
 func (s *Service) runWatch(ctx context.Context, in *idPath) (*watchOutput, error) {
 	me, err := s.me(ctx)
 	if err != nil {

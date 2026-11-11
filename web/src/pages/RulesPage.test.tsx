@@ -648,3 +648,171 @@ describe("RuleFormPage", () => {
     ).toHaveLength(1);
   });
 });
+
+describe("RuleFormPage live test", () => {
+  const items = [preview(3, true), preview(2, false)];
+  function editPage(
+    test: (url: URL, init?: RequestInit) => Response | Promise<Response>,
+    over: Partial<Rule> = {},
+  ) {
+    const fn = mockApi({
+      "/api/v1/rules/r1": rule({
+        watch_ids: ["w1"],
+        watches: [{ id: "w1", name: "Go releases" }],
+        ...over,
+      }),
+      "/api/v1/watches": { items: [watch()] },
+      "/api/v1/channels": { items: [channel(), channel({ id: "c2", name: "Ops room" })] },
+      "/api/v1/rules/preview": { items },
+      "/api/v1/rules/r1/test": test,
+    });
+    renderApp("/rules/r1");
+    return fn;
+  }
+  const openPreview = async () =>
+    userEvent.click(await screen.findByRole("button", { name: "Test against last 20 events" }));
+  const results = () => screen.getByRole("status", { name: "Live test results" });
+
+  // 013-AC10: only a saved rule can be live tested.
+  it("offers a live test per preview row on the edit page only", async () => {
+    mockApi({ "/api/v1/rules/preview": { items } });
+    const first = renderApp("/rules/new");
+    await openPreview();
+    await screen.findByRole("table", { name: "Preview against recent events" });
+    expect(screen.queryByRole("button", { name: /^Live test/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Live test results" })).not.toBeInTheDocument();
+    first.unmount();
+    editPage(() => Response.json({ items: [] }));
+    await openPreview();
+    const buttons = await screen.findAllByRole("button", { name: /^Live test: / });
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Live test: v3 published",
+      "Live test: v2 published",
+    ]);
+    expect(buttons[0]).toHaveAttribute("title", "Sends this event to the rule's channels now");
+    expect(screen.queryByRole("status", { name: "Live test results" })).not.toBeInTheDocument();
+  });
+
+  // 013-AC10: each channel's outcome, a script's log lines, a Web Push's accepted count.
+  it("shows per-channel results", async () => {
+    const fn = editPage(() =>
+      Response.json({
+        items: [
+          {
+            channel_id: "c1",
+            channel_name: "Teams card",
+            ok: true,
+            logs: ["card built", "posted"],
+          },
+          { channel_id: "c2", channel_name: "Phone", ok: true, accepted: 2 },
+        ],
+      }),
+    );
+    await openPreview();
+    await userEvent.click(await screen.findByRole("button", { name: "Live test: v2 published" }));
+    expect(await within(results()).findByText("Live test of v2 published")).toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/rules/r1/test", "POST")?.body).toEqual({ event_id: 2 });
+    const [script, push] = within(results()).getAllByRole("listitem") as HTMLElement[];
+    expect(script).toHaveTextContent(/^Teams card\s*SentLogs · 2 lines/);
+    expect(within(script as HTMLElement).getByText(/card built/)).toHaveTextContent(
+      "card built posted",
+    );
+    expect(push).toHaveTextContent("PhoneSentAccepted by 2 devices");
+    // Right under the clicked row, wherever it sits in the preview.
+    const rows = screen.getAllByRole("row");
+    const clicked = rows.findIndex((r) => within(r).queryByText("v2 published"));
+    expect(rows[clicked + 1]).toContainElement(results());
+  });
+
+  // 013-AC10: a failed channel, 013-AC9: a rule without channel, 013-AC10: a 429 and its delay.
+  it("reports a failed channel, no channel and a rate limit", async () => {
+    let answer: () => Response = () =>
+      Response.json({
+        items: [
+          { channel_id: "c1", channel_name: "Deploy bot", ok: true },
+          { channel_id: "c2", channel_name: "Script", ok: false, error: "sandbox busy", logs: [] },
+        ],
+      });
+    editPage(() => answer());
+    await openPreview();
+    const button = await screen.findByRole("button", { name: "Live test: v3 published" });
+    await userEvent.click(button);
+    await within(results()).findByText("Live test of v3 published");
+    const [ok, failed] = within(results()).getAllByRole("listitem");
+    expect(ok).toHaveTextContent(/^Deploy bot\s*Sent$/);
+    expect(failed).toHaveTextContent(/^Script\s*Failedsandbox busyLogs · 0 linesNo log line\.$/);
+
+    answer = () => Response.json({ items: [] });
+    await userEvent.click(button);
+    expect(
+      await within(results()).findByText(/this rule has no channel, only your inbox/),
+    ).toBeInTheDocument();
+    expect(within(results()).queryByRole("list")).not.toBeInTheDocument();
+
+    answer = () => problem(429, "you sent a test less than 10s ago: retry in 7 s");
+    await userEvent.click(button);
+    expect(await within(results()).findByText(/retry in 7 s/)).toBeInTheDocument();
+  });
+
+  // 013: one test at a time, and the form says the test ignores its unsaved edits.
+  it("runs one test at a time, the clicked row says so", async () => {
+    editPage(pending);
+    await openPreview();
+    const buttons = await screen.findAllByRole("button", { name: /^Live test: / });
+    await userEvent.click(buttons[1] as HTMLElement);
+    for (const b of buttons) expect(b).toBeDisabled();
+    expect(buttons.map((b) => b.textContent)).toEqual(["Live test", "Sending…"]);
+    expect(within(results()).getByText("Sending…")).toBeInTheDocument();
+  });
+
+  // 013: the test sends the saved rule; the hint follows only what it reads (name, scope, priority, channels).
+  it("hints at unsaved changes a live test would not use", async () => {
+    editPage(pending);
+    await openPreview();
+    await screen.findAllByRole("button", { name: /^Live test: / });
+    const hint = () => screen.queryByText("Unsaved changes: a live test uses the saved rule.");
+    expect(hint()).not.toBeInTheDocument();
+    // Outside the live region: typing must not make screen readers announce it.
+    await userEvent.type(screen.getByLabelText("Name"), " v2");
+    expect(hint()).toBeInTheDocument();
+    expect(
+      screen.getByRole("table", { name: "Preview against recent events" }),
+    ).not.toContainElement(hint());
+    await userEvent.clear(screen.getByLabelText("Name"));
+    // The server trims the name: a trailing space saves the same rule.
+    await userEvent.type(screen.getByLabelText("Name"), "Releases ");
+    expect(hint()).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: /Deploy bot/ }));
+    expect(hint()).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Deploy bot/ }));
+    expect(hint()).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Priority"), "high");
+    expect(hint()).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Priority"), "normal");
+    expect(hint()).not.toBeInTheDocument();
+
+    // 014-AC20: the preview follows the picks, the test the saved scope.
+    await userEvent.click(screen.getByRole("radio", { name: /^All watches/ }));
+    expect(hint()).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: /^Selected watches/ }));
+    expect(hint()).not.toBeInTheDocument();
+
+    // The test ignores the filter.
+    await userEvent.type(screen.getByLabelText("Expression"), " && true");
+    expect(hint()).not.toBeInTheDocument();
+  });
+
+  // 013: the channel order is not a change: unticking then reticking one leaves the rule as saved.
+  it("gives no hint when the same channels are picked again", async () => {
+    editPage(pending, { channel_ids: ["c1", "c2"] });
+    await openPreview();
+    await screen.findAllByRole("button", { name: /^Live test: / });
+    const first = await screen.findByRole("checkbox", { name: /Deploy bot/ });
+    await userEvent.click(first);
+    expect(screen.getByText(/uses the saved rule/)).toBeInTheDocument();
+    await userEvent.click(first);
+    expect(screen.queryByText(/uses the saved rule/)).not.toBeInTheDocument();
+  });
+});

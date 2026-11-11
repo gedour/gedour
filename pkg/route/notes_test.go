@@ -20,6 +20,7 @@ import (
 	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/collect"
 	"github.com/gedour/gedour/pkg/netguard"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/watch"
 	"github.com/gedour/gedour/pkg/worker"
 )
@@ -95,7 +96,7 @@ func TestNotesFiltersOnEventsWithoutThem(t *testing.T) {
 		e.rule(t, tt.owner, nil, tt.filter)
 	}
 	core, logs := observer.New(zap.WarnLevel)
-	routeAll(t, NewRouter(e.pool, zap.New(core), e.m, 10*time.Millisecond))
+	routeAll(t, NewRouter(e.pool, zap.New(core), e.m, wake.NewLoop("router", 10*time.Millisecond, nil, nil)))
 	if got := testutil.ToFloat64(e.m.evalErrors); got != 0 {
 		t.Errorf("gedour_rule_eval_errors_total = %v", got)
 	}
@@ -167,7 +168,7 @@ func TestRouterLogsRefusedRules(t *testing.T) {
 	e.rule(t, carol, nil, refused)
 	e.setInactive(t, carol, "disabled_at")
 	core, logs := observer.New(zap.ErrorLevel)
-	r := NewRouter(e.pool, zap.New(core), e.m, time.Hour)
+	r := NewRouter(e.pool, zap.New(core), e.m, wake.NewLoop("router", time.Hour, nil, nil))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { r.Run(ctx); close(done) }()
@@ -193,7 +194,7 @@ func TestRouterLogsRefusedRules(t *testing.T) {
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
 	core, logs = observer.New(zap.ErrorLevel)
-	NewRouter(e.pool, zap.New(core), e.m, time.Hour).logRefusedRules(stopped)
+	NewRouter(e.pool, zap.New(core), e.m, wake.NewLoop("router", time.Hour, nil, nil)).logRefusedRules(stopped)
 	if logs.Len() != 0 {
 		t.Fatalf("logs on a stopped context: %v", logs.All())
 	}

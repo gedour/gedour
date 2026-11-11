@@ -2369,6 +2369,46 @@
         ],
         "type": "object"
       },
+      "RuleTestItem": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "description": "Web Push channels: how many devices accepted the message",
+            "format": "int64",
+            "type": "integer"
+          },
+          "channel_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "channel_name": {
+            "type": "string"
+          },
+          "error": {
+            "description": "Why the message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it",
+            "type": "string"
+          },
+          "logs": {
+            "description": "Script channels: the log lines of the run (a live run: its fetches were sent)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "channel_id",
+          "channel_name",
+          "ok"
+        ],
+        "type": "object"
+      },
       "RuleWatch": {
         "additionalProperties": false,
         "properties": {
@@ -2588,12 +2628,12 @@
         "additionalProperties": false,
         "properties": {
           "accepted": {
-            "description": "Web Push channels: how many devices accepted the test",
+            "description": "Web Push channels: how many devices accepted the message",
             "format": "int64",
             "type": "integer"
           },
           "error": {
-            "description": "Why the test message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it",
+            "description": "Why the message was not sent; for a script, why the run failed; for Web Push with ok true, the devices that refused it",
             "type": "string"
           },
           "logs": {
@@ -2612,6 +2652,40 @@
         },
         "required": [
           "ok"
+        ],
+        "type": "object"
+      },
+      "TestRuleInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "description": "An event of the rule's scope; the filter is not checked",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id"
+        ],
+        "type": "object"
+      },
+      "TestRuleOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "One per channel of the rule, in the rule's channel order",
+            "items": {
+              "$ref": "#/components/schemas/RuleTestItem"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -4885,6 +4959,58 @@
           }
         },
         "summary": "Change a rule",
+        "tags": [
+          "rules"
+        ]
+      }
+    },
+    "/api/v1/rules/{id}/test": {
+      "post": {
+        "operationId": "test-rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestRuleInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestRuleOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Send an event through the saved rule's channels now, marked as a test (one test per 10 s per user, channel tests included)",
         "tags": [
           "rules"
         ]

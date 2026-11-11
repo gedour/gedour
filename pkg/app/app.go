@@ -30,6 +30,7 @@ import (
 	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/server"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/watch"
 	"github.com/gedour/gedour/pkg/worker"
 )
@@ -117,16 +118,20 @@ func Run(ctx context.Context, cfg config.Config, log *zap.Logger, build server.B
 	defer stopWorker()
 	var workers sync.WaitGroup
 	if cfg.RunsWorker() {
-		w, err := newWorker(cfg, pool, log, box, guard, build, reg)
+		listener, wakeups := wake.NewListener(pool, log), wake.NewMetrics(reg)
+		w, err := newWorker(cfg, pool, log, box, guard, build, reg, listener.Subscribe("watches"), wakeups)
 		if err != nil {
 			shutdown(log, servers, cfg.ShutdownTimeout)
 			return err
 		}
+		router := route.NewRouter(pool, log, routeMetrics, wake.NewLoop("router", cfg.WorkerPoll, listener.Subscribe("events"), wakeups))
+		deliverer := route.NewDeliverer(pool, log, box, sender, runner, routeMetrics,
+			wake.NewLoop("deliveries", cfg.WorkerPoll, listener.Subscribe("deliveries"), wakeups), cfg.WorkerConcurrency, cfg.ShutdownTimeout)
+		// Every loop subscribed above: none misses the wake-all of the first connect.
+		workers.Go(func() { listener.Run(workerCtx) })
 		workers.Go(func() { w.Run(workerCtx) })
-		workers.Go(func() { route.NewRouter(pool, log, routeMetrics, cfg.WorkerPoll).Run(workerCtx) })
-		workers.Go(func() {
-			route.NewDeliverer(pool, log, box, sender, runner, routeMetrics, cfg.WorkerPoll, cfg.WorkerConcurrency, cfg.ShutdownTimeout).Run(workerCtx)
-		})
+		workers.Go(func() { router.Run(workerCtx) })
+		workers.Go(func() { deliverer.Run(workerCtx) })
 	}
 
 	select {
@@ -215,10 +220,11 @@ func newSender(cfg config.Config, guard *netguard.Guard, build server.BuildInfo)
 	return s, nil
 }
 
-func newWorker(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, guard *netguard.Guard, build server.BuildInfo, reg prometheus.Registerer) (*worker.Worker, error) {
+func newWorker(cfg config.Config, pool *pgxpool.Pool, log *zap.Logger, box *secret.Box, guard *netguard.Guard, build server.BuildInfo, reg prometheus.Registerer,
+	sub <-chan struct{}, wakeups *wake.Metrics) (*worker.Worker, error) {
 	return worker.New(pool, log, box, workerClient(cfg, guard), collect.Collectors(), worker.NewMetrics(reg), worker.Options{
 		Poll: cfg.WorkerPoll, Concurrency: cfg.WorkerConcurrency, DrainTimeout: cfg.ShutdownTimeout,
-		UserAgent: "gedour/" + build.Version, HTTPHosts: cfg.AllowHTTPHosts,
+		UserAgent: "gedour/" + build.Version, HTTPHosts: cfg.AllowHTTPHosts, Wake: sub, Wakeups: wakeups,
 	})
 }
 

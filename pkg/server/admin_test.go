@@ -25,6 +25,7 @@ import (
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/secret"
 	"github.com/gedour/gedour/pkg/testpg"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/worker"
 )
 
@@ -455,7 +456,7 @@ func TestTransferKeepsRulesOfOldOwner(t *testing.T) {
 	if len(rules.Items) != 1 || rules.Items[0].ID != rule.ID || rules.Items[0].WatchID == nil || *rules.Items[0].WatchID != w.ID || rules.Items[0].WatchName != nil {
 		t.Fatalf("alice's rules after the transfer: %+v", rules.Items)
 	}
-	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second)
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("router", time.Second, nil, nil))
 	routed := func(key string) int {
 		t.Helper()
 		var ev int64
@@ -608,7 +609,7 @@ func TestPurgeRacingRouterRetries(t *testing.T) {
 	if _, err := hold.Exec(ctx, `SELECT 1 FROM channels WHERE id = $1 FOR UPDATE`, first); err != nil {
 		t.Fatal(err)
 	}
-	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Hour)
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("router", time.Hour, nil, nil))
 	routed := make(chan error, 1)
 	go func() {
 		_, err := router.RouteOnce(ctx)

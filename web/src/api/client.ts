@@ -39,6 +39,7 @@ import type {
   ProblemDetail,
   PushDevice,
   RegisterPushDeviceBody,
+  RuleTestItem,
   StateSnapshot,
   TransferResult,
   UpdateWatchBody,
@@ -353,6 +354,14 @@ export const deleteRule = (id: string) => sendJSON<undefined>("DELETE", rulePath
 export async function previewRule(filter: string, watchIds: string[]): Promise<PreviewItem[]> {
   const body = { filter, watch_ids: watchIds };
   return (await sendJSON<{ items: PreviewItem[] }>("POST", "/api/v1/rules/preview", body)).items;
+}
+/** Sends an event through the saved rule's channels now, marked as a test; one item per channel. */
+export async function testRule(id: string, eventId: number): Promise<RuleTestItem[]> {
+  const body = { event_id: eventId };
+  return (
+    (await sendJSON<{ items: RuleTestItem[] | null }>("POST", `${rulePath(id)}/test`, body))
+      .items ?? []
+  );
 }
 export const getFilterReference = () => getJSON<FilterReference>("/api/v1/filters/reference");
 

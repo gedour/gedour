@@ -58,7 +58,7 @@ test("the worker turns upstream changes into timeline events", async ({ page }) 
       semver_only: true,
     },
   });
-  // Both baselines in: the worker polls every 500 ms in e2e.
+  // Both baselines in: a new watch wakes the worker; the 500 ms safety poll backs it up.
   for (const id of [releases, tags]) {
     await expect
       .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
@@ -120,7 +120,7 @@ interface Received {
 test("a rule routes upstream changes to the inbox and the channels", async ({ page }) => {
   const t = tag();
   await setFixture(page, "a");
-  await page.goto("/inbox");
+  await page.goto("/inbox?state=all");
   const call = await api(page);
   // The counts below take alice's whole inbox, and a retry reruns the serial group: archive what earlier attempts left.
   const left = (await (await call("GET", "/api/v1/inbox?limit=200")).json()).items as {
@@ -254,6 +254,8 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   await page.getByRole("button", { name: "Mark read" }).click();
   await expect(page.getByRole("link", { name: /^Inbox, \d+ unread$/ })).toHaveCount(0);
   await expect(page.getByTestId("unread-badge")).toHaveCount(0);
+  // Read rows left the Unread tab: archive them from All.
+  await page.getByRole("button", { name: "All", exact: true }).click();
   await selectAll(page);
   await page.getByRole("button", { name: "Archive", exact: true }).click();
   await expect(page.getByRole("region", { name: "Nothing to read yet" })).toBeVisible();

@@ -12,10 +12,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
 	"github.com/gedour/gedour/pkg/audit"
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/filter"
+	"github.com/gedour/gedour/pkg/notify"
+	"github.com/gedour/gedour/pkg/script"
 	"github.com/gedour/gedour/pkg/watch"
 )
 
@@ -122,6 +125,30 @@ type previewOutput struct {
 		Items []PreviewItem `json:"items" doc:"The last 20 events in scope, newest first"`
 	}
 }
+
+type testRuleInput struct {
+	ID   string `path:"id" format:"uuid"`
+	Body struct {
+		EventID int64 `json:"event_id" minimum:"1" doc:"An event of the rule's scope; the filter is not checked"`
+	}
+}
+
+// RuleTestItem is the outcome of a rule test on one of its channels.
+type RuleTestItem struct {
+	ChannelID   string `json:"channel_id" format:"uuid"`
+	ChannelName string `json:"channel_name"`
+	SendOutcome
+}
+
+type testRuleOutput struct {
+	Body struct {
+		Items []RuleTestItem `json:"items" doc:"One per channel of the rule, in the rule's channel order"`
+	}
+}
+
+const ruleTestLate = "not sent: the test ran out of time before this channel"
+
+const ruleTestGone = "channel deleted since the test started"
 
 // RuleWatch is a watch a rule lists.
 type RuleWatch struct {
@@ -397,6 +424,10 @@ func (s *Service) registerRules(api huma.API) {
 		OperationID: "preview-rule", Method: http.MethodPost, Path: "/api/v1/rules/preview",
 		Summary: "Evaluate a filter against the last 20 events in scope, without saving", Tags: tags,
 	}, s.previewRule)
+	huma.Register(api, huma.Operation{
+		OperationID: "test-rule", Method: http.MethodPost, Path: "/api/v1/rules/{id}/test",
+		Summary: "Send an event through the saved rule's channels now, marked as a test (one test per 10 s per user, channel tests included)", Tags: tags,
+	}, s.testRule)
 }
 
 func (s *Service) listRules(ctx context.Context, _ *struct{}) (*listRulesOutput, error) {
@@ -654,6 +685,107 @@ func (s *Service) previewRule(ctx context.Context, in *previewInput) (*previewOu
 		out.Body.Items = []PreviewItem{}
 	}
 	return out, nil
+}
+
+type ruleChannel struct{ id, name string }
+
+// testRule sends one event of the rule's scope to each of its channels now, as routing would but marked as
+// a test, without a delivery or an inbox change (013-AC1, 013-AC5). Like testChannel, the audit row is the
+// rate limit and the sends run after the commit.
+func (s *Service) testRule(ctx context.Context, in *testRuleInput) (*testRuleOutput, error) {
+	me, err := s.me(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var nd notify.Delivery
+	var chans []ruleChannel
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The user row lock first, as testChannel: one lock order, and this user's tests run one at a time.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE`, me); err != nil {
+			return err
+		}
+		r, err := ownRule(ctx, tx, me, in.ID, false)
+		if err != nil {
+			return err
+		}
+		nd = notify.Delivery{Rule: &notify.Rule{ID: r.ID, Name: r.Name, Priority: r.Priority}, Test: true}
+		// The router's scope, read from all_watches as it does: a rule whose list emptied by mistake matches no
+		// event rather than all of them (013-AC6, 014-AC1).
+		err = tx.QueryRow(ctx, `SELECT `+deliveryColumns+` FROM events e JOIN watches w ON w.id = e.watch_id
+			JOIN rules r ON r.id = $2
+			WHERE e.id = $1 AND (r.all_watches OR EXISTS (SELECT 1 FROM rule_watches rw WHERE rw.rule_id = r.id AND rw.watch_id = w.id))
+			AND `+watch.ReadableSQL("w", "$3::uuid"),
+			in.Body.EventID, r.ID, me).Scan(deliveryFields(&nd)...)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return huma.Error404NotFound("event not found in the rule's scope")
+		}
+		if err != nil {
+			return err
+		}
+		if err := testWait(ctx, tx, me); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT c.id::text, c.name FROM rule_channels rc JOIN channels c ON c.id = rc.channel_id
+			WHERE rc.rule_id = $1 ORDER BY rc.channel_id`, in.ID)
+		if err != nil {
+			return err
+		}
+		if chans, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (ruleChannel, error) {
+			var c ruleChannel
+			return c, r.Scan(&c.id, &c.name)
+		}); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Entry{ActorUserID: me, Action: "rule.tested", TargetType: "rule", TargetID: in.ID,
+			After: map[string]int64{"event_id": in.Body.EventID}})
+	})
+	if soon := tooSoon(err); soon != nil {
+		return nil, soon
+	}
+	if err != nil {
+		return nil, s.fail("test-rule", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
+	defer cancel()
+	out := &testRuleOutput{}
+	out.Body.Items = make([]RuleTestItem, 0, len(chans))
+	for _, c := range chans {
+		it := RuleTestItem{ChannelID: c.id, ChannelName: c.name, Error: ruleTestLate}
+		if ctx.Err() == nil {
+			var sendErr error
+			it.Logs, it.Accepted, sendErr = s.testSend(ctx, c.id, nd)
+			it.OK, it.Error = testOutcome(sendErr)
+		}
+		out.Body.Items = append(out.Body.Items, it)
+	}
+	return out, nil
+}
+
+// testSend sends d through channel id now, holding no delivery: a script takes a free interactive sandbox or
+// fails busy without holding back the other channels (013-AC8).
+func (s *Service) testSend(ctx context.Context, id string, d notify.Delivery) ([]string, *int, error) {
+	ch, err := loadChannel(ctx, s.pool, s.box, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, errors.New(ruleTestGone)
+	}
+	if err != nil {
+		// A database or secret error stays in the log, as s.fail does: the item says no more than a 500.
+		s.log.Error("route_api_failed", zap.String("operation", "test-rule"), zap.String("channel_id", id), zap.Error(err))
+		return nil, nil, errors.New("internal error")
+	}
+	switch ch.Type {
+	case notify.TypeWebPush:
+		n, err := pushSend(ctx, s.pool, s.box, s.sender, ch, d)
+		return nil, &n, err
+	case notify.TypeScript:
+		release, ok := s.runner.TryReserve()
+		if !ok {
+			return nil, nil, script.ErrBusy
+		}
+		defer release()
+	}
+	logs, err := send(ctx, s.pool, s.sender, s.runner, ch, d, true)
+	return logs, nil, err
 }
 
 // envOf is what a filter sees of an event: a bounded copy of its payload, and its upstream time when

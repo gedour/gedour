@@ -223,7 +223,7 @@ func TestLoad(t *testing.T) {
 		t.Fatal("worker role must run the worker only")
 	}
 
-	if c.WorkerPoll != 2*time.Second || c.WorkerConcurrency != 8 || c.AllowPrivateNets != nil {
+	if c.WorkerPoll != time.Minute || c.WorkerConcurrency != 8 || c.AllowPrivateNets != nil {
 		t.Fatalf("worker defaults: %+v", c)
 	}
 	if c.TelegramAPIURL != "https://api.telegram.org" || c.SMTPTLS != "starttls" || c.SMTP() {

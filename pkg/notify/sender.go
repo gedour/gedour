@@ -217,6 +217,8 @@ type WebhookBody struct {
 	Watch      Watch     `json:"watch"`
 	Rule       *Rule     `json:"rule"`
 	SentAt     time.Time `json:"sent_at"`
+	// Test is absent from real deliveries, so receivers that ignore it see no change.
+	Test bool `json:"test,omitempty"`
 }
 
 // Sign is the X-Gedour-Signature value of body under key.
@@ -227,7 +229,7 @@ func Sign(key string, body []byte) string {
 }
 
 func (s *Sender) webhook(ctx context.Context, c WebhookConfig, key string, d Delivery) error {
-	body, err := json.Marshal(WebhookBody{DeliveryID: d.ID, Event: d.Event, Watch: d.Watch, Rule: d.Rule, SentAt: s.now().UTC()})
+	body, err := json.Marshal(WebhookBody{DeliveryID: d.ID, Event: d.Event, Watch: d.Watch, Rule: d.Rule, SentAt: s.now().UTC(), Test: d.Test})
 	if err != nil {
 		return fmt.Errorf("webhook body: %w", err)
 	}

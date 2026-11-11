@@ -11,6 +11,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/db"
 	"github.com/gedour/gedour/pkg/filter"
+	"github.com/gedour/gedour/pkg/wake"
 	"github.com/gedour/gedour/pkg/watch"
 )
 
@@ -29,36 +30,35 @@ type Router struct {
 	pool    *pgxpool.Pool
 	log     *zap.Logger
 	metrics *Metrics
-	poll    time.Duration
+	loop    *wake.Loop
 	budget  time.Duration
 	progs   map[string]*filter.Program
 	locs    map[string]*time.Location
 }
 
-// NewRouter builds a router polling every poll.
-func NewRouter(pool *pgxpool.Pool, log *zap.Logger, m *Metrics, poll time.Duration) *Router {
-	return &Router{pool: pool, log: log, metrics: m, poll: poll, budget: routeBudget, progs: map[string]*filter.Program{},
+// NewRouter builds a router paced by loop, which new events wake.
+func NewRouter(pool *pgxpool.Pool, log *zap.Logger, m *Metrics, loop *wake.Loop) *Router {
+	return &Router{pool: pool, log: log, metrics: m, loop: loop, budget: routeBudget, progs: map[string]*filter.Program{},
 		locs: map[string]*time.Location{}}
 }
 
 // Run routes until ctx ends. An interrupted batch rolls back: its events stay unrouted for the next run.
 func (r *Router) Run(ctx context.Context) {
 	r.logRefusedRules(ctx)
-	tick := time.NewTicker(r.poll)
-	defer tick.Stop()
 	for ctx.Err() == nil {
+		var err error
 		for ctx.Err() == nil {
-			n, err := r.RouteOnce(ctx)
-			if err != nil && ctx.Err() == nil {
-				r.log.Error("route_failed", zap.Error(err))
-			}
-			if err != nil || n == 0 {
+			var n int
+			if n, err = r.RouteOnce(ctx); err != nil || n == 0 {
 				break
 			}
 		}
-		select {
-		case <-ctx.Done():
-		case <-tick.C:
+		if err != nil && ctx.Err() == nil {
+			r.log.Error("route_failed", zap.Error(err))
+		}
+		// No deadline: an unrouted event always comes with a notification.
+		if !r.loop.Wait(ctx, time.Time{}, err != nil) {
+			break
 		}
 	}
 }

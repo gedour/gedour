@@ -62,7 +62,7 @@ describe("InboxPage", () => {
       inboxItem(2, { read_at: yesterday() }),
       inboxItem(1, { created_at: yesterday() }),
     ]);
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     const today = await screen.findByRole("list", { name: "Inbox, Today" });
     expect(within(today).getAllByRole("listitem")).toHaveLength(2);
     expect(screen.getByRole("list", { name: "Inbox, Yesterday" })).toHaveTextContent(
@@ -77,12 +77,12 @@ describe("InboxPage", () => {
   // 001-AC24: loading, empty (per tab) and error states.
   it("has loading, empty and error states", async () => {
     mockApi({ "/api/v1/inbox": pending });
-    const first = renderApp("/inbox");
+    const first = renderApp("/inbox?state=all");
     expect(screen.getAllByTestId("inbox-skeleton")).toHaveLength(5);
     first.unmount();
 
     inboxServer([]);
-    const second = renderApp("/inbox");
+    const second = renderApp("/inbox?state=all");
     expect(await screen.findByRole("region", { name: "Nothing to read yet" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Unread" }));
     expect(
@@ -97,7 +97,7 @@ describe("InboxPage", () => {
       "/api/v1/inbox": () =>
         fail ? new Response("", { status: 500 }) : Response.json({ items: [inboxItem(1)] }),
     });
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     expect(await screen.findByRole("alert")).toHaveTextContent("The inbox could not be loaded.");
     fail = false;
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -107,7 +107,7 @@ describe("InboxPage", () => {
   // 001-AC20: j/k move, u toggles read, e archives, x selects; ignored while typing.
   it("is driven by the keyboard", async () => {
     const srv = inboxServer([inboxItem(3), inboxItem(2), inboxItem(1)]);
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     await screen.findByText("v3.0.0 published");
     const focused = () => rows().findIndex((r) => r.dataset.focused === "true");
     // No cursor until one is asked for: a shortcut never acts on a row nobody picked.
@@ -153,7 +153,7 @@ describe("InboxPage", () => {
   // 001-AC20: select all (or some), then read or archive them in one call; only those ids are sent.
   it("bulk-reads and archives the selection", async () => {
     const srv = inboxServer([inboxItem(3), inboxItem(2), inboxItem(1)]);
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     await screen.findByText("v3.0.0 published");
     await userEvent.click(screen.getByRole("checkbox", { name: "Select: v3.0.0 published" }));
     const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
@@ -299,7 +299,7 @@ describe("InboxPage", () => {
 
   it("closes the panel with Escape or its button", async () => {
     inboxServer([inboxItem(1, { read_at: yesterday() })]);
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     await userEvent.click(await screen.findByRole("button", { name: /v1\.0\.0 published/ }));
     await userEvent.click(screen.getByRole("button", { name: "Close details" }));
     expect(screen.queryByRole("button", { name: "Close details" })).not.toBeInTheDocument();
@@ -403,19 +403,21 @@ describe("InboxPage", () => {
     await userEvent.click(filter);
     expect(filter).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(screen.queryByText("v2.0.0 published")).not.toBeInTheDocument());
-    expect(new URLSearchParams(router.state.location.search).get("state")).toBe("unread");
-    expect(new URLSearchParams(router.state.location.search).get("priority")).toBe("high");
+    expect(router.state.location.search).toBe("?priority=high");
     expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.get("priority")).toBe("high");
     expect(screen.queryByText("v1.0.0 published")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "All" }));
     expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
-    expect(router.state.location.search).toBe("?priority=high");
+    expect(router.state.location.search).toBe("?state=all&priority=high");
     expect(screen.queryByText("v2.0.0 published")).not.toBeInTheDocument();
 
     await userEvent.click(filter);
     expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
-    expect(router.state.location.search).toBe("");
+    expect(router.state.location.search).toBe("?state=all");
+
+    await userEvent.click(screen.getByRole("button", { name: /^Unread/, pressed: false }));
+    await waitFor(() => expect(router.state.location.search).toBe(""));
     expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.has("priority")).toBe(false);
   });
 
@@ -441,11 +443,11 @@ describe("InboxPage", () => {
       await screen.findByRole("complementary", { name: "v1.0.0 published" }),
     ).toBeInTheDocument();
     await waitFor(() => expect(srv.items()[1]?.read_at).not.toBeNull());
-    expect(router.state.location.search).toBe("?priority=high");
+    expect(router.state.location.search).toBe("?priority=high&state=all");
     unmount();
     const missing = renderApp("/inbox?event=99");
     expect(await screen.findByText("v2.0.0 published")).toBeInTheDocument();
-    await waitFor(() => expect(missing.router.state.location.search).toBe(""));
+    await waitFor(() => expect(missing.router.state.location.search).toBe("?state=all"));
     expect(screen.queryByRole("complementary", { name: /published/ })).not.toBeInTheDocument();
     // The link was not dropped silently.
     expect(
@@ -453,6 +455,17 @@ describe("InboxPage", () => {
         "That event is not among the inbox items loaded here: it may be archived or older.",
       ),
     ).toBeInTheDocument();
+  });
+
+  // The home is the Unread tab, but a link to an item already read still opens it, on the All tab.
+  it("opens a linked item already read", async () => {
+    inboxServer([inboxItem(2), inboxItem(1, { read_at: yesterday() })]);
+    const { router } = renderApp("/inbox?event=1");
+    expect(
+      await screen.findByRole("complementary", { name: "v1.0.0 published" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe("?state=all"));
+    expect(screen.getByRole("button", { name: "All", pressed: true })).toBeVisible();
   });
 
   // 010-AC13: a cached list from an earlier visit lacks a newly pushed event: the link waits for the refetch.
@@ -467,7 +480,7 @@ describe("InboxPage", () => {
     expect(
       await screen.findByRole("complementary", { name: "v2.0.0 published" }),
     ).toBeInTheDocument();
-    await waitFor(() => expect(router.state.location.search).toBe(""));
+    await waitFor(() => expect(router.state.location.search).toBe("?state=all"));
     expect(screen.queryByText(/not among the inbox items/)).not.toBeInTheDocument();
   });
 
@@ -483,7 +496,7 @@ describe("InboxPage", () => {
     await act(() => router.navigate("/channels"));
     fail = true;
     await act(() => router.navigate("/inbox?event=7"));
-    await waitFor(() => expect(router.state.location.search).toBe(""));
+    await waitFor(() => expect(router.state.location.search).toBe("?state=all"));
     expect(await screen.findByText(/not among the inbox items/)).toBeInTheDocument();
   });
 
@@ -507,7 +520,7 @@ describe("InboxPage", () => {
     await waitFor(() =>
       expect(lastCall(fn, "/api/v1/inbox/read", "POST")?.body).toEqual({ ids: [1] }),
     );
-    await waitFor(() => expect(router.state.location.search).toBe(""));
+    await waitFor(() => expect(router.state.location.search).toBe("?state=all"));
     release(Response.json({ updated: 1, unread: 1 }));
     await userEvent.click(screen.getByRole("button", { name: "Close details" }));
     await act(() => router.navigate("/inbox?event=1"));
@@ -591,7 +604,7 @@ describe("InboxPage", () => {
   it("shows the detail in a dialog on narrow screens", async () => {
     setMedia(WIDE, false);
     inboxServer([inboxItem(1, { read_at: yesterday() })]);
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     const row = await screen.findByRole("button", { name: /v1\.0\.0 published/ });
     await userEvent.click(row);
     const dialog = screen.getByRole("dialog", { name: "v1.0.0 published" });
@@ -639,7 +652,7 @@ describe("InboxPage", () => {
       "/api/v1/inbox": { items: [inboxItem(3), inboxItem(2), inboxItem(1)] },
       "/api/v1/inbox/read": read,
     });
-    renderApp("/inbox?state=unread");
+    renderApp("/inbox");
     const quick = (text: string, name: string) =>
       within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });
     await screen.findByText("v3.0.0 published");
@@ -658,7 +671,7 @@ describe("InboxPage", () => {
       "/api/v1/inbox/read": pending,
       "/api/v1/inbox/archive": () => new Response(null, { status: 500 }),
     });
-    renderApp("/inbox");
+    renderApp("/inbox?state=all");
     await screen.findByText("v2.0.0 published");
     const quick = (text: string, name: string) =>
       within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });

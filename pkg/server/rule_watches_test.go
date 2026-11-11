@@ -14,6 +14,7 @@ import (
 
 	"github.com/gedour/gedour/pkg/route"
 	"github.com/gedour/gedour/pkg/testpg"
+	"github.com/gedour/gedour/pkg/wake"
 )
 
 // routedTo inserts an event on watch w, routes it and reports whether it reached u's inbox.
@@ -23,7 +24,7 @@ func (a *devApp) routedTo(t *testing.T, u apiUser, w string) bool {
 	if err := a.pool.QueryRow(context.Background(), `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', gen_random_uuid()::text) RETURNING id`, w).Scan(&ev); err != nil {
 		t.Fatal(err)
 	}
-	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), time.Second)
+	router := route.NewRouter(a.pool, zap.NewNop(), route.NewMetrics(prometheus.NewRegistry()), wake.NewLoop("router", time.Second, nil, nil))
 	if n, err := router.RouteOnce(context.Background()); err != nil || n != 1 {
 		t.Fatalf("route: %d %v", n, err)
 	}

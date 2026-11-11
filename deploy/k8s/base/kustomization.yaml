@@ -18,7 +18,7 @@ resources:
 
 images:
   - name: ghcr.io/gedour/gedour
-    newTag: v1.0.0
+    newTag: v1.1.0
 
 # Hash-suffixed name: a config change rolls both Deployments.
 configMapGenerator:

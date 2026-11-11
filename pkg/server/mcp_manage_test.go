@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -68,7 +69,8 @@ func (m *mcpApp) watchConfig(t *testing.T, id string) map[string]any {
 func (m *mcpApp) credential(t *testing.T, u apiUser, kind string) string {
 	t.Helper()
 	var c credJSON
-	body := map[string]any{"name": kind + " " + u.id, "kind": kind, "secret": "ghp_0123456789abcdef"}
+	// Names are unique per owner, and a test may need several of one kind.
+	body := map[string]any{"name": kind + " " + rand.Text(), "kind": kind, "secret": "ghp_0123456789abcdef"}
 	if kind == "registry_basic" {
 		body["username"] = "robot"
 	}
@@ -187,105 +189,233 @@ func TestMCPManageCatalog(t *testing.T) {
 	}
 }
 
-// 007-AC34: a key attaches no credential, even its owner's, through the tool and through the handler alone; a session still does.
-func TestMCPManageCredentialRefused(t *testing.T) {
+// 016-AC4..AC11: through a key, a credential goes only where another of the owner's watches sends it, or to the kind's default host when no watch uses it; a session goes anywhere.
+func TestKeyCredentialTarget(t *testing.T) {
 	m := newMCPApp(t)
-	alice := m.user(t, "alice")
-	cred := m.credential(t, alice, "github_token")
-	var w watchJSON
-	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	withCred := map[string]any{"name": "w", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "credential_id": cred}
-	before := m.count(t, `SELECT count(*) FROM watches`)
-	attached := func() int { return m.count(t, `SELECT count(*) FROM watches WHERE credential_id IS NOT NULL`) }
+	alice, bob := m.user(t, "alice"), m.user(t, "bob")
+	const ghe, forge = "https://ghe.alice.example/api/v3", "https://forge.alice.example"
+	repo := func(apiURL string) map[string]any {
+		cfg := map[string]any{"repo": "a/b"}
+		if apiURL != "" {
+			cfg["api_url"] = apiURL
+		}
+		return cfg
+	}
+	seed := func(cfg map[string]any, cred string) string {
+		body := newWatch("seed", "github_repo", cfg)
+		if cred != "" {
+			body["credential_id"] = cred
+		}
+		var w watchJSON
+		m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", body, http.StatusCreated, &w)
+		return w.ID
+	}
+	credOf := func(id string) *string {
+		var c *string
+		m.scan(t, `SELECT credential_id::text FROM watches WHERE id = $1`, []any{id}, &c)
+		return c
+	}
+	create := func(cfg map[string]any, cred string) (int, string) {
+		body := newWatch("by key", "github_repo", cfg)
+		body["credential_id"] = cred
+		return m.asKey(t, alice, http.MethodPost, "/api/v1/watches", body)
+	}
+	patch := func(id string, body map[string]any) (int, string) {
+		return m.asKey(t, alice, http.MethodPatch, "/api/v1/watches/"+id, body)
+	}
+	refused := func(t *testing.T, code int, body string) {
+		t.Helper()
+		if code != http.StatusForbidden || !strings.Contains(body, "body.credential_id") {
+			t.Fatalf("want a 403 at body.credential_id: %d %s", code, body)
+		}
+	}
+	// C1 reaches ghe only; forge is a saved host C1 never reaches.
+	c1 := m.credential(t, alice, "github_token")
+	seed(repo(ghe), c1)
+	seed(repo(forge), "")
 
-	if res := m.manage(t, alice, "create_watch", withCred); !res.IsError || !strings.Contains(res.text(), "credential_id") {
-		t.Fatalf("create: %+v", res)
-	}
-	if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "credential_id": cred}); !res.IsError || !strings.Contains(res.text(), "credential_id") {
-		t.Fatalf("update: %+v", res)
-	}
-	for _, tt := range []struct {
-		name, method, path string
-		body               map[string]any
-	}{
-		{"create", http.MethodPost, "/api/v1/watches", withCred},
-		{"attach", http.MethodPatch, "/api/v1/watches/" + w.ID, map[string]any{"credential_id": cred}},
-		{"detach", http.MethodPatch, "/api/v1/watches/" + w.ID, map[string]any{"credential_id": ""}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if code, body := m.asKey(t, alice, tt.method, tt.path, tt.body); code != http.StatusForbidden || !strings.Contains(body, "credential") {
+	// 016-AC4
+	t.Run("AC4 same target", func(t *testing.T) {
+		if code, body := create(repo(ghe), c1); code != http.StatusCreated {
+			t.Fatalf("%d %s", code, body)
+		}
+	})
+	// 016-AC5
+	t.Run("AC5 other target", func(t *testing.T) {
+		for _, cfg := range []map[string]any{repo(forge), repo("")} {
+			n := m.count(t, `SELECT count(*) FROM watches`)
+			code, body := create(cfg, c1)
+			refused(t, code, body)
+			if m.count(t, `SELECT count(*) FROM watches`) != n {
+				t.Fatalf("%v: created anyway", cfg)
+			}
+		}
+	})
+	// 016-AC6
+	t.Run("AC6 unused credential", func(t *testing.T) {
+		c2 := m.credential(t, alice, "github_token")
+		code, body := create(repo(forge), c2)
+		refused(t, code, body)
+		if code, body := create(repo(""), c2); code != http.StatusCreated {
+			t.Fatalf("default host: %d %s", code, body)
+		}
+	})
+	// 016-AC10
+	t.Run("AC10 existing 400", func(t *testing.T) {
+		for _, cred := range []string{m.credential(t, bob, "github_token"), m.credential(t, alice, "gitlab_token")} {
+			if code, body := create(repo(ghe), cred); code != http.StatusBadRequest || !strings.Contains(body, "body.credential_id") {
 				t.Fatalf("%d %s", code, body)
 			}
+		}
+	})
+	// 016-AC7
+	t.Run("AC7 attach and swap", func(t *testing.T) {
+		u := seed(repo(forge), "")
+		code, body := patch(u, map[string]any{"credential_id": c1})
+		refused(t, code, body)
+		if credOf(u) != nil {
+			t.Fatal("attached anyway")
+		}
+		if code, body := patch(u, map[string]any{"credential_id": c1, "config": repo(ghe)}); code != http.StatusOK {
+			t.Fatalf("attach on a reached target: %d %s", code, body)
+		}
+		code, body = patch(u, map[string]any{"credential_id": m.credential(t, alice, "github_token")})
+		refused(t, code, body)
+		if got := credOf(u); got == nil || *got != c1 {
+			t.Fatalf("swapped anyway: %v", got)
+		}
+		// W alone uses C4 on ghe: its own old target does not vouch for a new one, and C4 is in use, so not even for the default host.
+		c4 := m.credential(t, alice, "github_token")
+		w := seed(repo(ghe), c4)
+		stored := m.watchConfig(t, w)
+		for _, cfg := range []map[string]any{repo(forge), repo("")} {
+			code, body = patch(w, map[string]any{"config": cfg})
+			refused(t, code, body)
+		}
+		if got := m.watchConfig(t, w); !reflect.DeepEqual(got, stored) {
+			t.Fatalf("config changed: %v", got)
+		}
+		// A credential no watch holds may be attached on the default host.
+		d := seed(repo(""), "")
+		if code, body := patch(d, map[string]any{"credential_id": m.credential(t, alice, "github_token")}); code != http.StatusOK {
+			t.Fatalf("unused, default host: %d %s", code, body)
+		}
+	})
+	// 016-AC8
+	t.Run("AC8 no target change", func(t *testing.T) {
+		// Alone on a custom host: edits that send the credential nowhere new need no check.
+		w := seed(repo(ghe), m.credential(t, alice, "github_token"))
+		boxed := m.watchConfig(t, w)
+		boxed["new_issues"] = true
+		for _, edit := range []map[string]any{{"name": "renamed"}, {"paused": true}, {"config": boxed}} {
+			if code, body := patch(w, edit); code != http.StatusOK {
+				t.Fatalf("%v: %d %s", edit, code, body)
+			}
+		}
+	})
+	// 016-AC8
+	t.Run("AC8 http downgrade", func(t *testing.T) {
+		// Another watch sends C on https://H: http://H is not the same target.
+		const h = "https://127.0.0.1:8443"
+		c := m.credential(t, alice, "github_token")
+		w := seed(repo(h), c)
+		seed(repo(h), c)
+		stored := m.watchConfig(t, w)
+		code, body := patch(w, map[string]any{"config": repo("http://127.0.0.1:8443")})
+		refused(t, code, body)
+		if got := m.watchConfig(t, w); !reflect.DeepEqual(got, stored) {
+			t.Fatalf("config changed: %v", got)
+		}
+	})
+	// 016-AC8
+	t.Run("AC8 config change", func(t *testing.T) {
+		c5 := m.credential(t, alice, "github_token")
+		x := seed(repo(""), c5)
+		seed(repo(ghe), c5)
+		if code, body := patch(x, map[string]any{"config": repo(ghe)}); code != http.StatusOK {
+			t.Fatalf("reached target: %d %s", code, body)
+		}
+		stored := m.watchConfig(t, x)
+		code, body := patch(x, map[string]any{"config": repo(forge)})
+		refused(t, code, body)
+		if got := m.watchConfig(t, x); !reflect.DeepEqual(got, stored) {
+			t.Fatalf("config changed: %v", got)
+		}
+		if got := credOf(x); got == nil || *got != c5 {
+			t.Fatalf("credential changed: %v", got)
+		}
+		// 016-AC9
+		t.Run("AC9 detach", func(t *testing.T) {
+			if code, body := patch(x, map[string]any{"credential_id": ""}); code != http.StatusOK {
+				t.Fatalf("%d %s", code, body)
+			}
+			if got := credOf(x); got != nil {
+				t.Fatalf("still attached: %v", *got)
+			}
 		})
-	}
-	if m.count(t, `SELECT count(*) FROM watches`) != before || attached() != 0 {
-		t.Fatal("a refused call changed a watch")
-	}
-	// The same calls on a session.
-	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", withCred, http.StatusCreated, nil)
-	m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+w.ID, map[string]any{"credential_id": cred}, http.StatusOK, nil)
-	if attached() != 2 {
-		t.Fatalf("%d attached on a session", attached())
-	}
-	// A key cannot detach the one a session attached.
-	if code, _ := m.asKey(t, alice, http.MethodPatch, "/api/v1/watches/"+w.ID, map[string]any{"credential_id": ""}); code != http.StatusForbidden || attached() != 2 {
-		t.Fatalf("detach %d, %d attached", code, attached())
-	}
+	})
+	// 016-AC11
+	t.Run("AC11 session", func(t *testing.T) {
+		w := seed(repo(forge), "")
+		m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+w, map[string]any{"credential_id": m.credential(t, alice, "github_token")}, http.StatusOK, nil)
+		m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "s", "kind": "github_repo", "config": repo(forge), "credential_id": c1}, http.StatusCreated, nil)
+	})
 }
 
-// 007-AC35: the owner's key cannot change the config of a watch that has a credential, on any target field or any other; name, schedule and paused work; a session passes.
+// 007-AC35, amended by 016-AC8: the owner's key changes a credentialed watch's config through the tool when the target stays; a move elsewhere is refused by the known-host or the credential target check; a session passes.
 func TestMCPManageCredentialConfig(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
+	// A saved custom host no credential reaches.
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", newWatch("saved", "github_repo", map[string]any{"repo": "a/b", "api_url": "https://forge.alice.example"}), http.StatusCreated, nil)
 	for _, tt := range []struct {
 		field, kind, credKind string
 		cfg                   map[string]any
-		moved                 string
+		moved, reason, loc    string
 	}{
-		{"api_url", "github_repo", "github_token", map[string]any{"repo": "a/b"}, "https://gitlab.com"},
-		{"base_url", "gitlab_release", "gitlab_token", map[string]any{"project": "a/b"}, "https://api.github.com"},
-		{"registry", "oci_tags", "registry_basic", map[string]any{"repository": "a/b"}, "ghcr.io"},
+		{"api_url", "github_repo", "github_token", map[string]any{"repo": "a/b"}, "https://gitlab.com", "known host", "body.config.api_url"},
+		{"base_url", "gitlab_release", "gitlab_token", map[string]any{"project": "a/b"}, "https://api.github.com", "known host", "body.config.base_url"},
+		// Its kind's other default: the credential is in use, so only another watch's target would do.
+		{"registry", "oci_tags", "registry_basic", map[string]any{"repository": "a/b"}, "ghcr.io", "credential", "body.credential_id"},
+		{"api_url", "github_repo", "github_token", map[string]any{"repo": "a/b"}, "https://forge.alice.example", "credential", "body.credential_id"},
 	} {
-		t.Run(tt.field, func(t *testing.T) {
+		t.Run(tt.field+" to "+tt.moved, func(t *testing.T) {
 			var w watchJSON
-			m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "w " + tt.field, "kind": tt.kind, "config": tt.cfg, "credential_id": m.credential(t, alice, tt.credKind)}, http.StatusCreated, &w)
+			m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "w " + tt.moved, "kind": tt.kind, "config": tt.cfg, "credential_id": m.credential(t, alice, tt.credKind)}, http.StatusCreated, &w)
 			stored := m.watchConfig(t, w.ID)
 			moved := maps.Clone(tt.cfg)
 			moved[tt.field] = tt.moved
-			if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": moved}); !res.IsError || !strings.Contains(res.text(), "has a credential") {
-				t.Fatalf("%+v", res)
-			}
-			// The owner's token reads what the config names: a same-host move is a retarget too.
-			other := maps.Clone(stored)
-			for k := range tt.cfg {
-				other[k] = "c/d"
-			}
-			if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": other}); !res.IsError || !strings.Contains(res.text(), "has a credential") {
+			if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": moved}); !res.IsError || !strings.Contains(res.text(), tt.reason) || !strings.Contains(res.text(), tt.loc) {
 				t.Fatalf("%+v", res)
 			}
 			if got := m.watchConfig(t, w.ID); !reflect.DeepEqual(got, stored) {
 				t.Fatalf("%v", got)
 			}
-			for _, edit := range []map[string]any{{"name": "renamed " + tt.field}, {"schedule": "2h"}, {"paused": true}, {"config": stored}} {
+			// Same host and path: the token goes nowhere new.
+			other := maps.Clone(stored)
+			for k := range tt.cfg {
+				other[k] = "c/d"
+			}
+			for _, edit := range []map[string]any{{"name": "renamed " + tt.moved}, {"schedule": "2h"}, {"paused": true}, {"config": other}} {
 				edit["id"] = w.ID
 				if res := m.manage(t, alice, "update_watch", edit); res.IsError {
 					t.Fatalf("%v: %+v", edit, res)
 				}
 			}
-			// 008: a new-items box is a config change too, refused to the owner's key on a credentialed watch.
+			// 008: a new-items box is a config change on the same target.
 			if tt.kind == "github_repo" {
-				boxed := maps.Clone(stored)
+				boxed := maps.Clone(other)
 				boxed["new_issues"] = true
-				if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": boxed}); !res.IsError || !strings.Contains(res.text(), "has a credential") {
+				if res := m.manage(t, alice, "update_watch", map[string]any{"id": w.ID, "config": boxed}); res.IsError {
 					t.Fatalf("box toggle by key: %+v", res)
 				}
-				if got := m.watchConfig(t, w.ID); got["new_issues"] != nil {
+				if got := m.watchConfig(t, w.ID); got["new_issues"] != true {
 					t.Fatalf("%v", got)
 				}
 			}
 			var got watchJSON
 			m.mustCall(t, alice, http.MethodGet, "/api/v1/watches/"+w.ID, nil, http.StatusOK, &got)
-			if got.Name != "renamed "+tt.field || got.Schedule != "2h" || !got.Paused || got.CredentialID == nil {
+			if got.Name != "renamed "+tt.moved || got.Schedule != "2h" || !got.Paused || got.CredentialID == nil {
 				t.Fatalf("%+v", got)
 			}
 			m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+w.ID, map[string]any{"config": moved}, http.StatusOK, nil)

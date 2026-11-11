@@ -335,6 +335,9 @@ func TestPushFanOutFitsTimeout(t *testing.T) {
 	if rounds*notify.SendTimeout >= sendTimeout || sendTimeout >= DeliveryLease {
 		t.Fatalf("%d rounds of %s do not fit %s", rounds, notify.SendTimeout, sendTimeout)
 	}
+	if notify.TelegramTimeout >= sendTimeout {
+		t.Fatalf("a Telegram send (%s) does not fit %s", notify.TelegramTimeout, sendTimeout)
+	}
 	// "Send test" answers on the request: its fan-out stops before the write timeout.
 	if pushTestTimeout <= 0 || pushTestTimeout >= config.HTTPWriteTimeout {
 		t.Fatalf("test fan-out bound %s, write timeout %s", pushTestTimeout, config.HTTPWriteTimeout)

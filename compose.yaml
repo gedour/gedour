@@ -57,7 +57,7 @@ services:
   # on :8082 signing in through it.
   keycloak:
     profiles: [oidc]
-    image: quay.io/keycloak/keycloak:26.8.1
+    image: quay.io/keycloak/keycloak:26.8.2-1
     # Same port inside and out: the issuer URL (http://localhost:<port>/...) must read the same to the browser and to gedour.
     command: ["start-dev", "--import-realm", "--http-port=${GEDOUR_KC_PORT:-8081}", "--health-enabled=true"]
     environment:

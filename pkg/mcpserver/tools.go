@@ -34,8 +34,6 @@ type row struct {
 	// limitDefault and limitMax narrow the operation's limit; 0 keeps the operation's value.
 	limitDefault, limitMax int
 	shape                  func(data any, args map[string]any)
-	// hidden inputs leave the schema; the handler still refuses them, as a schema is no access control.
-	hidden []string
 }
 
 const (
@@ -48,7 +46,7 @@ var configNote = " config fields by kind: " + watch.ConfigFields() + "."
 
 // rows is the catalog, in tools/list order: client prompt caches depend on it.
 var rows = []row{
-	{name: "count_inbox", op: "count-inbox", scope: scopeRead, readOnly: true, desc: "Count the unread items in the inbox."},
+	{name: "count_inbox", op: "count-inbox", scope: scopeRead, readOnly: true, desc: "Count the unread and read items in the inbox, archive excluded."},
 	{name: "list_inbox", op: "list-inbox", scope: scopeRead, readOnly: true, limitDefault: 20, limitMax: 50, shape: cutInboxBodies,
 		desc: "List inbox items with their event and watch; a long event body is cut."},
 	{name: "list_watches", op: "list-watches", scope: scopeRead, readOnly: true, limitDefault: 50, limitMax: 200, shape: markTruncated,
@@ -68,10 +66,12 @@ var rows = []row{
 		desc: "Schedule a run of a watch now; the worker runs it, this call does not wait; refused while the upstream's rate limit holds the watch." + budgetNote},
 	{name: "get_filter_reference", op: "get-filter-reference", scope: scopeManage, readOnly: true, desc: "What a rule's filter may use, and its limits."},
 	{name: "list_channels", op: "list-channels", scope: scopeManage, readOnly: true, shape: briefChannels, desc: "List the channels of the key's owner: id, name and type only, for a rule's channel_ids."},
-	{name: "create_watch", op: "create-watch", scope: scopeManage, openWorld: true, limited: true, hidden: []string{"credential_id"},
-		desc: "Create a watch, without a credential. Its api_url, base_url or registry must name, with no path, the kind's default (GitHub kinds api.github.com, GitLab kinds gitlab.com, oci_tags docker.io or ghcr.io), or the host and path of another watch the key's owner owns. Refused past 200 owned watches." + configNote + budgetNote},
-	{name: "update_watch", op: "update-watch", scope: scopeManage, openWorld: true, limited: true, hidden: []string{"credential_id"},
-		desc: "Change a watch's name, config, schedule or paused state; pausing is how to stop a watch. A new config must name a known host and path, as in create_watch, and the config of a watch that has a credential cannot change. Never moves a run ahead of the upstream's rate limit." + configNote + budgetNote},
+	{name: "list_credentials", op: "list-credentials", scope: scopeManage, readOnly: true, shape: briefCredentials,
+		desc: "List the credentials of the key's owner: id, name and kind only, for create_watch and update_watch credential_id. Secrets never leave."},
+	{name: "create_watch", op: "create-watch", scope: scopeManage, openWorld: true, limited: true,
+		desc: "Create a watch. Its api_url, base_url or registry must name, with no path, the kind's default (GitHub kinds api.github.com, GitLab kinds gitlab.com, oci_tags docker.io or ghcr.io), or the host and path of another watch the key's owner owns. credential_id comes from list_credentials: a credential only goes to a target (scheme, host and path) another of the owner's watches sends it to or, when no watch holds it, to the kind's default host; a first use elsewhere goes through the UI. Refused past 200 owned watches." + configNote + budgetNote},
+	{name: "update_watch", op: "update-watch", scope: scopeManage, openWorld: true, limited: true,
+		desc: "Change a watch's name, config, credential, schedule or paused state; pausing is how to stop a watch. A new config must name a known host and path, and a credential, attached or kept through a change of scheme, host or path, follows the credential_id rule, both as in create_watch. An empty credential_id detaches it. Never moves a run ahead of the upstream's rate limit." + configNote + budgetNote},
 	{name: "create_rule", op: "create-rule", scope: scopeManage, limited: true, desc: "Create a routing rule. channel_ids come from list_channels." + filterNote + budgetNote},
 	{name: "update_rule", op: "update-rule", scope: scopeManage, limited: true, desc: "Change a routing rule; disabling is how to stop one." + filterNote + budgetNote},
 }
@@ -173,14 +173,6 @@ func (t *tool) resolve(doc map[string]any) error {
 		if t.limitDefault != 0 {
 			limit["default"] = t.limitDefault
 		}
-	}
-	for _, name := range t.hidden {
-		if _, ok := t.in[name]; !ok {
-			return fmt.Errorf("hidden input %q is not an input of %s", name, t.op)
-		}
-		delete(t.in, name)
-		delete(props, name)
-		required = slices.DeleteFunc(required, func(r string) bool { return r == name })
 	}
 	slices.Sort(required)
 	t.schema = map[string]any{"type": "object", "properties": props, "additionalProperties": false}

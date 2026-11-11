@@ -73,7 +73,6 @@ func TestBuildToolsRefuses(t *testing.T) {
 		{"admin path", row{name: "x", op: "admin-thing", scope: scopeRead}, auth.AdminPrefix},
 		{"unknown scope", row{name: "x", op: "bare", scope: "admin"}, "unknown scope"},
 		{"limit on an operation without one", row{name: "x", op: "bare", scope: scopeRead, limitMax: 5}, "no limit"},
-		{"hidden input the operation no longer has", row{name: "x", op: "bare", scope: scopeRead, hidden: []string{"credential_id"}}, "credential_id"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := buildTools(sampleDoc(), []row{tt.r}); err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -98,7 +97,7 @@ func TestBuildToolsRefuses(t *testing.T) {
 func TestCatalogOrder(t *testing.T) {
 	want := []string{"count_inbox", "list_inbox", "list_watches", "get_watch", "list_watch_events", "list_watch_states", "list_rules", "get_rule", "list_deliveries",
 		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch",
-		"get_filter_reference", "list_channels", "create_watch", "update_watch", "create_rule", "update_rule"}
+		"get_filter_reference", "list_channels", "list_credentials", "create_watch", "update_watch", "create_rule", "update_rule"}
 	if len(rows) != len(want) {
 		t.Fatalf("%d rows", len(rows))
 	}
@@ -190,18 +189,6 @@ func TestDestructiveHint(t *testing.T) {
 	}
 }
 
-// 007-AC25: a hidden input leaves the schema, its required list and the dispatch map.
-func TestHiddenInput(t *testing.T) {
-	tools, err := buildTools(sampleDoc(), []row{{name: "s", op: "sample", scope: scopeWrite, hidden: []string{"name", "sub"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	props := tools[0].schema["properties"].(map[string]any)
-	if props["name"] != nil || props["sub"] != nil || tools[0].in["name"] != "" || strings.Join(tools[0].schema["required"].([]string), ",") != "id" {
-		t.Fatalf("%+v", tools[0].schema)
-	}
-}
-
 // A config's fields reach both tools from the structs, so a new one cannot be forgotten.
 func TestConfigFieldsInDescriptions(t *testing.T) {
 	structs := map[string]any{watch.KindGitHubRepo: watch.GitHubRepoConfig{}, watch.KindGitHubPR: watch.GitHubPRConfig{}, watch.KindGitHubIssue: watch.GitHubIssueConfig{}, watch.KindGitHubDiscussion: watch.GitHubDiscussionConfig{}, watch.KindGitLabRelease: watch.GitLabReleaseConfig{},
@@ -236,6 +223,16 @@ func TestBriefChannels(t *testing.T) {
 	briefChannels(data, nil)
 	got, _ := json.Marshal(data)
 	if want := `{"items":[{"id":"i","name":"n","type":"webhook"}]}`; string(got) != want {
+		t.Fatalf("%s", got)
+	}
+}
+
+// 016-AC2: id, name and kind survive, whatever the REST body grows.
+func TestBriefCredentials(t *testing.T) {
+	data := map[string]any{"items": []any{map[string]any{"id": "i", "name": "n", "kind": "registry_basic", "username": "u", "last4": "abcd", "used_by_count": 1, "new_field": 1}}}
+	briefCredentials(data, nil)
+	got, _ := json.Marshal(data)
+	if want := `{"items":[{"id":"i","kind":"registry_basic","name":"n"}]}`; string(got) != want {
 		t.Fatalf("%s", got)
 	}
 }

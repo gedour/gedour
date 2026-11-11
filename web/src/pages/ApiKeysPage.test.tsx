@@ -127,13 +127,13 @@ describe("ApiKeysPage", () => {
     expect(within(dialog).queryByText(/silence alerts/)).toBeNull();
     // A screen reader hears the scope as the name and what it allows as the description.
     expect(within(dialog).getByRole("radio", { name: "Manage" })).toHaveAccessibleDescription(
-      /creates and edits watches/,
+      /creates and edits watches and rules, and lists channels and credentials/,
     );
     await userEvent.type(within(dialog).getByLabelText("Name"), "laptop");
     await userEvent.click(within(dialog).getByRole("radio", { name: "Manage" }));
     expect(
       within(dialog).getByText(
-        "A hijacked manage key can silence alerts by disabling a rule or pausing a watch, and route events to your existing channels: give it only to clients that confirm writes with a person.",
+        "A hijacked manage key can silence alerts by disabling a rule or pausing a watch, route events to your existing channels, and read your private repositories into the inbox with your credentials: give it only to clients that confirm writes with a person.",
       ),
     ).toBeInTheDocument();
     await userEvent.selectOptions(within(dialog).getByLabelText("Duration"), "never");

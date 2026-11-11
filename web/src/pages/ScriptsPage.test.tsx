@@ -1,13 +1,16 @@
 import { EditorView } from "@codemirror/view";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
 import { preview, script } from "@/test/routing";
 import { lastCall, pending, problem } from "@/test/watches";
 import type { DryRun } from "@/types/api";
+
+// The form is a lazy CodeMirror chunk: a cold import under a loaded suite outlasts findBy's 1 s.
+beforeAll(() => import("@/pages/ScriptFormPage"));
 
 function editor(): EditorView {
   const v = EditorView.findFromDOM(document.querySelector(".cm-content") as HTMLElement);

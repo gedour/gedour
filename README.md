@@ -228,7 +228,7 @@ Or per project, in `.mcp.json`, with the key in an environment variable:
 
 | Tool | Returns | Limit |
 |---|---|---|
-| `count_inbox` | Unread inbox items | |
+| `count_inbox` | Unread and read inbox items, archive excluded | |
 | `list_inbox` | Inbox items with their event; a body over 8 KiB is cut and says so | default 20, max 50 |
 | `list_watches` | Your watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
 | `get_watch` | One watch | |

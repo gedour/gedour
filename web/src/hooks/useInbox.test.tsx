@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { COUNT_KEY, LIST_KEY, useInboxStream } from "@/hooks/useInbox";
+import { COUNT_KEY, LIST_KEY, READ_KEY, useInboxReadCount, useInboxStream } from "@/hooks/useInbox";
 import { ME, mockApi } from "@/test/api";
 
 function Probe() {
@@ -30,5 +30,27 @@ describe("useInboxStream", () => {
     expect(spy).not.toHaveBeenCalledWith({ queryKey: LIST_KEY });
     act(() => client.setQueryData(COUNT_KEY, 3));
     await vi.waitFor(() => expect(spy).toHaveBeenCalledWith({ queryKey: LIST_KEY }));
+  });
+});
+
+describe("useInboxReadCount", () => {
+  // The stream carries no read count: a refresh of the list must bring it along.
+  it("refetches whenever the list is refreshed", async () => {
+    let read = 2;
+    mockApi({ "/api/v1/inbox/count": () => Response.json({ unread: 0, read }) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function ReadProbe() {
+      useInboxReadCount();
+      return null;
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <ReadProbe />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(client.getQueryData(READ_KEY)).toBe(2));
+    read = 1;
+    await act(() => client.invalidateQueries({ queryKey: LIST_KEY }));
+    await vi.waitFor(() => expect(client.getQueryData(READ_KEY)).toBe(1));
   });
 });

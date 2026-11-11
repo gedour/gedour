@@ -46,7 +46,7 @@ var configNote = " config fields by kind: " + watch.ConfigFields() + "."
 
 // rows is the catalog, in tools/list order: client prompt caches depend on it.
 var rows = []row{
-	{name: "count_inbox", op: "count-inbox", scope: scopeRead, readOnly: true, desc: "Count the unread items in the inbox."},
+	{name: "count_inbox", op: "count-inbox", scope: scopeRead, readOnly: true, desc: "Count the unread and read items in the inbox, archive excluded."},
 	{name: "list_inbox", op: "list-inbox", scope: scopeRead, readOnly: true, limitDefault: 20, limitMax: 50, shape: cutInboxBodies,
 		desc: "List inbox items with their event and watch; a long event body is cut."},
 	{name: "list_watches", op: "list-watches", scope: scopeRead, readOnly: true, limitDefault: 50, limitMax: 200, shape: markTruncated,

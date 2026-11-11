@@ -28,6 +28,30 @@ func ruleScopes(t *testing.T, pool *pgxpool.Pool) map[string]string {
 	return out
 }
 
+// downByHand runs migration 26's Down as psql without ON_ERROR_STOP does: each top-level statement on its own, an
+// error printed and the next one run.
+func downByHand(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	src, err := os.ReadFile("migrations/00026_rule_watches.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, down, _ := strings.Cut(string(src), "-- +goose Down")
+	var stmt strings.Builder
+	quoted := false
+	for line := range strings.Lines(down) {
+		if strings.HasPrefix(line, "--") {
+			continue
+		}
+		stmt.WriteString(line)
+		quoted = quoted != (strings.Count(line, "$$")%2 == 1)
+		if !quoted && strings.HasSuffix(strings.TrimSpace(line), ";") {
+			_, _ = pool.Exec(context.Background(), stmt.String())
+			stmt.Reset()
+		}
+	}
+}
+
 // 014-AC11: the up keeps every rule's scope; the down restores watch_id and refuses, naming them, rules on several
 // watches or on none; a second up gives the same scopes back.
 func TestRuleWatchesMigration(t *testing.T) {
@@ -93,6 +117,14 @@ func TestRuleWatchesMigration(t *testing.T) {
 		if strings.Contains(err.Error(), "("+s+")") {
 			t.Errorf("down refusal %q names rule %s, which it could restore", err, s)
 		}
+	}
+	// By hand, the refusal stops the whole Down too: nothing after it ran.
+	downByHand(t, pool)
+	if got := ruleScopes(t, pool); got["several"] != "w1,w2" || got["one"] != "w1" {
+		t.Fatalf("after a refused Down by hand: %v", got)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'rules' AND column_name = 'watch_id'`).Scan(&leftovers); err != nil || leftovers != 0 {
+		t.Fatalf("rules.watch_id after a refused Down by hand: %d %v", leftovers, err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM rules WHERE id IN ($1, $2)`, several, none); err != nil {
 		t.Fatal(err)

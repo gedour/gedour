@@ -727,6 +727,14 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   suspended key, and a missing-role refusal they handle revokes the keys as before. Rollback: scale web and worker
   to 0, run migration 24's `Down` section by hand (`psql`; it revokes every live suspended key), delete version 24
   from `goose_db_version`, then deploy the older image. Started earlier, the older image accepts suspended keys.
+- Rules on several watches (migration 26). It moves each rule's watch to `rule_watches` and drops
+  `rules.watch_id`. During a rolling update, pods of the previous version answer 500 on rule list, read,
+  create, edit, delete and test, watch delete and account purge (and its preview); their MCP `list_rules`,
+  `get_rule`, `create_rule` and `update_rule` and their router fail; new pods work. No event is lost: an old
+  router's batch rolls back and the new workers route it. Rollback: edit every rule on several watches down
+  to one watch or all watches, scale web and worker to 0, run migration 26's `Down` section by hand (`psql`;
+  it refuses a rule on several watches and names it, and changes nothing then), delete version 26 from
+  `goose_db_version`, then deploy the older image.
 
 ## Endpoints
 

@@ -95,8 +95,9 @@ function Scope({ rule }: { rule: Rule }) {
       {/* A popover, not a tooltip: a tap opens it, and its list scrolls by keyboard. */}
       <Popover>
         <PopoverTrigger
-          aria-label={`Show all ${names.length} watches`}
-          className="rounded px-1 font-medium text-ink underline-offset-4 hover:underline"
+          // The name starts with the visible "+N" (WCAG 2.5.3); 24 px at least (WCAG 2.5.8).
+          aria-label={`+${names.length - 2}: show all ${names.length} watches`}
+          className="inline-flex min-h-6 min-w-6 items-center justify-center rounded px-1 font-medium text-ink underline-offset-4 hover:underline"
         >
           +{names.length - 2}
         </PopoverTrigger>

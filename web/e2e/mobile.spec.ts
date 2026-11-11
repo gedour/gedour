@@ -304,7 +304,11 @@ test("the rules list's scope list opens by tap and fits 375 px", async ({ page }
     const more = page
       .getByRole("listitem")
       .filter({ hasText: name })
-      .getByRole("button", { name: "Show all 4 watches" });
+      .getByRole("button", { name: "+2: show all 4 watches" });
+    // 24 px target at least (WCAG 2.5.8).
+    const target = await more.boundingBox();
+    expect(target?.width).toBeGreaterThanOrEqual(24);
+    expect(target?.height).toBeGreaterThanOrEqual(24);
     await more.tap();
     const dialog = page.getByRole("dialog", { name: `Watches of ${name}` });
     await expect(dialog.getByRole("listitem")).toHaveCount(4);

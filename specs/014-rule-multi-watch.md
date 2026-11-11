@@ -1,6 +1,6 @@
 # 014 — Rules on several watches
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-10
 
@@ -76,48 +76,48 @@ one-watch rule is today.
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given watches A, B, C of the user, a rule saved with `watch_ids: [A, B]` routes the events of
+- [x] **AC1** Given watches A, B, C of the user, a rule saved with `watch_ids: [A, B]` routes the events of
   A and B and not those of C.
-- [ ] **AC2** A rule saved with `watch_ids` absent or `[]` routes every watch of the owner, including one
+- [x] **AC2** A rule saved with `watch_ids` absent or `[]` routes every watch of the owner, including one
   created after the rule.
-- [ ] **AC3** `watch_ids` naming a watch the caller does not own, or a non-UUID, is a 400 located at
+- [x] **AC3** `watch_ids` naming a watch the caller does not own, or a non-UUID, is a 400 located at
   `body.watch_ids[i]`; more than 500 items is a 400; a duplicate id is stored once.
-- [ ] **AC4** `watch_id: A` on create or update stores the scope `[A]`; `watch_id: ""` stores all watches;
+- [x] **AC4** `watch_id: A` on create or update stores the scope `[A]`; `watch_id: ""` stores all watches;
   `watch_id` and `watch_ids` together is a 400.
-- [ ] **AC5** A rule's output holds `watch_ids` sorted and `watches` with each name; `watch_id` and
+- [x] **AC5** A rule's output holds `watch_ids` sorted and `watches` with each name; `watch_id` and
   `watch_name` are set for a one-watch rule and null for an all-watches or a multi-watch rule.
-- [ ] **AC6** Update with `watch_ids` replaces the list; an update without `watch_ids` or `watch_id` keeps it.
-- [ ] **AC7** Deleting watch A takes it out of a rule on `[A, B]`, which keeps routing B; a rule on `[A]`
+- [x] **AC6** Update with `watch_ids` replaces the list; an update without `watch_ids` or `watch_id` keeps it.
+- [x] **AC7** Deleting watch A takes it out of a rule on `[A, B]`, which keeps routing B; a rule on `[A]`
   alone is deleted with the watch.
-- [ ] **AC8** After watch A is transferred to another account, the old owner's rule on `[A, B]` routes B
+- [x] **AC8** After watch A is transferred to another account, the old owner's rule on `[A, B]` routes B
   only, shows A with a null name, and routes A again after a transfer back.
-- [ ] **AC9** Purging an account deletes the other users' rules whose every watch belonged to it, and lists
+- [x] **AC9** Purging an account deletes the other users' rules whose every watch belonged to it, and lists
   them in the purge preview; a rule that keeps another watch loses the purged one and stays.
-- [ ] **AC10** The preview with `watch_ids: [A, B]` evaluates the last 20 events of A and B only;
+- [x] **AC10** The preview with `watch_ids: [A, B]` evaluates the last 20 events of A and B only;
   `watch_id` works there as on rules.
-- [ ] **AC11** The migration keeps every existing rule's scope: a one-watch rule becomes a list of that
+- [x] **AC11** The migration keeps every existing rule's scope: a one-watch rule becomes a list of that
   watch, a null `watch_id` becomes all watches; its down step restores `watch_id`, and fails when a rule has
   several watches, naming the rules to edit.
-- [ ] **AC12** A watch delete, a purge, a rule edit and the router racing each other neither deadlock nor
+- [x] **AC12** A watch delete, a purge, a rule edit and the router racing each other neither deadlock nor
   leave a rule on a deleted watch (the existing race tests, extended to multi-watch rules).
-- [ ] **AC13** The rule form offers "All watches" or "Selected watches"; saving "Selected watches" with
+- [x] **AC13** The rule form offers "All watches" or "Selected watches"; saving "Selected watches" with
   none picked is blocked in the form with a message on the field; editing a rule opens with its scope and
   its picked watches checked.
-- [ ] **AC14** MCP `create_rule` with `watch_ids` creates a multi-watch rule; `get_rule` returns its
+- [x] **AC14** MCP `create_rule` with `watch_ids` creates a multi-watch rule; `get_rule` returns its
   `watches`.
-- [ ] **AC15** With 2000 watches, the picker shows the first 100 and says there are more; typing in the
+- [x] **AC15** With 2000 watches, the picker shows the first 100 and says there are more; typing in the
   search narrows the list on name and target with the term highlighted, the kind filter narrows it further,
   and "no watch matches" shows when nothing does.
-- [ ] **AC16** "Select all matching" picks every match of the search and kind, including those past the 100
+- [x] **AC16** "Select all matching" picks every match of the search and kind, including those past the 100
   shown, and keeps earlier picks; past 500 picks in total it refuses with a message and picks nothing;
   "Clear matching" unpicks only the matches; "Selected only" lists the picks; the count matches them.
-- [ ] **AC17** The picked watches show as chips, each removable; past 10 they fold into "+N more"; a picked
+- [x] **AC17** The picked watches show as chips, each removable; past 10 they fold into "+N more"; a picked
   watch the user no longer owns shows as "A watch you no longer own" and can be removed.
-- [ ] **AC18** The picker works with the keyboard alone (Tab to the search, the filters and each checkbox,
+- [x] **AC18** The picker works with the keyboard alone (Tab to the search, the filters and each checkbox,
   Space toggles) and the rule form, picker open, passes the axe check of `web/e2e/a11y.spec.ts`.
-- [ ] **AC19** The rules list shows "All watches", the watch name, or the first two names and "+N" with the
+- [x] **AC19** The rules list shows "All watches", the watch name, or the first two names and "+N" with the
   full list behind "+N", opened by tap or keyboard.
-- [ ] **AC20** The preview runs on the picked watches and reruns when the selection changes.
+- [x] **AC20** The preview runs on the picked watches and reruns when the selection changes.
 
 ## Phases
 

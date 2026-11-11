@@ -26,10 +26,11 @@ BEGIN
     IF bad IS NOT NULL THEN
         RAISE EXCEPTION 'rules on several watches or none, edit them to one watch or all watches first: %', bad;
     END IF;
+    -- In the block: run by hand, psql would go on past the refusal to the statements after it.
+    ALTER TABLE rules ADD COLUMN watch_id uuid REFERENCES watches (id) ON DELETE CASCADE;
+    UPDATE rules r SET watch_id = rw.watch_id FROM rule_watches rw WHERE rw.rule_id = r.id;
+    CREATE INDEX rules_watch_id_idx ON rules (watch_id);
+    ALTER TABLE rules DROP COLUMN all_watches;
+    DROP TABLE rule_watches;
 END $$;
 -- +goose StatementEnd
-ALTER TABLE rules ADD COLUMN watch_id uuid REFERENCES watches (id) ON DELETE CASCADE;
-UPDATE rules r SET watch_id = rw.watch_id FROM rule_watches rw WHERE rw.rule_id = r.id;
-CREATE INDEX rules_watch_id_idx ON rules (watch_id);
-ALTER TABLE rules DROP COLUMN all_watches;
-DROP TABLE rule_watches;

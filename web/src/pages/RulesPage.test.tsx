@@ -98,7 +98,7 @@ describe("RulesPage", () => {
     ]);
     // "+2" opens every name, focus in the list; Escape closes it and hands focus back.
     const more = within(items[3] as HTMLElement).getByRole("button", {
-      name: "Show all 4 watches",
+      name: "+2: show all 4 watches",
     });
     expect(more).toHaveTextContent("+2");
     await userEvent.click(more);

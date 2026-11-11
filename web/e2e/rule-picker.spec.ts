@@ -177,7 +177,7 @@ test("pick watches among 2000", async ({ page }) => {
     // 014-AC19: the first two names in order, then +99 opening the 101.
     const row = page.getByRole("listitem").filter({ hasText: name });
     await expect(row.getByText("Fleet 0005, Fleet 1000", { exact: true })).toBeVisible();
-    await expect(row.getByRole("button", { name: "Show all 101 watches" })).toHaveText("+99");
+    await expect(row.getByRole("button", { name: "+99: show all 101 watches" })).toHaveText("+99");
   } finally {
     // Rules are capped per user: a retry must not pile them up.
     for (const r of rules.filter((r) => r.name.startsWith("Fleet rule ")))

@@ -613,12 +613,12 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: gedour
 resources:
-  - https://github.com/gedour/gedour//deploy/k8s/base?ref=v1.0.0
+  - https://github.com/gedour/gedour//deploy/k8s/base?ref=v1.1.0
 components:
-  - https://github.com/gedour/gedour//deploy/k8s/components/networkpolicy?ref=v1.0.0
+  - https://github.com/gedour/gedour//deploy/k8s/components/networkpolicy?ref=v1.1.0
 images:
   - name: ghcr.io/gedour/gedour
-    newTag: v1.0.0
+    newTag: v1.1.0
 configMapGenerator:
   - name: gedour
     behavior: merge
@@ -628,7 +628,7 @@ configMapGenerator:
 
 - Image: `ghcr.io/gedour/gedour`. Releases push `vX.Y.Z`, `X.Y`, `X` and `latest` (pre-releases: the
   tag itself plus `alpha`, `beta` or `rc`); every push to `develop` pushes `develop-<sha>-<run>`, the run
-  number ordering them for image automation. The base pins `v1.0.0` through `images:`. Pin a full
+  number ordering them for image automation. The base pins `v1.1.0` through `images:`. Pin a full
   version (or a digest) in overlays, never a moving tag. A release tag fails before the build unless
   the base `newTag` and the README's `?ref=` and `newTag:` pins equal it (`scripts/check-release-pin.sh`; pre-releases skip it).
 - Probes: startup and readiness on `/healthz` (web on `http`, worker on `metrics`: it has no main

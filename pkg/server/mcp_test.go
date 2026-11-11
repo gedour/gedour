@@ -951,7 +951,7 @@ func TestMCPParity(t *testing.T) {
 	}
 }
 
-// 007-AC25: inputSchema is the operation's in api/openapi.json, and the catalog offers no URL, host, credential or free-form object.
+// 007-AC25: inputSchema is the operation's in api/openapi.json, and the catalog offers no URL, host or free-form object.
 func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
@@ -1034,9 +1034,6 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 							required = append(required, p.Name)
 						}
 					}
-					if tool.Name == "create_watch" || tool.Name == "update_watch" {
-						delete(want, "credential_id")
-					}
 					if l, ok := limits[tool.Name]; ok {
 						want["limit"]["default"], want["limit"]["maximum"] = l[0], l[1]
 					}
@@ -1056,9 +1053,13 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 			if !found {
 				t.Fatalf("no operation %s", op)
 			}
+			// 016-AC3
+			if _, ok := tool.InputSchema.Properties["credential_id"]; ok != (tool.Name == "create_watch" || tool.Name == "update_watch") {
+				t.Errorf("credential_id input %v", ok)
+			}
 			for name, prop := range tool.InputSchema.Properties {
 				lower := strings.ToLower(name)
-				if strings.Contains(lower, "url") || strings.Contains(lower, "host") || lower == "credential_id" {
+				if strings.Contains(lower, "url") || strings.Contains(lower, "host") {
 					t.Errorf("input %q", name)
 				}
 				isConfig := name == "config" && (tool.Name == "create_watch" || tool.Name == "update_watch")

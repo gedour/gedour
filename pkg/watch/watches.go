@@ -184,7 +184,7 @@ func checkCredential(ctx context.Context, tx pgx.Tx, owner, kind, id string) err
 		return detail("no such credential among the watch owner's")
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("credential kind: %w", err)
 	}
 	if want := CredentialKindFor(kind); credKind != want {
 		return detail("a " + kind + " watch needs a " + want + " credential")
@@ -195,9 +195,8 @@ func checkCredential(ctx context.Context, tx pgx.Tx, owner, kind, id string) err
 // maxKeyWatches bounds what a key can add to the worker's fetches; REST has no cap.
 const maxKeyWatches = 200
 
-func keyCredentialError() error {
-	return huma.Error403Forbidden("an API key cannot attach or detach a credential: use the UI")
-}
+// targetSQL reads a watch's target in SQL; it must follow targetOf's field order.
+const targetSQL = `COALESCE(config->>'api_url', config->>'base_url', config->>'registry', '')`
 
 // checkKnownHost keeps a key's config from carrying data to a host its owner never chose.
 func checkKnownHost(ctx context.Context, tx pgx.Tx, owner, kind string, cfg map[string]any) error {
@@ -210,18 +209,60 @@ func checkKnownHost(ctx context.Context, tx pgx.Tx, owner, kind string, cfg map[
 	if isDefaultHost(target) {
 		return unknownTargetError(field, raw)
 	}
-	rows, err := tx.Query(ctx, `SELECT COALESCE(config->>'api_url', config->>'base_url', config->>'registry', '') FROM watches WHERE owner_id = $1`, owner)
+	rows, err := tx.Query(ctx, `SELECT `+targetSQL+` FROM watches WHERE owner_id = $1`, owner)
 	if err != nil {
-		return err
+		return fmt.Errorf("saved targets: %w", err)
 	}
 	saved, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return err
+		return fmt.Errorf("saved targets: %w", err)
 	}
 	if slices.ContainsFunc(saved, func(s string) bool { return comparableTarget(s) == target }) {
 		return nil
 	}
 	return unknownTargetError(field, raw)
+}
+
+// credentialTarget is comparableTarget with the scheme: a credential reaching https://H must not go to http://H.
+func credentialTarget(raw string) string {
+	scheme, _, ok := strings.Cut(raw, "://")
+	if !ok {
+		scheme = "https"
+	}
+	return strings.ToLower(scheme) + "://" + comparableTarget(raw)
+}
+
+// checkCredentialTarget keeps a key from sending a credential to a target no other watch sends it to; only an unused one may go to the kind's default host.
+func checkCredentialTarget(ctx context.Context, tx pgx.Tx, owner, kind, credID, exceptWatchID string, cfg map[string]any) error {
+	// NO KEY UPDATE serializes two key calls on one credential, so neither reads a reached set the other is changing.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM credentials WHERE id = $1 AND owner_id = $2 FOR NO KEY UPDATE`, credID, owner); err != nil {
+		return fmt.Errorf("lock credential: %w", err)
+	}
+	rows, err := tx.Query(ctx, `SELECT id::text, `+targetSQL+` FROM watches WHERE owner_id = $1 AND credential_id = $2`, owner, credID)
+	if err != nil {
+		return fmt.Errorf("credential targets: %w", err)
+	}
+	// The edited watch makes the credential used, but its old target does not vouch for its new one.
+	var used bool
+	var reached []string
+	var id, t string
+	if _, err := pgx.ForEachRow(rows, []any{&id, &t}, func() error {
+		used = true
+		if id != exceptWatchID {
+			reached = append(reached, t)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("credential targets: %w", err)
+	}
+	_, raw := targetOf(cfg)
+	target := credentialTarget(raw)
+	if (!used && slices.ContainsFunc(defaultHosts[kind], func(h string) bool { return "https://"+h == target })) ||
+		slices.ContainsFunc(reached, func(s string) bool { return credentialTarget(s) == target }) {
+		return nil
+	}
+	return huma.Error403Forbidden("an API key can only send a credential to a target one of your watches already sends it to: attach it in the UI first",
+		&huma.ErrorDetail{Location: "body.credential_id", Message: "not a target another watch sends this credential to, nor the kind's default host for an unused one", Value: credID})
 }
 
 func unknownTargetError(field, raw string) error {
@@ -233,7 +274,7 @@ func unknownTargetError(field, raw string) error {
 func underKeyCap(ctx context.Context, tx pgx.Tx, owner string) error {
 	var n int
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM watches WHERE owner_id = $1`, owner).Scan(&n); err != nil {
-		return err
+		return fmt.Errorf("count watches: %w", err)
 	}
 	if n >= maxKeyWatches {
 		return huma.Error409Conflict(fmt.Sprintf("you own %d watches: an API key cannot create more, delete one or use the UI", n))
@@ -252,9 +293,6 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 	}
 	b := in.Body
 	viaKey := audit.APIKeyID(ctx) != ""
-	if viaKey && b.CredentialID != "" {
-		return nil, keyCredentialError()
-	}
 	cfg, errs := s.v.Config(b.Kind, b.Config)
 	if b.Schedule == "" {
 		b.Schedule = DefaultScheduleFor(b.Kind)
@@ -285,6 +323,11 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 			if err := checkCredential(ctx, tx, me, b.Kind, b.CredentialID); err != nil {
 				return err
 			}
+			if viaKey {
+				if err := checkCredentialTarget(ctx, tx, me, b.Kind, b.CredentialID, "", cfg); err != nil {
+					return err
+				}
+			}
 			cred = &b.CredentialID
 		}
 		var id string
@@ -311,9 +354,6 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 	}
 	b := in.Body
 	viaKey := audit.APIKeyID(ctx) != ""
-	if viaKey && b.CredentialID != nil {
-		return nil, keyCredentialError()
-	}
 	var after Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		before, err := authorize(ctx, tx, me, in.ID, true)
@@ -347,11 +387,6 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		// Authz reads any config change, a box included: a box spends the owner's token on another call.
 		changed := !reflect.DeepEqual(next.Config, before.Config)
 		retargeted := !sameTarget(next.Config, before.Config)
-		// The config decides where the credential is sent: a hijacked key retargeting it could hand the
-		// token to another host or read the owner's private repositories with it.
-		if before.CredentialID != nil && changed && viaKey {
-			return huma.Error403Forbidden("an API key cannot change the config of a watch that has a credential: use the UI")
-		}
 		if viaKey && changed {
 			if err := checkKnownHost(ctx, tx, me, before.Kind, next.Config); err != nil {
 				return err
@@ -364,6 +399,16 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 					return err
 				}
 				next.CredentialID = b.CredentialID
+			}
+		}
+		// The target decides where the credential is sent; a detach sends nothing, so it needs no check.
+		if viaKey && next.CredentialID != nil {
+			_, rawBefore := targetOf(before.Config)
+			_, rawNext := targetOf(next.Config)
+			if before.CredentialID == nil || *before.CredentialID != *next.CredentialID || credentialTarget(rawBefore) != credentialTarget(rawNext) {
+				if err := checkCredentialTarget(ctx, tx, me, before.Kind, *next.CredentialID, in.ID, next.Config); err != nil {
+					return err
+				}
 			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE watches SET name = $2, config = $3, schedule = $4, paused = $5, credential_id = $6, updated_at = now()

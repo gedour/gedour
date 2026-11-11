@@ -148,14 +148,15 @@ Fixed order, so client prompt caches hold ([spec SHOULD](https://modelcontextpro
 | `unarchive_inbox` | `unarchive-inbox` | write | false | |
 | `run_watch` | `run-watch` | write | false | Schedules the run through the worker; does not wait |
 
-The read tools, write tools and the two manage reads also set `destructiveHint: false`: MCP defaults it to true.
+The read tools, write tools and the manage reads also set `destructiveHint: false`: MCP defaults it to true.
 
 | Tool | Operation | Scope | `readOnlyHint` | Output changes |
 |---|---|---|---|---|
 | `get_filter_reference` | `get-filter-reference` | manage | true | |
 | `list_channels` | `list-channels` | manage | true | `id`, `name`, `type` only: rules need the IDs, nothing else leaves |
-| `create_watch` | `create-watch` | manage | false | No `credential_id` input |
-| `update_watch` | `update-watch` | manage | false | No `credential_id` input |
+| `list_credentials` | `list-credentials` | manage | true | `id`, `name`, `kind` only, for `credential_id` ([016](016-mcp-credentials.md)) |
+| `create_watch` | `create-watch` | manage | false | `credential_id` under the credential target rule ([016](016-mcp-credentials.md)) |
+| `update_watch` | `update-watch` | manage | false | `credential_id` under the credential target rule; `""` detaches ([016](016-mcp-credentials.md)) |
 | `create_rule` | `create-rule` | manage | false | |
 | `update_rule` | `update-rule` | manage | false | |
 
@@ -167,7 +168,7 @@ The read tools, write tools and the two manage reads also set `destructiveHint: 
 | Operations | Why |
 |---|---|
 | Channels (create, update, delete, test), their targets and `last4` | A new webhook target is an exfiltration path for an injected prompt |
-| Credentials | Secret material and its rotation |
+| Credentials: secret material, create, rotate, delete | Secrets never cross MCP. Listing id, name and kind and attaching are allowed since [016](016-mcp-credentials.md) |
 | Scripts, dry runs | Run code |
 | `run-all-watches` | Fan-out on one call |
 | Audit, admin, act-as, API keys, `me` | Other accounts' data, escalation, or the CSRF token |
@@ -183,10 +184,11 @@ config, whose `api_url`, `base_url` or `registry` decide where gedour sends requ
 (`config.go` keeps this owner-only for a reason). `netguard` blocks internal addresses, not an attacker's public
 host. So a request made with a key, in the REST handlers so there is one path:
 
-- **Never attaches a credential.** `credential_id` is absent from the tool schema and refused by the handler.
-- **Never changes the config of a watch that has a credential.** The existing sharee check in `updateWatch` also
-  applies to keys, owner's included. Without it, an injected prompt moves `api_url` and the owner's token goes
-  to that host. Name, schedule and pause still work.
+- **Sends a credential only where it already goes** ([016](016-mcp-credentials.md)). When a key's call ends with a
+  credential on the watch and the credential or the target changes, the target (scheme, host and path) must equal
+  that of another owner's watch with the same credential, or, for a credential no watch holds, the kind's default
+  host. Without it, an injected prompt moves `api_url` and the owner's token goes to that host. A first use
+  elsewhere goes through the UI. Detaching needs no check.
 - **Only targets a known host.** Known means the kind's own default (`api.github.com` for GitHub kinds, `gitlab.com`
   for GitLab kinds, `docker.io` and `ghcr.io` for OCI tags), or a non-default host or path in one of the owner's watches; a saved default opens no other kind. A new host goes through the UI first. This keeps the URL from carrying data to an
   attacker's server. Hosts compare exactly after folding ASCII case, a trailing dot and a default port. No IDNA
@@ -197,11 +199,11 @@ host. So a request made with a key, in the REST handlers so there is one path:
 
 A known host may answer a redirect to another host: the worker follows it with no `Authorization`,
 `Private-Token` or `Referer`, and that host learns the path the known host forwards. A registry's challenge names a token host:
-it learns the repository in `scope`, plus the registry credential only on a watch that has one, so never on a key's
-own watch. Either way the run's fetch log records the host (measured, `TestWorkerRedirectExposesNoCredential`). What
+it learns the repository in `scope`, plus the registry credential only on a watch that has one, so on a key's watch only
+for a registry the credential target rule allows. Either way the run's fetch log records the host (measured, `TestWorkerRedirectExposesNoCredential`). What
 that host reads can hold the key's `repo`, `project` or `repository`, a few hundred characters at most, at a
-destination the known host picks and the key does not. A person attaching a credential to a key-made watch is a
-person's decision.
+destination the known host picks and the key does not. A credential's first use on a custom host is a person's
+decision, in the UI.
 
 **Rate limits.** Per key, per replica, with the `route` limiter moved to a shared package, unchanged:
 5 requests/s with a burst of 20 on `POST /mcp` (HTTP 429 and `Retry-After`), and on top a burst of 6 then one every
@@ -215,7 +217,7 @@ lookup and 256 bits defeat guessing, so failed keys get a metric and no IP limit
 |---|---|---|
 | read | Owner's inbox with release notes, owned and shared watches with config, their owner's name and ID and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
 | write | Also inbox state, and scheduling a run of a watch the owner can write | Creating or changing anything else |
-| manage | Also the list of channels, creating and editing rules and watches, within the host and credential rules above | Credential secrets, channel targets, delete, shares |
+| manage | Also the list of channels and of credentials (id, name, kind), creating and editing rules and watches, within the host and credential rules above | Credential secrets, channel targets, delete, shares |
 
 Bounded by expiry (none on a `never` key), the sign-in freshness check and revocation.
 
@@ -250,11 +252,12 @@ Release notes, titles, tags and watch errors come from third parties and reach a
 no taint field, and no marking stops a model that decides to obey. So the defence comes in two layers.
 
 1. **What an injection can do through gedour is limited by the catalog.** No tool opens a new destination: no
-   channel target, no script, no unknown host, no credential. Exfiltration through the client's other tools is the
+   channel target, no script, no unknown host. Exfiltration through the client's other tools is the
    client's to gate. A fully hijacked key does at worst:
    - `write`: marks inbox items and schedules watch runs.
    - `manage`: also routes events to the owner's existing channels, adds watches on known hosts, with a name of
-     its choosing and text and links from a repository it controls reaching those channels' messages, and **silences alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2). Audited with the key's ID. Give
+     its choosing and text and links from a repository it controls reaching those channels' messages, and **silences alerts** by disabling a rule or pausing a watch. Accepted by babs (Q2).
+   - `manage`, since [016](016-mcp-credentials.md): also attaches a credential to a watch on any repository or project at a target the credential already reaches, or, for one no watch uses, at its kind's default host, which reads the owner's private repositories into the inbox, and detaches a credential, which silences a private watch. Audited with the key's ID. Give
      `manage` to clients that confirm writes with a human.
 2. **Output marks all of it as untrusted.** Every field, as a per-field list would rot.
 
@@ -326,9 +329,9 @@ Transport and auth:
 
 Tools:
 
-- [x] **AC23** `tools/list` returns 9 tools to a `read` key, 14 to a `write` key and all 20 to a `manage` key, in the table's order, with `cacheScope: private`. A key calling a tool above its scope gets `-32602` and nothing changes.
+- [x] **AC23** `tools/list` returns 9 tools to a `read` key, 14 to a `write` key and all 21 to a `manage` key (amended by [016](016-mcp-credentials.md)), in the table's order, with `cacheScope: private`. A key calling a tool above its scope gets `-32602` and nothing changes.
 - [x] **AC24** Each read tool returns the REST data of that user. Alice's key on Bob's watch gets `isError` not found. A shared watch reads. `run_watch` on a read-only share gets `isError` forbidden.
-- [x] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog.
+- [x] **AC25** Each `inputSchema` matches its operation in `api/openapi.json`. Invalid arguments get `isError` with the field. No tool input has a `url`, `host` or free-form object field, but `config` on `create_watch` and `update_watch`, and none has `credential_id`: the test walks the whole catalog. Amended by [016](016-mcp-credentials.md): `create_watch` and `update_watch` have `credential_id`.
 - [x] **AC26** `run_watch` moves `next_run_at` and writes `watch.run_requested` with the key's `api_key_id`. A paused watch gets `isError`, and so does a key's call while the upstream's rate limit holds the watch (`last_status` `rate_limited`, `next_run_at` ahead): a person's "run now" may override that hold, an unattended client may not. A 429 ending a run outranks a run-now made during that run. A REST audit row has `api_key_id` null. The audit view shows the key's name to its owner, and its ID to others or once the key is gone.
 - [x] **AC27** Every successful result is one text block fenced with a nonce differing between two calls, with no `structuredContent`, and a real client's model receives the fence. An event body holding `</untrusted-data nonce="...">` stays inside the fence.
 - [x] **AC28** A payload holding each listed character class (a C1 control, U+202E, U+200B, U+200D, U+00AD, U+FEFF, U+E0041, U+2028), in a value and in a map key, comes out without it. Tab and newline stay.
@@ -345,13 +348,13 @@ UI and interop:
 
 Manage:
 
-- [x] **AC34** Sent with a key, `create-watch` and `update-watch` refuse a `credential_id`, even one the key's owner holds, whatever the entry path. The same calls on a session still work.
-- [x] **AC35** With a key, changing the config of a watch that has a credential gets `isError`, for the owner too, on `api_url`, `base_url` and `registry` alike; changing its name, schedule or paused state works. The same change on a session still works.
+- [x] **AC34** Sent with a key, `create-watch` and `update-watch` refuse a `credential_id`, even one the key's owner holds, whatever the entry path. The same calls on a session still work. Replaced by [016](016-mcp-credentials.md) AC4 to AC9.
+- [x] **AC35** With a key, changing the config of a watch that has a credential gets `isError`, for the owner too, on `api_url`, `base_url` and `registry` alike; changing its name, schedule or paused state works. The same change on a session still works. Amended by [016](016-mcp-credentials.md) AC8: allowed on a target the credential already reaches.
 - [x] **AC36** With a key, a config naming an unknown host, or a path not saved on it, gets `isError`, on each of `api_url`, `base_url` and `registry`, on create and on update. A default host and a host in one of the owner's watches pass; a host only in another user's watch does not.
 - [x] **AC37** `create_rule` and `update_rule` keep the REST checks: another user's channel or an unreadable watch gets `isError`, a bad filter gets `isError` with the field, `MaxRules` holds.
 - [x] **AC38** `list_channels` returns only `id`, `name` and `type`: a webhook channel's URL and `last4` appear nowhere in the result.
 - [x] **AC41** During a rate-limit hold, a key's `update_watch` changing schedule, paused or target leaves `next_run_at` alone. The same edit on a session moves it.
-- [x] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope.
+- [x] **AC39** Each manage mutation writes its usual audit row with the key's `api_key_id`. The 201st owned watch through a key gets `isError`. The 7th mutation in a burst, mixed with `run_watch`, gets `isError`. No delete, share or credential tool exists at any scope (since [016](016-mcp-credentials.md), but `list_credentials`).
 
 ## Phases
 
@@ -378,7 +381,7 @@ Manage:
 
 ### Phase 4 — Manage tools
 
-- Work: the 6 manage tools; a key flag on the context read by `watch` for the credential, config and host checks; watch cap; shared mutation limit; `list_channels` shaping; README's warning on `manage`.
+- Work: the 6 manage tools (7 since [016](016-mcp-credentials.md)); a key flag on the context read by `watch` for the credential, config and host checks (the credential check is the target rule since [016](016-mcp-credentials.md)); watch cap; shared mutation limit; `list_channels` shaping; README's warning on `manage`.
 - **Covers**: AC23 (manage part), AC25 (`config`), AC34 to AC39, AC41.
 - **Data model impact**: none.
 - **DoD**: `make test` exits 0 with AC34 to AC36 run through `/mcp` and through a session on the same watch; `make e2e` exits 0 with a key creating a rule on `/mcp` and the rule showing in the UI; `make coverage` exits 0 on both floors; `pre-commit run --all-files` exits 0.
@@ -426,7 +429,7 @@ None. Answered by babs:
 - SHA-256 without pepper: 256 random bits cannot be brute-forced from a database leak, and session tokens already work this way.
 - Three nested scopes: per-tool scopes need a UI nobody asked for.
 - `never` is not the default, and does not skip the sign-in check: that check is the only bound left on such a key.
-- A key cannot attach a credential, retarget one, or reach a new host: these are this spec's additions to Q2, as `manage` would otherwise hand the owner's tokens to an injected prompt. Cost: a private repository or a new host starts in the UI. Overturnable, at that risk.
+- A key cannot attach a credential, retarget one, or reach a new host: these are this spec's additions to Q2, as `manage` would otherwise hand the owner's tokens to an injected prompt. Cost: a private repository or a new host starts in the UI. Overturnable, at that risk. Overturned for credentials by [016](016-mcp-credentials.md): a key attaches or retargets one to a target it already reaches.
 - No delete tool: Q2 asked for creation and edition.
 - A read-write sharee on a session can add a host to the owner's known set by retargeting a watch with no credential. REST allows that retarget, and exploiting it takes a malicious sharee and a hijacked key: accepted.
 - The 200-watch cap on a key is soft, without a lock: two concurrent creates may overshoot by one.

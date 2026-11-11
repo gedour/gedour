@@ -8,7 +8,15 @@ import {
   LoaderCircle,
   Send,
 } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import {
@@ -361,22 +369,6 @@ function RuleForm({ initial }: { initial?: Rule }) {
                 Unsaved changes: a live test uses the saved rule.
               </p>
             )}
-            {showPreview && initial && (
-              <div role="status" aria-label="Live test results" className="flex flex-col gap-2">
-                {liveTest.isPending ? (
-                  <p className="text-sm text-muted">Sending…</p>
-                ) : liveTest.isError ? (
-                  <p className="text-sm text-rose-700 dark:text-rose-300">
-                    {problemText(liveTest.error)}
-                  </p>
-                ) : (
-                  liveTest.data &&
-                  liveTest.variables && (
-                    <LiveTestResults items={liveTest.data} item={liveTest.variables} />
-                  )
-                )}
-              </div>
-            )}
             {showPreview && !live && (
               <PreviewTable
                 items={preview.data}
@@ -386,6 +378,19 @@ function RuleForm({ initial }: { initial?: Rule }) {
                   initial && {
                     run: (it) => liveTest.mutate(it),
                     pending: liveTest.isPending ? liveTest.variables.event.id : null,
+                    tested: liveTest.variables?.event.id ?? null,
+                    results: liveTest.isPending ? (
+                      <p className="text-sm text-muted">Sending…</p>
+                    ) : liveTest.isError ? (
+                      <p className="text-sm text-rose-700 dark:text-rose-300">
+                        {problemText(liveTest.error)}
+                      </p>
+                    ) : (
+                      liveTest.data &&
+                      liveTest.variables && (
+                        <LiveTestResults items={liveTest.data} item={liveTest.variables} />
+                      )
+                    ),
                   }
                 }
               />
@@ -578,8 +583,13 @@ export function PreviewTable({
   items: PreviewItem[] | undefined;
   loading: boolean;
   error: Error | null;
-  /** Edit page only: a saved rule to send the row's event through; pending is the event under test. */
-  liveTest?: { run: (it: PreviewItem) => void; pending: number | null };
+  /** Edit page only: a saved rule to send the row's event through; results show under the tested row. */
+  liveTest?: {
+    run: (it: PreviewItem) => void;
+    pending: number | null;
+    tested: number | null;
+    results: ReactNode;
+  };
 }) {
   if (error)
     return (
@@ -604,7 +614,7 @@ export function PreviewTable({
       <p className="text-sm">
         <strong>{matched}</strong> of {items.length} recent events match.
       </p>
-      <div className="relative overflow-x-auto rounded-lg border border-line">
+      <div className="@container relative overflow-x-auto rounded-lg border border-line">
         <table
           className={cn("w-full text-left text-sm", liveTest ? "min-w-[680px]" : "min-w-[560px]")}
         >
@@ -634,66 +644,81 @@ export function PreviewTable({
             {items.map((it) => {
               const s = summarizeEvent(it.event);
               return (
-                <tr
-                  key={it.event.id}
-                  className={cn(
-                    "border-b border-line last:border-0",
-                    it.matched && "bg-emerald-500/5",
-                  )}
-                >
-                  <td className="px-3 py-2">
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "rounded px-1.5 py-px text-xs ring-1 ring-inset",
-                          TONE_CLASS[s.tone],
-                        )}
-                      >
-                        {s.badge}
-                      </span>
-                      <span className="truncate">{s.text}</span>
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-muted">{it.watch.name}</td>
-                  <td className="px-3 py-2 text-xs whitespace-nowrap text-muted">
-                    {formatRelative(new Date(it.event.observed_at))}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {it.error ? (
-                      <span
-                        title={it.error}
-                        className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300"
-                      >
-                        <CircleAlert aria-hidden className="size-4" />
-                        Error
-                      </span>
-                    ) : it.matched ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
-                        <span aria-hidden>✓</span> Match
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-muted">
-                        <span aria-hidden>✗</span> No match
-                      </span>
+                <Fragment key={it.event.id}>
+                  <tr
+                    className={cn(
+                      "border-b border-line last:border-0",
+                      it.matched && "bg-emerald-500/5",
                     )}
-                  </td>
-                  {liveTest && (
-                    <td className="px-3 py-1.5 text-right">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        title="Sends this event to the rule's channels now"
-                        aria-label={`Live test: ${s.text}`}
-                        disabled={liveTest.pending !== null}
-                        onClick={() => liveTest.run(it)}
-                      >
-                        <Send aria-hidden />
-                        {liveTest.pending === it.event.id ? "Sending…" : "Live test"}
-                      </Button>
+                  >
+                    <td className="px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            "rounded px-1.5 py-px text-xs ring-1 ring-inset",
+                            TONE_CLASS[s.tone],
+                          )}
+                        >
+                          {s.badge}
+                        </span>
+                        <span className="truncate">{s.text}</span>
+                      </span>
                     </td>
+                    <td className="px-3 py-2 text-muted">{it.watch.name}</td>
+                    <td className="px-3 py-2 text-xs whitespace-nowrap text-muted">
+                      {formatRelative(new Date(it.event.observed_at))}
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {it.error ? (
+                        <span
+                          title={it.error}
+                          className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300"
+                        >
+                          <CircleAlert aria-hidden className="size-4" />
+                          Error
+                        </span>
+                      ) : it.matched ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300">
+                          <span aria-hidden>✓</span> Match
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-muted">
+                          <span aria-hidden>✗</span> No match
+                        </span>
+                      )}
+                    </td>
+                    {liveTest && (
+                      <td className="px-3 py-1.5 text-right">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          title="Sends this event to the rule's channels now"
+                          aria-label={`Live test: ${s.text}`}
+                          disabled={liveTest.pending !== null}
+                          onClick={() => liveTest.run(it)}
+                        >
+                          <Send aria-hidden />
+                          {liveTest.pending === it.event.id ? "Sending…" : "Live test"}
+                        </Button>
+                      </td>
+                    )}
+                  </tr>
+                  {liveTest?.tested === it.event.id && (
+                    <tr className="border-b border-line last:border-0">
+                      <td colSpan={5} className="px-3 py-2">
+                        {/* Scrollport width, pinned left: on a phone the table scrolls to the button. */}
+                        <div
+                          role="status"
+                          aria-label="Live test results"
+                          className="sticky left-3 flex w-[calc(100cqw-1.5rem)] flex-col gap-2"
+                        >
+                          {liveTest.results}
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               );
             })}
           </tbody>

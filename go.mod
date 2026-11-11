@@ -7,7 +7,7 @@ ignore ./web/node_modules
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/danielgtaylor/huma/v2 v2.40.0
-	github.com/dlclark/regexp2/v2 v2.12.0
+	github.com/dlclark/regexp2/v2 v2.13.0
 	github.com/dop251/goja v0.0.0-20261103214539-f5d1d0025744
 	github.com/expr-lang/expr v1.17.8
 	github.com/go-jose/go-jose/v4 v4.1.8

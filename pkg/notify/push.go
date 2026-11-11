@@ -67,7 +67,7 @@ func (s *Sender) Push(ctx context.Context, sub webpush.Subscription, payload []b
 	hdr.Set("Content-Encoding", "aes128gcm")
 	hdr.Set("TTL", strconv.Itoa(PushTTL))
 	hdr.Set("Urgency", urgency)
-	code, _, err := s.post(ctx, label, sub.Endpoint, body, hdr)
+	code, _, err := s.post(ctx, SendTimeout, label, sub.Endpoint, body, hdr)
 	if err != nil {
 		return err
 	}

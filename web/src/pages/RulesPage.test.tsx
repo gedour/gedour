@@ -610,7 +610,7 @@ describe("RuleFormPage live test", () => {
       "Live test: v2 published",
     ]);
     expect(buttons[0]).toHaveAttribute("title", "Sends this event to the rule's channels now");
-    expect(results()).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Live test results" })).not.toBeInTheDocument();
   });
 
   // 013-AC10: each channel's outcome, a script's log lines, a Web Push's accepted count.
@@ -638,11 +638,10 @@ describe("RuleFormPage live test", () => {
       "card built posted",
     );
     expect(push).toHaveTextContent("PhoneSentAccepted by 2 devices");
-    // Above the table: a 20-row preview must not push the results off-screen.
-    const table = screen.getByRole("table", { name: "Preview against recent events" });
-    expect(
-      results().compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // Right under the clicked row, wherever it sits in the preview.
+    const rows = screen.getAllByRole("row");
+    const clicked = rows.findIndex((r) => within(r).queryByText("v2 published"));
+    expect(rows[clicked + 1]).toContainElement(results());
   });
 
   // 013-AC10: a failed channel, 013-AC9: a rule without channel, 013-AC10: a 429 and its delay.
@@ -696,7 +695,9 @@ describe("RuleFormPage live test", () => {
     // Outside the live region: typing must not make screen readers announce it.
     await userEvent.type(screen.getByLabelText("Name"), " v2");
     expect(hint()).toBeInTheDocument();
-    expect(results()).not.toContainElement(hint());
+    expect(
+      screen.getByRole("table", { name: "Preview against recent events" }),
+    ).not.toContainElement(hint());
     await userEvent.clear(screen.getByLabelText("Name"));
     // The server trims the name: a trailing space saves the same rule.
     await userEvent.type(screen.getByLabelText("Name"), "Releases ");

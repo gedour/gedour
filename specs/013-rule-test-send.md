@@ -36,7 +36,7 @@ then shows, per channel, whether it was sent, the error, and a script's log line
 - Script channels: a sandbox is reserved per run; none free → that channel's item fails with the busy
   error, the others are still sent.
 - UI: "Live test" button on each preview row, edit page only, titled "Sends this event to the rule's
-  channels now"; results shown above the table.
+  channels now"; results shown in a row under the tested event.
 - OpenAPI, web API client, README (rules section, webhook and script payload `test` field).
 
 ## Out of scope

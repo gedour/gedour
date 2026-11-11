@@ -72,6 +72,10 @@ test("live test a rule from its preview", async ({ page }) => {
     await expect(run).toContainText("live [test] ");
     await expect(run).toContainText(" true");
     if (SHOTS) await filterSection.screenshot({ path: `${SHOTS}/013-results.png` });
+    // A phone scrolls the table to the button: the results stay in view.
+    await page.setViewportSize({ width: 390, height: 900 });
+    await first.scrollIntoViewIfNeeded();
+    await expect(results.getByText(/^Live test of /)).toBeInViewport();
 
     const got = ((await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[])
       .filter((r) => r.endpoint === `live-${t}`)

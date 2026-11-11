@@ -190,13 +190,14 @@ keys dead for over 30 days go away at the next creation. A session acting as a u
 |---|---|---|
 | `read` (default) | Your inbox with release notes, your watches with their config and the attached credential's ID, rules with filters, deliveries with their channel's name and without logs or errors | Credential secrets, channel targets, scripts, audit, other users' data, admin, other keys |
 | `write` | Also inbox state, and scheduling a run of one of your watches | Creating or changing anything else |
-| `manage` | Also the list of channels (ID, name, type), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete |
+| `manage` | Also the list of channels (ID, name, type) and credentials (ID, name, kind), creating and editing rules and watches, within [the refusals below](#mcp) | Credential secrets, channel targets, delete |
 
 A hijacked `manage` key can silence alerts by disabling a rule or pausing a watch, route events to your existing
-channels, and put a watch name of its choosing, and text and links from a repository it controls, in their
+channels, attach a credential to a watch on any repository or project at a target that credential already reaches,
+or, for one no watch uses, at its kind's default host, which reads your private repositories into the inbox, detach one, which silences a private watch, and put a watch name of its choosing, and text and links from a repository it controls, in their
 messages: give it only to clients that confirm writes with a person. It opens no new destination, with one limit: a
 known host that forwards a request's path on a redirect, or names a token host in a registry challenge, carries the
-key's `repo`, `project` or `repository` to wherever that host says, with no credential. Keys never open the REST API, which stays session-only.
+key's `repo`, `project` or `repository` to wherever that host says; a registry credential goes along only to the token host of a registry the [credential rule](#mcp) allows. Keys never open the REST API, which stays session-only.
 
 Creating and revoking are audited (`api_key.created`, `api_key.revoked`) with the key's ID, name, scope and
 expiry, never the key or its hash.
@@ -241,24 +242,24 @@ Or per project, in `.mcp.json`, with the key in an environment variable:
 | `run_watch` | Schedules a run of one of your watches and does not wait; refused on a paused watch, or while the upstream's rate limit holds the watch | `write` key; shared budget |
 | `get_filter_reference` | What a rule's filter may use, and its limits | `manage` key |
 | `list_channels` | Your channels: ID, name and type, nothing else | `manage` key |
-| `create_watch` | Creates a watch without a credential | `manage` key; shared budget; refused past 200 owned watches |
-| `update_watch` | Changes a watch's name, config, schedule or paused state | `manage` key; shared budget |
+| `list_credentials` | Your credentials: ID, name and kind, nothing else | `manage` key |
+| `create_watch` | Creates a watch, with a credential within the rule below | `manage` key; shared budget; refused past 200 owned watches |
+| `update_watch` | Changes a watch's name, config, credential, schedule or paused state | `manage` key; shared budget |
 | `create_rule`, `update_rule` | Create or change a routing rule, with the same checks as the UI; `watch_ids` as in the API | `manage` key; shared budget; at most 100 rules |
 
 A key sees what its owner sees through the REST API. A `read` key reaches the first nine rows and gets `-32602` on the
 others. A `write` key also changes inbox state and schedules watch runs, nothing else. A `manage` key reaches every row.
-Only `create_watch` and `update_watch` take a free-form object, `config`. No tool takes a credential, and no input names a URL or a host
+Only `create_watch` and `update_watch` take a free-form object, `config`, and a `credential_id`. No input names a URL or a host
 outside that `config`. The shared budget is a burst of 6, then one every 10 s, per key and replica, across `run_watch` and the four edits.
 
-A `manage` key has three refusals, because a config decides where gedour sends requests and with which token:
+A `manage` key has two refusals, because a config decides where gedour sends requests and with which token:
 
-- **No credential**: `create_watch` and `update_watch` refuse `credential_id`, even one you hold, and cannot detach one. A private repository starts in the UI.
-- **No retarget of a watch with a credential**: its config cannot change through a key, yours included, or an injected prompt could send your token to another host. Name, schedule and paused still work.
+- **A credential only goes where it already goes**: on `create_watch` and `update_watch`, a credential, attached, swapped, or kept through a change of target, must reach a target (scheme, host and path) another of your watches sends it to. One no watch holds may also go to its kind's default host. A first use elsewhere starts in the UI, or an injected prompt could send your token to a host of its choosing. An empty `credential_id` on `update_watch` detaches it.
 - **Known hosts only**: `api_url`, `base_url` and `registry` must name, with no path, the kind's default (GitHub kinds `api.github.com`, GitLab kinds `gitlab.com`, `oci_tags` `docker.io` or `ghcr.io`), or the host and path of a watch you own. A default on another kind is refused, even if a watch of yours saved it. A new host or path starts in the UI, so a URL cannot carry data to an attacker's server, nor through a known host's redirect. Targets compare exactly, after folding ASCII host case, a trailing dot, a default port and a trailing `/`. `?` and `#` are refused for everyone. A non-ASCII host compares as it was saved: its punycode form is another host, and a homoglyph of a known host is refused.
 
 While the upstream's rate limit holds a watch, a key's `update_watch` leaves its next run where it is: a new schedule, an unpause or a new config take effect, the run waits. A session's edit still runs it at once.
 
-A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization`, `Private-Token` and `Referer` when leaving the original host. A registry's token challenge names its token host the same way, with no credential on a key's watch.
+A host a watch targets may still answer a redirect to a host you never named. The worker follows up to 5, over HTTPS or to an allowed `http` host, through the same address checks, and drops `Authorization`, `Private-Token` and `Referer` when leaving the original host. A registry's token challenge names its token host the same way, and gets a key's watch's credential only on a registry the credential rule above allows.
 
 `run_watch` writes `watch.run_requested`, and the manage edits their usual `watch.*` and `rule.*` rows, in the audit log with the key's ID, and the Audit page shows `via key <name>` to the key's owner, and the ID to others
 or once the key is gone. Inbox marks are not audited, as on REST; the log lines cover them.
@@ -314,7 +315,7 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   that opened between two runs are not reported. Payload: `number`, `title`, `author`,
   `labels` (names, `[]` without any), `url`, `created_at`. A box is not part of the target: toggling one keeps
   the release states, but it is a config change, so on a watch with a credential only its owner may toggle it,
-  from the UI. The run stores the numbers listed, one list per checked box, not the items: the first run after a
+  from the UI or a `manage` key. The run stores the numbers listed, one list per checked box, not the items: the first run after a
   box is checked takes its kind as a baseline (an uncheck then a check with no run between keep the list going),
   and an item numbered at or below the oldest one stored for its kind is not new. Checking a box makes the watch
   due at once; items opened before that first run succeeds are in its baseline and are not reported. A paused

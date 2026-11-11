@@ -1,6 +1,6 @@
 # 016 — Credentials over MCP
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-11
 
@@ -46,18 +46,18 @@ of a watch that has a credential.
 
 ## Acceptance criteria
 
-- [ ] **AC1** A `manage` key's `tools/list` has `list_credentials`; a `read` or `write` key's does not, and calling it gets `-32602`.
-- [ ] **AC2** `list_credentials` returns each of the owner's credentials as `{id, name, kind}` exactly, never another user's, and never `last4`, `username` or a secret.
-- [ ] **AC3** `create_watch` and `update_watch` schemas list `credential_id`.
-- [ ] **AC4** Given credential C used by a watch on target T, a key's `create_watch` on target T with C succeeds.
-- [ ] **AC5** Given credential C used only on target T, a key's `create_watch` with C on another known target T2 (another saved host, or the kind's default host) gets a 403 naming `body.credential_id`.
-- [ ] **AC6** Given credential C used by no watch, a key's `create_watch` with C on the kind's default host succeeds, and on a saved custom host gets a 403.
-- [ ] **AC7** A key's `update_watch` attaching or swapping in C follows AC4 to AC6, counting only the other watches, not the one being updated.
-- [ ] **AC8** A key's `update_watch` changing the config of a watch that has credential C succeeds if the new target passes the check, and gets a 403 otherwise. The watch row is unchanged after a 403.
-- [ ] **AC9** A key's `update_watch` with `credential_id: ""` detaches the credential.
-- [ ] **AC10** A credential of another user, or of the wrong kind family, still gets the existing 400 through a key.
-- [ ] **AC11** Session (UI) calls attach any owned credential of the right kind to any target, as before.
-- [ ] **AC12** Spec 007, README and `AGENTS.md` no longer say a key cannot attach a credential or change a credentialed watch's config. `go test ./pkg/server -run TestDocs` is green.
+- [x] **AC1** A `manage` key's `tools/list` has `list_credentials`; a `read` or `write` key's does not, and calling it gets `-32602`.
+- [x] **AC2** `list_credentials` returns each of the owner's credentials as `{id, name, kind}` exactly, never another user's, and never `last4`, `username` or a secret.
+- [x] **AC3** `create_watch` and `update_watch` schemas list `credential_id`.
+- [x] **AC4** Given credential C used by a watch on target T, a key's `create_watch` on target T with C succeeds.
+- [x] **AC5** Given credential C used only on target T, a key's `create_watch` with C on another known target T2 (another saved host, or the kind's default host) gets a 403 naming `body.credential_id`.
+- [x] **AC6** Given credential C used by no watch, a key's `create_watch` with C on the kind's default host succeeds, and on a saved custom host gets a 403.
+- [x] **AC7** A key's `update_watch` attaching or swapping in C follows AC4 to AC6, counting only the other watches, not the one being updated.
+- [x] **AC8** A key's `update_watch` changing the config of a watch that has credential C succeeds if the new target passes the check, and gets a 403 otherwise. The watch row is unchanged after a 403.
+- [x] **AC9** A key's `update_watch` with `credential_id: ""` detaches the credential.
+- [x] **AC10** A credential of another user, or of the wrong kind family, still gets the existing 400 through a key.
+- [x] **AC11** Session (UI) calls attach any owned credential of the right kind to any target, as before.
+- [x] **AC12** Spec 007, README and `AGENTS.md` no longer say a key cannot attach a credential or change a credentialed watch's config. `go test ./pkg/server -run TestDocs` is green.
 
 ## Phases
 
@@ -92,4 +92,5 @@ None. `watches.credential_id` and `credentials` are unchanged.
 - Detach through a key is allowed with no check: it sends nothing anywhere.
 - The credential row is read `FOR KEY SHARE` (already in `checkCredential`) so a concurrent delete cannot slip between the check and the write, and a key call also takes `FOR NO KEY UPDATE` so two key calls on one credential serialize.
 - Detaching a credential, or deleting its watches, makes it unused, so a key may then attach it on the kind's default host. Accepted: default hosts are vendor-run, nobody else reads what gedour sends them.
+- A `manage` key can read the owner's private repositories at a target a credential already reaches, or with an unused credential at its kind's default host: target is scheme, host and path, and the repository is not part of it. Accepted by babs when choosing "same rule" for config changes (2026-11-11).
 - `list_credentials` drops `used_by_count` because a client does not need it to attach a credential.

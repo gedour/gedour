@@ -17,4 +17,4 @@
 | [013](013-rule-test-send.md) | Send a real event through a rule | shipped |
 | [014](014-rule-multi-watch.md) | Rules on several watches | shipped |
 | [015](015-event-driven-worker.md) | Event-driven worker loops | shipped |
-| [016](016-mcp-credentials.md) | Credentials over MCP | in progress |
+| [016](016-mcp-credentials.md) | Credentials over MCP | shipped |

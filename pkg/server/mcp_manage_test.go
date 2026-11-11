@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,7 +25,7 @@ import (
 	"github.com/gedour/gedour/pkg/route"
 )
 
-var manageTools = []string{"get_filter_reference", "list_channels", "create_watch", "update_watch", "create_rule", "update_rule"}
+var manageTools = []string{"get_filter_reference", "list_channels", "list_credentials", "create_watch", "update_watch", "create_rule", "update_rule"}
 
 // manage calls a tool with a fresh key: the burst of 6 is per key, and most of these tests are not about it.
 func (m *mcpApp) manage(t *testing.T, u apiUser, name string, args map[string]any) toolResult {
@@ -93,8 +95,9 @@ func walkNames(v any, visit func(key string, val any)) {
 	}
 }
 
-// 007-AC23, 007-AC25, 007-AC39: each scope's tools in the table's order; no credential, url or host input anywhere, config only where it must be; no delete, share or credential tool at any scope.
+// 007-AC23, 007-AC25, 007-AC39: each scope's tools in the table's order; no url or host input anywhere, config only where it must be; no delete or share tool at any scope.
 // 009-AC11: no description names a share.
+// 016-AC1: list_credentials is the one credential tool, manage only; read and write keys get -32602.
 func TestMCPManageCatalog(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
@@ -119,7 +122,7 @@ func TestMCPManageCatalog(t *testing.T) {
 					t.Errorf("%s names a share: %s", tool.Name, tool.Description)
 				}
 				for _, bad := range []string{"delete", "share", "credential", "script", "preview", "key"} {
-					if strings.Contains(tool.Name, bad) {
+					if strings.Contains(tool.Name, bad) && tool.Name != "list_credentials" {
 						t.Errorf("%s exists", tool.Name)
 					}
 				}
@@ -133,12 +136,13 @@ func TestMCPManageCatalog(t *testing.T) {
 				}
 				props, _ := schema["properties"].(map[string]any)
 				_, hasConfig := props["config"]
-				if wantConfig := tool.Name == "create_watch" || tool.Name == "update_watch"; hasConfig != wantConfig {
+				watchTool := tool.Name == "create_watch" || tool.Name == "update_watch"
+				if hasConfig != watchTool {
 					t.Errorf("%s: config %v", tool.Name, hasConfig)
 				}
 				walkNames(props, func(name string, _ any) {
 					lower := strings.ToLower(name)
-					if strings.Contains(lower, "url") || strings.Contains(lower, "host") || lower == "credential_id" {
+					if strings.Contains(lower, "url") || strings.Contains(lower, "host") || lower == "credential_id" && !watchTool {
 						t.Errorf("%s: input %q", tool.Name, name)
 					}
 				})
@@ -154,7 +158,7 @@ func TestMCPManageCatalog(t *testing.T) {
 					continue
 				}
 				a := tool.Annotations
-				mutation := !slices.Contains(manageTools[:2], tool.Name)
+				mutation := !slices.Contains(manageTools[:3], tool.Name)
 				if a.ReadOnlyHint == mutation {
 					t.Errorf("%s: readOnly %v", tool.Name, a.ReadOnlyHint)
 				}
@@ -170,18 +174,21 @@ func TestMCPManageCatalog(t *testing.T) {
 	// 007-AC23: above scope, -32602 and nothing changes.
 	var w watchJSON
 	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
-	writeKey, _ := m.key(t, alice.id, "write", "")
-	for name, args := range map[string]map[string]any{
-		"get_filter_reference": {},
-		"list_channels":        {},
-		"create_watch":         sampleWatches[0],
-		"update_watch":         {"id": w.ID, "paused": true},
-		"create_rule":          {"name": "r"},
-		"update_rule":          {"id": w.ID, "enabled": false},
-	} {
-		code, r := m.rpc(t, writeKey, "tools/call", map[string]any{"name": name, "arguments": args}, nil)
-		if code != http.StatusOK || r.Error == nil || r.Error.Code != jsonrpc.CodeInvalidParams {
-			t.Fatalf("%s: %d %+v", name, code, r.Error)
+	for _, scope := range []string{"read", "write"} {
+		key, _ := m.key(t, alice.id, scope, "")
+		for name, args := range map[string]map[string]any{
+			"get_filter_reference": {},
+			"list_channels":        {},
+			"list_credentials":     {},
+			"create_watch":         sampleWatches[0],
+			"update_watch":         {"id": w.ID, "paused": true},
+			"create_rule":          {"name": "r"},
+			"update_rule":          {"id": w.ID, "enabled": false},
+		} {
+			code, r := m.rpc(t, key, "tools/call", map[string]any{"name": name, "arguments": args}, nil)
+			if code != http.StatusOK || r.Error == nil || r.Error.Code != jsonrpc.CodeInvalidParams {
+				t.Fatalf("%s %s: %d %+v", scope, name, code, r.Error)
+			}
 		}
 	}
 	if n := m.count(t, `SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM rules) + (SELECT count(*) FROM watches WHERE paused)`); n != 1 {
@@ -359,6 +366,40 @@ func TestKeyCredentialTarget(t *testing.T) {
 		w := seed(repo(forge), "")
 		m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+w, map[string]any{"credential_id": m.credential(t, alice, "github_token")}, http.StatusOK, nil)
 		m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "s", "kind": "github_repo", "config": repo(forge), "credential_id": c1}, http.StatusCreated, nil)
+	})
+}
+
+// credential_id travels through the tools to the handler's target check.
+func TestMCPManageCredentialID(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	ghe := map[string]any{"repo": "a/b", "api_url": "https://ghe.alice.example/api/v3"}
+	c := m.credential(t, alice, "github_token")
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "seed", "kind": "github_repo", "config": ghe, "credential_id": c}, http.StatusCreated, nil)
+	var id string
+	// 016-AC4
+	t.Run("reached target", func(t *testing.T) {
+		res := m.manage(t, alice, "create_watch", map[string]any{"name": "reached", "kind": "github_repo", "config": ghe, "credential_id": c})
+		if res.IsError {
+			t.Fatalf("%+v", res)
+		}
+		id, _ = res.data(t).(map[string]any)["id"].(string)
+	})
+	// 016-AC5
+	t.Run("other target", func(t *testing.T) {
+		res := m.manage(t, alice, "create_watch", map[string]any{"name": "default", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "credential_id": c})
+		if !res.IsError || !strings.Contains(res.text(), "body.credential_id") {
+			t.Fatalf("%+v", res)
+		}
+	})
+	// 016-AC9
+	t.Run("detach", func(t *testing.T) {
+		if res := m.manage(t, alice, "update_watch", map[string]any{"id": id, "credential_id": ""}); res.IsError {
+			t.Fatalf("%+v", res)
+		}
+		if n := m.count(t, `SELECT count(*) FROM watches WHERE id = $1 AND credential_id IS NULL`, id); n != 1 {
+			t.Fatal("still attached")
+		}
 	})
 }
 
@@ -783,6 +824,36 @@ func TestMCPManageListChannels(t *testing.T) {
 	}
 }
 
+// 016-AC2: each of the owner's credentials as {id, name, kind} exactly; another user's, last4, username and the secret never leave.
+func TestMCPListCredentials(t *testing.T) {
+	m := newMCPApp(t)
+	alice, bob := m.user(t, "alice"), m.user(t, "bob")
+	const secret = "ghp_0123456789abcdef"
+	want := map[string]bool{m.credential(t, alice, "github_token"): true, m.credential(t, alice, "registry_basic"): true}
+	other := m.credential(t, bob, "github_token")
+	key, _ := m.key(t, alice.id, "manage", "")
+	resp, raw := m.post(t, key, rpcBody(t, "tools/call", map[string]any{"name": "list_credentials", "arguments": map[string]any{}}), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	for _, leak := range []string{secret, "robot", "last4", "username", "used_by_count", "created_at", other} {
+		if bytes.Contains(raw, []byte(leak)) {
+			t.Errorf("%q in %s", leak, raw)
+		}
+	}
+	got, _ := m.tool(t, key, "list_credentials", nil, nil).data(t).(map[string]any)["items"].([]any)
+	if len(got) != len(want) {
+		t.Fatalf("%v", got)
+	}
+	for _, it := range got {
+		item, _ := it.(map[string]any)
+		id, _ := item["id"].(string)
+		if !slices.Equal(slices.Sorted(maps.Keys(item)), []string{"id", "kind", "name"}) || !want[id] {
+			t.Fatalf("%v", item)
+		}
+	}
+}
+
 // 007-AC39: each mutation's usual audit row with the key's ID, the watch cap on a key only, and the budget shared with run_watch.
 func TestMCPManageAuditCapBudget(t *testing.T) {
 	m := newMCPApp(t)
@@ -877,6 +948,26 @@ func TestMCPManageSeveralWatchRule(t *testing.T) {
 		w, _ := x.(map[string]any)
 		if id, _ := w["id"].(string); w["name"] != want[id] {
 			t.Errorf("watch %v, want name %q", w, want[id])
+		}
+	}
+}
+
+// 016-AC12: the docs no longer describe the old ban on credentials through a key, hard-wrapped lines included.
+func TestDocsDescribeKeyCredentials(t *testing.T) {
+	stale := []string{"without a credential", "No tool takes a credential", "its config cannot change through a key", "no credential on a key's watch", "three refusals", "cannot attach"}
+	for _, doc := range []string{"README.md", "AGENTS.md"} {
+		raw, err := fs.ReadFile(os.DirFS("../.."), doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(strings.Fields(string(raw)), " ")
+		for _, s := range stale {
+			if strings.Contains(text, s) {
+				t.Errorf("%s still says %q", doc, s)
+			}
+		}
+		if doc == "README.md" && !strings.Contains(text, "list_credentials") {
+			t.Errorf("README.md lacks list_credentials")
 		}
 	}
 }

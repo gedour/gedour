@@ -114,8 +114,9 @@ func TestLoopStopsOnCancel(t *testing.T) {
 		l, _ := newTestLoop(make(chan struct{}))
 		l.poll = time.Hour
 		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(50*time.Millisecond, cancel)
+		// start before arming the timer, or the 50 ms floor sees less than 50 ms.
 		start := time.Now()
+		time.AfterFunc(50*time.Millisecond, cancel)
 		if l.Wait(ctx, time.Now().Add(time.Hour), failed) {
 			t.Fatal("Wait returned true on a cancelled context")
 		}

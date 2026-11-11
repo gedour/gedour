@@ -65,7 +65,8 @@ const rows = () => screen.findByRole("list", { name: "Watches to pick" });
 const count = () => screen.getByText(/^\d+ selected$/);
 const picker = () => screen.getByRole("group", { name: "Watches" });
 
-describe("WatchPicker", () => {
+// 600-row pickers: up to 5.7 s per test on CI runners, over the 5 s default.
+describe("WatchPicker", { timeout: 20_000 }, () => {
   // 014-AC15: 2000 watches, the first 100 shown and a note; the search narrows on name and target with
   // the term marked; the kind narrows further; nothing matching says so.
   it("shows the first 100, searches server side and highlights the term", async () => {

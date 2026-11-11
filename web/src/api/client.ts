@@ -294,6 +294,9 @@ export function listInbox(
 export async function inboxCount(): Promise<number> {
   return (await getJSON<{ unread: number }>("/api/v1/inbox/count")).unread;
 }
+export async function inboxReadCount(): Promise<number> {
+  return (await getJSON<{ read: number }>("/api/v1/inbox/count")).read;
+}
 export const inboxAction = (action: InboxAction, ids: number[]) =>
   sendJSON<{ updated: number; unread: number }>("POST", `/api/v1/inbox/${action}`, { ids });
 

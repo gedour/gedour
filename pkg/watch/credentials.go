@@ -76,8 +76,8 @@ func last4(s string) string {
 }
 
 // ownCredential loads one of owner's credentials; anyone else's is a 404, like a missing one.
-// Row lock strengths for ownCredential. A rotation leaves the key alone, so it must not block an attach
-// (FOR KEY SHARE); a delete removes the key, so it waits for every attach in flight.
+// Row lock strengths for ownCredential. A rotation leaves the key alone, so it must not block a session attach
+// (FOR KEY SHARE); a key attach also takes NO KEY UPDATE and serializes with it; a delete waits for every attach in flight.
 const (
 	lockNone      = ""
 	lockNoKeyUpd  = " FOR NO KEY UPDATE OF c"

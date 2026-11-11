@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArchiveRestore,
@@ -13,7 +13,7 @@ import {
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 
-import { inboxAction, listInbox } from "@/api/client";
+import { inboxAction, listInbox, listRules } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { SelectionBar, SelectTile } from "@/components/Selection";
@@ -24,7 +24,7 @@ import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { KindIcon } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { COUNT_KEY, LIST_KEY, useInboxCount } from "@/hooks/useInbox";
+import { COUNT_KEY, LIST_KEY, useInboxCount, useInboxReadCount } from "@/hooks/useInbox";
 import { summarizeEvent, TONE_CLASS } from "@/lib/events";
 import { groupByDay } from "@/lib/inbox";
 import { problemText } from "@/lib/problems";
@@ -111,6 +111,8 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     getNextPageParam: (last) => last.next_cursor,
   });
   const unread = useInboxCount().data;
+  const read = useInboxReadCount().data;
+  const rules = useQuery({ queryKey: ["rules"], queryFn: listRules });
   const client = useQueryClient();
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -328,6 +330,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                 key={t.state}
                 type="button"
                 aria-pressed={state === t.state}
+                aria-describedby={t.state === "all" && read ? `${tabsId}-read` : undefined}
                 onClick={() => show(t.state, highOnly)}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded px-3 text-sm font-medium whitespace-nowrap text-muted transition-colors hover:text-ink",
@@ -339,6 +342,16 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                   <span className="rounded-full bg-beacon px-1.5 text-[11px] text-surface tabular-nums">
                     {unread}
                   </span>
+                ) : null}
+                {t.state === "all" && read ? (
+                  <>
+                    <span aria-hidden className="text-[11px] text-muted tabular-nums">
+                      {read}
+                    </span>
+                    <span id={`${tabsId}-read`} hidden>
+                      {read} read
+                    </span>
+                  </>
                 ) : null}
               </button>
             ))}
@@ -382,13 +395,24 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
           title={empty.title}
           body={empty.body}
           action={
-            state !== "archived" ? (
+            state === "archived" ? undefined : rules.data?.length === 0 ? (
               <Button variant="outline" asChild>
                 <Link to="/rules">
                   <Telescope aria-hidden />
                   Set up a rule
                 </Link>
               </Button>
+            ) : state === "unread" && !highOnly && read ? (
+              <p className="text-sm text-muted">
+                {read} read ·{" "}
+                <button
+                  type="button"
+                  onClick={() => show("all", false)}
+                  className="underline-offset-4 hover:text-ink hover:underline"
+                >
+                  View all
+                </button>
+              </p>
             ) : undefined
           }
         />

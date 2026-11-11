@@ -632,6 +632,11 @@
       "CountOutputBody": {
         "additionalProperties": false,
         "properties": {
+          "read": {
+            "description": "Read items not archived",
+            "format": "int64",
+            "type": "integer"
+          },
           "unread": {
             "description": "Unread items not archived",
             "format": "int64",
@@ -639,7 +644,8 @@
           }
         },
         "required": [
-          "unread"
+          "unread",
+          "read"
         ],
         "type": "object"
       },
@@ -4381,7 +4387,7 @@
             "description": "Error"
           }
         },
-        "summary": "Unread items in the caller's inbox",
+        "summary": "Unread and read items in the caller's inbox, archive excluded",
         "tags": [
           "inbox"
         ]

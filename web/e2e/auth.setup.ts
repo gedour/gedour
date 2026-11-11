@@ -1,5 +1,5 @@
-import { AUTH_FILE, BOB_AUTH_FILE } from "./auth-file";
-import { ALICE, BOB, expect, signInFromGate, test } from "./fixtures";
+import { AUTH_FILE, BOB_AUTH_FILE, ERIN_AUTH_FILE } from "./auth-file";
+import { ALICE, BOB, ERIN, expect, signInFromGate, test } from "./fixtures";
 
 // Signs alice in once through Keycloak; the other specs reuse the stored session.
 test("sign in as alice", async ({ page }) => {
@@ -19,4 +19,12 @@ test("sign in as bob", async ({ page }) => {
   // 006-AC4: the user role alone is not admin.
   expect((await (await page.request.get("/api/v1/me")).json()).is_admin).toBe(false);
   await page.context().storageState({ path: BOB_AUTH_FILE });
+});
+
+// Erin holds the picker spec's 2000 watches, which would push the seeded watch out of bob's lists.
+test("sign in as erin", async ({ page }) => {
+  await page.goto("/inbox");
+  await signInFromGate(page, ERIN);
+  await expect(page.getByRole("button", { name: `Account: ${ERIN.name}` })).toBeVisible();
+  await page.context().storageState({ path: ERIN_AUTH_FILE });
 });

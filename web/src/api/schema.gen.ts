@@ -1168,8 +1168,13 @@ export interface components {
       priority: "normal" | "high";
       /** @description Digest only: IANA time zone, default UTC */
       tz?: string;
-      /** @description One of the caller's watches; empty for all of them */
+      /**
+       * @deprecated
+       * @description Deprecated, use watch_ids: one of the caller's watches, empty for all of them; not with watch_ids
+       */
       watch_id?: string;
+      /** @description The caller's watches; absent or empty for all of them */
+      watch_ids?: string[] | null;
     };
     CreateScriptInputBody: {
       name: string;
@@ -1571,8 +1576,13 @@ export interface components {
     };
     PreviewInputBody: {
       filter: string;
-      /** @description Scope like a rule's; empty for all the caller's watches */
+      /**
+       * @deprecated
+       * @description Deprecated, use watch_ids: one watch, empty for all; not with watch_ids
+       */
       watch_id?: string;
+      /** @description Scope like a rule's; absent or empty for all the caller's watches */
+      watch_ids?: string[] | null;
     };
     PreviewItem: {
       /** @description Evaluation error; the rule would treat the event as not matching */
@@ -1601,7 +1611,7 @@ export interface components {
       inbox_items: number;
       /**
        * Format: int64
-       * @description Other users' rules targeting the account's watches
+       * @description Other users' rules whose every watch is the account's
        */
       other_users_rules: number;
       /** Format: int64 */
@@ -1691,11 +1701,19 @@ export interface components {
       updated_at: string;
       /**
        * Format: uuid
-       * @description Null: every watch of the owner
+       * @deprecated
+       * @description Deprecated, use watch_ids: the watch of a one-watch rule, null for all watches and for several; a reader of this field alone takes a several-watch rule for all watches
        */
       watch_id: string | null;
-      /** @description Null with a watch_id: the owner no longer owns that watch */
+      /** @description Sorted; empty: every watch of the owner */
+      watch_ids: string[] | null;
+      /**
+       * @deprecated
+       * @description Deprecated, use watches: the name of a one-watch rule's watch, null otherwise or while the owner no longer owns it
+       */
       watch_name: string | null;
+      /** @description The listed watches, sorted like watch_ids */
+      watches: components["schemas"]["RuleWatch"][] | null;
     };
     RuleRef: {
       /** Format: uuid */
@@ -1716,6 +1734,12 @@ export interface components {
       /** @description Script channels: the log lines of the run (a live run: its fetches were sent) */
       logs?: string[] | null;
       ok: boolean;
+    };
+    RuleWatch: {
+      /** Format: uuid */
+      id: string;
+      /** @description Null while the rule's owner does not own this watch */
+      name: string | null;
     };
     RunAllOutputBody: {
       /**
@@ -1855,8 +1879,13 @@ export interface components {
       priority?: "normal" | "high";
       /** @description Digest only: empty string for UTC */
       tz?: string;
-      /** @description Empty string: all the caller's watches */
+      /**
+       * @deprecated
+       * @description Deprecated, use watch_ids: one watch, empty string for all the caller's watches; not with watch_ids
+       */
       watch_id?: string;
+      /** @description Replaces the list; [] for all the caller's watches; absent keeps it */
+      watch_ids?: string[] | null;
     };
     UpdateScriptInputBody: {
       name?: string;

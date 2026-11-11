@@ -35,19 +35,21 @@ const (
 
 // Rule is a routing rule: events of its scope that pass its filter go to the owner's inbox and channels.
 type Rule struct {
-	ID         string    `json:"id" format:"uuid"`
-	Name       string    `json:"name"`
-	WatchID    *string   `json:"watch_id" format:"uuid" nullable:"true" doc:"Null: every watch of the owner"`
-	WatchName  *string   `json:"watch_name" nullable:"true" doc:"Null with a watch_id: the owner no longer owns that watch"`
-	Filter     string    `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
-	Enabled    bool      `json:"enabled"`
-	Priority   string    `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
-	ChannelIDs []string  `json:"channel_ids" doc:"Channels besides the inbox, which is always on"`
-	Delivery   string    `json:"delivery" enum:"immediate,digest" doc:"digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once"`
-	At         []string  `json:"at" doc:"Digest: the local times of day, HH:MM, sorted; empty when immediate"`
-	TZ         string    `json:"tz" doc:"Digest: the IANA time zone of at; empty when immediate"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string      `json:"id" format:"uuid"`
+	Name       string      `json:"name"`
+	WatchIDs   []string    `json:"watch_ids" doc:"Sorted; empty: every watch of the owner"`
+	Watches    []RuleWatch `json:"watches" doc:"The listed watches, sorted like watch_ids"`
+	WatchID    *string     `json:"watch_id" format:"uuid" nullable:"true" deprecated:"true" doc:"Deprecated, use watch_ids: the watch of a one-watch rule, null for all watches and for several; a reader of this field alone takes a several-watch rule for all watches"`
+	WatchName  *string     `json:"watch_name" nullable:"true" deprecated:"true" doc:"Deprecated, use watches: the name of a one-watch rule's watch, null otherwise or while the owner no longer owns it"`
+	Filter     string      `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
+	Enabled    bool        `json:"enabled"`
+	Priority   string      `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
+	ChannelIDs []string    `json:"channel_ids" doc:"Channels besides the inbox, which is always on"`
+	Delivery   string      `json:"delivery" enum:"immediate,digest" doc:"digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once"`
+	At         []string    `json:"at" doc:"Digest: the local times of day, HH:MM, sorted; empty when immediate"`
+	TZ         string      `json:"tz" doc:"Digest: the IANA time zone of at; empty when immediate"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 type ruleOutput struct {
@@ -63,7 +65,8 @@ type listRulesOutput struct {
 type createRuleInput struct {
 	Body struct {
 		Name       string   `json:"name" minLength:"1" maxLength:"200"`
-		WatchID    string   `json:"watch_id,omitempty" doc:"One of the caller's watches; empty for all of them"`
+		WatchIDs   []string `json:"watch_ids,omitempty" maxItems:"500" doc:"The caller's watches; absent or empty for all of them"`
+		WatchID    *string  `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one of the caller's watches, empty for all of them; not with watch_ids"`
 		Filter     string   `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty" doc:"Defaults to true"`
 		Priority   string   `json:"priority,omitempty" enum:"normal,high" default:"normal"`
@@ -78,7 +81,8 @@ type updateRuleInput struct {
 	ID   string `path:"id" format:"uuid"`
 	Body struct {
 		Name       *string  `json:"name,omitempty" minLength:"1" maxLength:"200"`
-		WatchID    *string  `json:"watch_id,omitempty" doc:"Empty string: all the caller's watches"`
+		WatchIDs   []string `json:"watch_ids,omitempty" maxItems:"500" doc:"Replaces the list; [] for all the caller's watches; absent keeps it"`
+		WatchID    *string  `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one watch, empty string for all the caller's watches; not with watch_ids"`
 		Filter     *string  `json:"filter,omitempty" maxLength:"2000"`
 		Enabled    *bool    `json:"enabled,omitempty"`
 		Priority   *string  `json:"priority,omitempty" enum:"normal,high"`
@@ -91,8 +95,9 @@ type updateRuleInput struct {
 
 type previewInput struct {
 	Body struct {
-		WatchID string `json:"watch_id,omitempty" doc:"Scope like a rule's; empty for all the caller's watches"`
-		Filter  string `json:"filter" maxLength:"2000"`
+		WatchIDs []string `json:"watch_ids,omitempty" maxItems:"500" doc:"Scope like a rule's; absent or empty for all the caller's watches"`
+		WatchID  *string  `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one watch, empty for all; not with watch_ids"`
+		Filter   string   `json:"filter" maxLength:"2000"`
 	}
 }
 
@@ -145,27 +150,57 @@ const ruleTestLate = "not sent: the test ran out of time before this channel"
 
 const ruleTestGone = "channel deleted since the test started"
 
-// ruleSelect names a rule's watch only while the rule's owner owns it.
-var ruleSelect = `SELECT r.id::text, r.name, r.watch_id::text, w.name, r.filter, r.enabled, r.priority,
+// RuleWatch is a watch a rule lists.
+type RuleWatch struct {
+	ID   string  `json:"id" format:"uuid"`
+	Name *string `json:"name" nullable:"true" doc:"Null while the rule's owner does not own this watch"`
+}
+
+// ruleSelect names a rule's watches only while the rule's owner owns them.
+var ruleSelect = `SELECT r.id::text, r.name,
+		COALESCE((SELECT array_agg(rw.watch_id::text ORDER BY rw.watch_id) FROM rule_watches rw WHERE rw.rule_id = r.id), '{}'),
+		COALESCE((SELECT array_agg(w.name ORDER BY rw.watch_id) FROM rule_watches rw
+			LEFT JOIN watches w ON w.id = rw.watch_id AND ` + watch.ReadableSQL("w", "@owner") + ` WHERE rw.rule_id = r.id), '{}'),
+		r.filter, r.enabled, r.priority,
 		COALESCE((SELECT array_agg(rc.channel_id::text ORDER BY rc.channel_id) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}'),
 		r.delivery, COALESCE(r.digest_at, '{}'), COALESCE(r.digest_tz, ''), r.created_at, r.updated_at
-	FROM rules r LEFT JOIN watches w ON w.id = r.watch_id AND ` + watch.ReadableSQL("w", "@owner") + `
+	FROM rules r
 	WHERE r.owner_id = @owner`
 
 func scanRules(rows pgx.Rows) ([]Rule, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Rule, error) {
 		var x Rule
-		err := r.Scan(&x.ID, &x.Name, &x.WatchID, &x.WatchName, &x.Filter, &x.Enabled, &x.Priority, &x.ChannelIDs, &x.Delivery, &x.At, &x.TZ, &x.CreatedAt, &x.UpdatedAt)
-		return x, err
+		var names []*string
+		if err := r.Scan(&x.ID, &x.Name, &x.WatchIDs, &names, &x.Filter, &x.Enabled, &x.Priority, &x.ChannelIDs, &x.Delivery, &x.At, &x.TZ, &x.CreatedAt, &x.UpdatedAt); err != nil {
+			return x, err
+		}
+		x.Watches = make([]RuleWatch, len(x.WatchIDs))
+		for i, id := range x.WatchIDs {
+			x.Watches[i] = RuleWatch{ID: id, Name: names[i]}
+		}
+		if len(x.Watches) == 1 {
+			x.WatchID, x.WatchName = &x.Watches[0].ID, x.Watches[0].Name
+		}
+		return x, nil
 	})
 }
 
 func ownRule(ctx context.Context, q querier, owner, id string, lock bool) (Rule, error) {
-	sql := ruleSelect + " AND r.id = @id"
+	args := pgx.NamedArgs{"owner": owner, "id": id}
 	if lock {
-		sql += " FOR UPDATE OF r"
+		// A statement of its own: the read below then sees what an edit committed while this lock waited.
+		rows, err := q.Query(ctx, `SELECT 1 FROM rules WHERE id = @id AND owner_id = @owner FOR UPDATE`, args)
+		if err != nil {
+			return Rule{}, err
+		}
+		if locked, err := pgx.CollectRows(rows, pgx.RowTo[int]); err != nil || len(locked) == 0 {
+			if err == nil {
+				err = huma.Error404NotFound("rule not found")
+			}
+			return Rule{}, err
+		}
 	}
-	rows, err := q.Query(ctx, sql, pgx.NamedArgs{"owner": owner, "id": id})
+	rows, err := q.Query(ctx, ruleSelect+" AND r.id = @id", args)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -216,19 +251,93 @@ func scheduleArgs(s *schedule) (at []string, tz *string) {
 	return s.At, &s.TZ
 }
 
-// checkWatch verifies owner owns the watch.
-func checkWatch(ctx context.Context, tx pgx.Tx, owner, id string) error {
-	detail := &huma.ErrorDetail{Location: "body.watch_id", Message: "no such watch among your watches", Value: id}
-	if uuid.Validate(id) != nil {
-		return huma.Error400BadRequest("invalid rule", detail)
+// watchScope is the scope a body asks for.
+type watchScope struct {
+	set bool                        // false: the body sends neither watch_ids nor watch_id
+	ids []string                    // canonical, deduplicated, in body order; empty: all the caller's watches
+	bad map[string]huma.ErrorDetail // each id's refusal: its first location in the body, the value sent
+}
+
+const noSuchWatch = "no such watch among your watches"
+
+// parseScope reads watch_ids or its deprecated alias watch_id, never both (014-AC3, 014-AC4).
+func parseScope(ids []string, alias *string) (watchScope, []error) {
+	if ids != nil && alias != nil {
+		return watchScope{}, []error{&huma.ErrorDetail{Location: "body.watch_id", Message: "send watch_ids or watch_id, not both", Value: *alias}}
 	}
-	// KEY SHARE: a concurrent delete of the watch waits for this rule to land, then cascades it.
-	var one int
-	err := tx.QueryRow(ctx, `SELECT 1 FROM watches w WHERE w.id = $1 AND `+watch.ReadableSQL("w", "$2::uuid")+` FOR KEY SHARE OF w`,
-		id, owner).Scan(&one)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return huma.Error400BadRequest("invalid rule", detail)
+	sc := watchScope{set: ids != nil || alias != nil, ids: []string{}, bad: map[string]huma.ErrorDetail{}}
+	if alias != nil && *alias != "" {
+		ids = []string{*alias}
 	}
+	var errs []error
+	for i, raw := range ids {
+		loc := "body.watch_ids[" + strconv.Itoa(i) + "]"
+		if alias != nil {
+			loc = "body.watch_id"
+		}
+		u, err := uuid.Parse(raw)
+		if err != nil {
+			errs = append(errs, &huma.ErrorDetail{Location: loc, Message: noSuchWatch, Value: raw})
+			continue
+		}
+		// Canonical, as w.id::text: an upper-case or braced id is the same watch.
+		id := u.String()
+		if _, ok := sc.bad[id]; ok {
+			continue
+		}
+		sc.bad[id] = huma.ErrorDetail{Location: loc, Message: noSuchWatch, Value: raw}
+		sc.ids = append(sc.ids, id)
+	}
+	return sc, errs
+}
+
+// check verifies owner owns every watch of the scope, except those in kept: the rule already lists them, and
+// keeps a transferred one until it comes back (014-AC8).
+func (sc watchScope) check(ctx context.Context, tx pgx.Tx, owner string, kept []string) error {
+	if len(sc.ids) == 0 {
+		return nil
+	}
+	// KEY SHARE by id (lock order in AGENTS.md): a concurrent delete of a watch waits for this rule to land.
+	rows, err := tx.Query(ctx, `SELECT w.id::text FROM watches w WHERE w.id = ANY($1::uuid[])
+		AND (`+watch.ReadableSQL("w", "$2::uuid")+` OR w.id = ANY($3::uuid[]))
+		ORDER BY w.id FOR KEY SHARE OF w`, sc.ids, owner, kept)
+	if err != nil {
+		return err
+	}
+	owned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range sc.ids {
+		if !slices.Contains(owned, id) {
+			d := sc.bad[id]
+			errs = append(errs, &d)
+		}
+	}
+	if len(errs) > 0 {
+		return huma.Error400BadRequest("invalid rule", errs...)
+	}
+	return nil
+}
+
+// setWatches replaces the rule's scope with ids, empty for all the owner's watches.
+func setWatches(ctx context.Context, tx pgx.Tx, ruleID string, ids []string) error {
+	if _, err := tx.Exec(ctx, `UPDATE rules SET all_watches = $2 WHERE id = $1`, ruleID, len(ids) == 0); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM rule_watches WHERE rule_id = $1`, ruleID); err != nil {
+		return err
+	}
+	return insertWatches(ctx, tx, ruleID, ids)
+}
+
+// insertWatches lists ids in the rule's scope.
+func insertWatches(ctx context.Context, tx pgx.Tx, ruleID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO rule_watches (rule_id, watch_id) SELECT $1, unnest($2::uuid[])`, ruleID, ids)
 	return err
 }
 
@@ -360,6 +469,8 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 	if fe := filterError(src); fe != nil {
 		errs = append(errs, fe)
 	}
+	scope, werrs := parseScope(b.WatchIDs, b.WatchID)
+	errs = append(errs, werrs...)
 	sched, serrs := ruleSchedule(b.Delivery, b.Priority, b.At, b.TZ)
 	if errs = append(errs, serrs...); len(errs) > 0 {
 		return nil, huma.Error400BadRequest("invalid rule", errs...)
@@ -371,21 +482,20 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 		if err := underCap(ctx, tx, me, "rules", "rules", MaxRules); err != nil {
 			return err
 		}
-		var watchID *string
-		if b.WatchID != "" {
-			if err := checkWatch(ctx, tx, me, b.WatchID); err != nil {
-				return err
-			}
-			watchID = &b.WatchID
+		if err := scope.check(ctx, tx, me, []string{}); err != nil {
+			return err
 		}
 		var id string
-		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, watch_id, filter, enabled, priority, delivery, digest_at, digest_tz)
+		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, all_watches, filter, enabled, priority, delivery, digest_at, digest_tz)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id::text`,
-			me, name, watchID, src, enabled, b.Priority, b.Delivery, at, tz).Scan(&id)
+			me, name, len(scope.ids) == 0, src, enabled, b.Priority, b.Delivery, at, tz).Scan(&id)
 		if isUniqueViolation(err) {
 			return ruleNameError(name)
 		}
 		if err != nil {
+			return err
+		}
+		if err := insertWatches(ctx, tx, id, scope.ids); err != nil {
 			return err
 		}
 		if err := setChannels(ctx, tx, me, id, b.ChannelIDs); err != nil {
@@ -408,6 +518,7 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 		return nil, err
 	}
 	b := in.Body
+	scope, werrs := parseScope(b.WatchIDs, b.WatchID)
 	var after Rule
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		before, err := ownRule(ctx, tx, me, in.ID, true)
@@ -415,7 +526,7 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 			return err
 		}
 		next := before
-		var errs []error
+		errs := slices.Clone(werrs)
 		if b.Name != nil {
 			if next.Name = strings.TrimSpace(*b.Name); next.Name == "" {
 				errs = append(errs, &huma.ErrorDetail{Location: "body.name", Message: "must not be blank"})
@@ -449,24 +560,23 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 		if errs = append(errs, serrs...); len(errs) > 0 {
 			return huma.Error400BadRequest("invalid rule", errs...)
 		}
-		if b.WatchID != nil {
-			next.WatchID = nil
-			if *b.WatchID != "" {
-				if err := checkWatch(ctx, tx, me, *b.WatchID); err != nil {
-					return err
-				}
-				next.WatchID = b.WatchID
-			}
+		if err := scope.check(ctx, tx, me, before.WatchIDs); err != nil {
+			return err
 		}
 		at, tz := scheduleArgs(sched)
-		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, watch_id = $3, filter = $4, enabled = $5, priority = $6, delivery = $7, digest_at = $8, digest_tz = $9,
+		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, filter = $3, enabled = $4, priority = $5, delivery = $6, digest_at = $7, digest_tz = $8,
 			updated_at = now() WHERE id = $1`,
-			in.ID, next.Name, next.WatchID, next.Filter, next.Enabled, next.Priority, next.Delivery, at, tz)
+			in.ID, next.Name, next.Filter, next.Enabled, next.Priority, next.Delivery, at, tz)
 		if isUniqueViolation(err) {
 			return ruleNameError(next.Name)
 		}
 		if err != nil {
 			return err
+		}
+		if scope.set {
+			if err := setWatches(ctx, tx, in.ID, scope.ids); err != nil {
+				return err
+			}
 		}
 		if before.Delivery == deliveryDigest && before.Enabled && !next.Enabled {
 			// A disabled rule's schedule no longer applies: what it holds goes out at once (012-AC18).
@@ -538,12 +648,13 @@ func (s *Service) previewRule(ctx context.Context, in *previewInput) (*previewOu
 	sql := `SELECT e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind
 		FROM events e JOIN watches w ON w.id = e.watch_id WHERE ` + watch.ReadableSQL("w", "@viewer")
 	args := pgx.NamedArgs{"viewer": me, "limit": previewEvents}
-	if id := in.Body.WatchID; id != "" {
-		if uuid.Validate(id) != nil {
-			return nil, huma.Error400BadRequest("invalid preview", &huma.ErrorDetail{Location: "body.watch_id", Message: "not a watch ID", Value: id})
-		}
-		sql += " AND w.id = @watch"
-		args["watch"] = id
+	scope, werrs := parseScope(in.Body.WatchIDs, in.Body.WatchID)
+	if len(werrs) > 0 {
+		return nil, huma.Error400BadRequest("invalid preview", werrs...)
+	}
+	if len(scope.ids) > 0 {
+		sql += " AND w.id = ANY(@watches::uuid[])"
+		args["watches"] = scope.ids
 	}
 	rows, err := s.pool.Query(ctx, sql+" ORDER BY e.id DESC LIMIT @limit", args)
 	if err != nil {
@@ -598,10 +709,13 @@ func (s *Service) testRule(ctx context.Context, in *testRuleInput) (*testRuleOut
 			return err
 		}
 		nd = notify.Delivery{Rule: &notify.Rule{ID: r.ID, Name: r.Name, Priority: r.Priority}, Test: true}
-		// The router's scope: the rule's watch, or any, readable by the rule's owner (013-AC6).
+		// The router's scope, read from all_watches as it does: a rule whose list emptied by mistake matches no
+		// event rather than all of them (013-AC6, 014-AC1).
 		err = tx.QueryRow(ctx, `SELECT `+deliveryColumns+` FROM events e JOIN watches w ON w.id = e.watch_id
-			WHERE e.id = $1 AND ($2::uuid IS NULL OR w.id = $2) AND `+watch.ReadableSQL("w", "$3::uuid"),
-			in.Body.EventID, r.WatchID, me).Scan(deliveryFields(&nd)...)
+			JOIN rules r ON r.id = $2
+			WHERE e.id = $1 AND (r.all_watches OR EXISTS (SELECT 1 FROM rule_watches rw WHERE rw.rule_id = r.id AND rw.watch_id = w.id))
+			AND `+watch.ReadableSQL("w", "$3::uuid"),
+			in.Body.EventID, r.ID, me).Scan(deliveryFields(&nd)...)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return huma.Error404NotFound("event not found in the rule's scope")
 		}

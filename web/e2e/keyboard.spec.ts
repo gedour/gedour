@@ -42,6 +42,38 @@ async function tabTo(page: Page, target: Locator, back = false) {
   throw new Error(`Tab never reached ${target.toString()}`);
 }
 
+/**
+ * 014-AC18: the watch picker by keyboard alone: an arrow key on the scope radios, Tab to the search, the
+ * kind and the filters, Space toggles a checkbox, focus always visible.
+ */
+async function pickByKeyboard(page: Page, name: string) {
+  await tabTo(page, page.getByRole("radio", { name: /^All watches/ }));
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("radio", { name: /^Selected watches/ })).toBeChecked();
+  await tabTo(page, page.getByRole("searchbox", { name: "Search" }));
+  await page.keyboard.type(name);
+  await tabTo(page, page.getByRole("combobox", { name: "Kind" }));
+  await tabTo(page, page.getByRole("button", { name: "Select all matching" }));
+  await tabTo(page, page.getByRole("checkbox", { name: "Selected only" }));
+  const box = page
+    .getByRole("list", { name: "Watches to pick" })
+    .getByRole("checkbox", { name: new RegExp(`^${name} `) });
+  await tabTo(page, box);
+  await page.keyboard.press("Space");
+  await expect(box).toBeChecked();
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+  const chip = page.getByRole("button", { name: `Remove ${name}` });
+  // Space on a chip removes the pick; Space on the row picks it again.
+  await tabTo(page, chip, true);
+  await page.keyboard.press("Space");
+  await expect(box).not.toBeChecked();
+  // The last chip gone, focus lands on the search box, not the page.
+  await expect(page.getByRole("searchbox", { name: "Search" })).toBeFocused();
+  await tabTo(page, box);
+  await page.keyboard.press("Space");
+  await expect(box).toBeChecked();
+}
+
 const nav = (page: Page, name: string | RegExp) =>
   page.getByRole("navigation", { name: "Main" }).getByRole("link", { name });
 
@@ -80,11 +112,7 @@ test("create a watch and a rule, then read an inbox item, by keyboard only", asy
   await expect(page.getByRole("heading", { level: 1, name: "New rule" })).toBeVisible();
   await tabTo(page, page.getByLabel("Name"));
   await page.keyboard.type(`Kbd rule ${t}`);
-  const watches = page.getByLabel("Watches");
-  await tabTo(page, watches);
-  // A closed native select picks the option whose label starts with what is typed.
-  await page.keyboard.type(name);
-  await expect(watches.locator("option:checked")).toHaveText(name);
+  await pickByKeyboard(page, name);
   await tabTo(page, page.getByLabel("Expression"));
   await enterFilter(page, 'event.type == "release.published"', retype(page));
   await tabTo(page, page.getByRole("button", { name: "Create rule" }));
@@ -131,10 +159,7 @@ test("set a rule's priority and filter the inbox, by keyboard only", async ({ pa
   await page.goto("/rules/new");
   await tabTo(page, page.getByLabel("Name"));
   await page.keyboard.type(`Kbd high ${t}`);
-  const watches = page.getByLabel("Watches");
-  await tabTo(page, watches);
-  await page.keyboard.type(SEED.watch);
-  await expect(watches.locator("option:checked")).toHaveText(SEED.watch);
+  await pickByKeyboard(page, SEED.watch);
   const priority = page.getByLabel("Priority");
   await tabTo(page, priority);
   await page.keyboard.type("High");

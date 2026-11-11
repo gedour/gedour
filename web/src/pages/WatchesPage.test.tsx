@@ -237,7 +237,7 @@ describe("WatchesPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete 1 watch?" });
     expect(dialog).toHaveTextContent(
-      "Deleting a watch also removes its events and every rule on it. Every inbox item and delivery for those events goes too. This cannot be undone.",
+      "Deleting a watch also removes its events and takes it out of every rule; a rule left with no watch goes too. Every inbox item and delivery for those events goes too. This cannot be undone.",
     );
     // 009-AC10: the delete dialog names no share.
     expect(dialog).not.toHaveTextContent(/shar/i);

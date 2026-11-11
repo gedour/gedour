@@ -221,7 +221,7 @@ export async function serverReachable(): Promise<boolean> {
 
 export function listAudit(filters: AuditFilters, cursor: string, limit = 50): Promise<AuditPage> {
   const q = new URLSearchParams({ limit: String(limit) });
-  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, String(v));
   if (cursor) q.set("cursor", cursor);
   return getJSON<AuditPage>(`/api/v1/audit?${q}`);
 }
@@ -234,7 +234,7 @@ const watchPath = (id: string) => `/api/v1/watches/${encodeURIComponent(id)}`;
 
 export async function listWatches(filters: WatchFilters = {}): Promise<Watch[]> {
   const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, String(v));
   return (await getJSON<{ items: Watch[] }>(`/api/v1/watches?${q}`)).items;
 }
 
@@ -333,7 +333,7 @@ export const deletePushDevice = (id: string) => sendJSON<undefined>("DELETE", de
 
 export function listDeliveries(filters: DeliveryFilters, cursor: string): Promise<DeliveriesPage> {
   const q = new URLSearchParams({ limit: "25" });
-  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, v);
+  for (const [k, v] of Object.entries(filters)) if (v) q.set(k, String(v));
   if (cursor) q.set("cursor", cursor);
   return getJSON<DeliveriesPage>(`/api/v1/deliveries?${q}`);
 }
@@ -350,8 +350,9 @@ export const createRule = (body: CreateRuleBody) => sendJSON<Rule>("POST", "/api
 export const updateRule = (id: string, body: UpdateRuleBody) =>
   sendJSON<Rule>("PATCH", rulePath(id), body);
 export const deleteRule = (id: string) => sendJSON<undefined>("DELETE", rulePath(id));
-export async function previewRule(filter: string, watchId: string): Promise<PreviewItem[]> {
-  const body = { filter, watch_id: watchId || undefined };
+/** watchIds empty: all the caller's watches. */
+export async function previewRule(filter: string, watchIds: string[]): Promise<PreviewItem[]> {
+  const body = { filter, watch_ids: watchIds };
   return (await sendJSON<{ items: PreviewItem[] }>("POST", "/api/v1/rules/preview", body)).items;
 }
 /** Sends an event through the saved rule's channels now, marked as a test; one item per channel. */

@@ -79,10 +79,7 @@ export interface EventsPage {
   next_cursor?: string;
 }
 
-export interface WatchFilters {
-  kind?: WatchKind;
-  q?: string;
-}
+export type WatchFilters = NonNullable<operations["list-watches"]["parameters"]["query"]>;
 
 // Phase 5 resources.
 export type Channel = Schemas["Channel"];

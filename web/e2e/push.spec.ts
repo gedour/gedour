@@ -1,5 +1,14 @@
 import { BOB_AUTH_FILE } from "./auth-file";
-import { api, expect, PUSH_KEYS, SEED, test, untilNotTooSoon, UPSTREAM } from "./fixtures";
+import {
+  api,
+  expect,
+  pickWatch,
+  PUSH_KEYS,
+  SEED,
+  test,
+  untilNotTooSoon,
+  UPSTREAM,
+} from "./fixtures";
 
 // The headless shell reports notifications denied whatever is granted; the new headless mode does not.
 // Bob: the seed leaves events in his inbox for the notification link to open.
@@ -85,7 +94,7 @@ test("register this browser, send a test and open the notification", async ({
   try {
     await page.goto("/rules/new");
     await page.getByLabel("Name").fill(name);
-    await page.getByLabel("Watches").selectOption({ label: SEED.watch });
+    await pickWatch(page, SEED.watch);
     await page.getByRole("checkbox", { name: new RegExp(name) }).check();
     await page.getByRole("button", { name: "Create rule" }).click();
     await expect(page).toHaveURL(/\/rules$/);

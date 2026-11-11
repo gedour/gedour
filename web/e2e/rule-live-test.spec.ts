@@ -48,7 +48,7 @@ test("live test a rule from its preview", async ({ page }) => {
     });
     const rule = await create("/api/v1/rules", {
       name: `Live ${t}`,
-      watch_id: watchId,
+      watch_ids: [watchId],
       filter: 'event.type == "none"',
       channel_ids: [hook, script],
     });

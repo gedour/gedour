@@ -25,7 +25,6 @@ import {
   deleteRule,
   getRule,
   listChannels,
-  listWatches,
   previewRule,
   testRule,
   updateRule,
@@ -35,13 +34,16 @@ import { DeliveryFields } from "@/components/DeliveryFields";
 import { browserTimeZone, channelTarget, digestErrors } from "@/lib/channels";
 import { ErrorState } from "@/components/ErrorState";
 import { FilterReference } from "@/components/FilterReference";
+import { MAX_PICKS, WatchPicker } from "@/components/WatchPicker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogActions } from "@/components/ui/dialog";
 import { Field, inputClass } from "@/components/ui/field";
 import { useToast } from "@/hooks/toast";
+import { useDebounced } from "@/hooks/useDebounced";
 import { summarizeEvent, TONE_CLASS } from "@/lib/events";
 import { FILTER_FIELDS, filterProblem, insertAt, marker, type FilterProblem } from "@/lib/filter";
 import { fieldErrors, problemText, unplaced } from "@/lib/problems";
+import { namedScopeErrors, type WatchPick } from "@/lib/watchPicks";
 import { formatRelative } from "@/lib/time";
 import { cn } from "@/lib/utils";
 import { NotFound } from "@/pages/NotFound";
@@ -97,25 +99,20 @@ function Page({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return v;
-}
-
 /** What a live test reads of the rule: the filter and the digest schedule are not among them. */
-function liveTestKey(name: string, watchId: string, priority: string, channelIds: string[]) {
-  return JSON.stringify([name, watchId, priority, [...channelIds].sort()]);
+function liveTestKey(name: string, scope: string, priority: string, channelIds: string[]) {
+  return JSON.stringify([name, scope, priority, [...channelIds].sort()]);
 }
 
 const sectionClass = "flex flex-col gap-4 rounded-xl border border-line bg-surface p-5 sm:p-6";
 
 function RuleForm({ initial }: { initial?: Rule }) {
   const [name, setName] = useState(initial?.name ?? "");
-  const [watchId, setWatchId] = useState(initial?.watch_id ?? "");
+  // 014-AC13: no listed watch is all watches; the picks stay while "All watches" is on.
+  const [picks, setPicks] = useState<WatchPick[]>(
+    () => initial?.watches ?? (initial?.watch_ids ?? []).map((id) => ({ id, name: null })),
+  );
+  const [allWatches, setAllWatches] = useState(picks.length === 0);
   const [filter, setFilter] = useState(initial?.filter ?? "");
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [priority, setPriority] = useState<Rule["priority"]>(initial?.priority ?? "normal");
@@ -128,7 +125,6 @@ function RuleForm({ initial }: { initial?: Rule }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [showPreview, setShowPreview] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const watches = useQuery({ queryKey: ["watches", {}], queryFn: () => listWatches() });
   const channels = useQuery({ queryKey: ["channels"], queryFn: listChannels });
   const client = useQueryClient();
   const navigate = useNavigate();
@@ -138,32 +134,38 @@ function RuleForm({ initial }: { initial?: Rule }) {
 
   // Live compile: the preview endpoint compiles first, so its 400 is the editor's feedback.
   const debounced = useDebounced(filter.trim(), 350);
+  const watchIds = allWatches ? [] : picks.map((p) => p.id);
+  // Joined: the debounce compares by identity, and sorted so the order of picks is not a new query.
+  const scopeNow = [...watchIds].sort().join(",");
+  // A closed preview only compiles the filter: picks then spend none of the per-user preview budget.
+  const scope = useDebounced(showPreview ? scopeNow : "", 350);
   const preview = useQuery({
-    queryKey: ["rule-preview", watchId, debounced],
-    queryFn: () => previewRule(debounced, watchId),
+    queryKey: ["rule-preview", scope, debounced],
+    queryFn: () => previewRule(debounced, scope ? scope.split(",") : []),
     placeholderData: keepPreviousData,
     retry: false,
   });
   const live = filterProblem(preview.error);
   // An error with no filter problem (5xx, 429, network): the filter could not be checked at all.
   const unchecked = preview.isError && !live;
-  const settling = debounced !== filter.trim() || preview.isFetching;
+  const settling =
+    debounced !== filter.trim() || (showPreview && scope !== scopeNow) || preview.isFetching;
 
   const save = useMutation({
-    mutationFn: () => {
+    // sent: the picks in body order, to name the watch of a body.watch_ids[i] error.
+    mutationFn: (sent: WatchPick[]) => {
       const body = {
         name,
         filter,
         enabled,
         priority,
         channel_ids: channelIds,
+        watch_ids: sent.map((p) => p.id),
         ...(digestOn
           ? { delivery: "digest" as const, at: times, tz: tz.trim() || "UTC" }
           : { delivery: "immediate" as const }),
       };
-      return initial
-        ? updateRule(initial.id, { ...body, watch_id: watchId })
-        : createRule({ ...body, watch_id: watchId || undefined });
+      return initial ? updateRule(initial.id, body) : createRule(body);
     },
     onSuccess: (r) => {
       void client.invalidateQueries({ queryKey: ["rules"] });
@@ -171,7 +173,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
       toast(`Saved ${r.name}`);
       void navigate("/rules");
     },
-    onError: (err) => setErrors(fieldErrors(err)),
+    onError: (err, sent) => setErrors(namedScopeErrors(fieldErrors(err), sent)),
   });
   const del = useMutation({
     mutationFn: () => deleteRule(initial?.id ?? ""),
@@ -205,9 +207,14 @@ function RuleForm({ initial }: { initial?: Rule }) {
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const local = digestOn ? digestErrors(times, tz.trim()) : {};
+    const local: Record<string, string> = digestOn ? digestErrors(times, tz.trim()) : {};
+    // 014-AC13: an empty pick would save as all watches.
+    if (!allWatches && picks.length === 0)
+      local.watch_ids = "Pick at least one watch, or choose All watches.";
+    if (!allWatches && picks.length > MAX_PICKS)
+      local.watch_ids = `A rule takes ${MAX_PICKS} watches at most: unpick ${picks.length - MAX_PICKS}.`;
     setErrors(local);
-    if (Object.keys(local).length === 0) save.mutate();
+    if (Object.keys(local).length === 0) save.mutate(allWatches ? [] : picks);
   };
   // 013: the live test sends through the saved rule, never the form's edits.
   const liveTest = useMutation({
@@ -216,23 +223,30 @@ function RuleForm({ initial }: { initial?: Rule }) {
   });
   const unsaved =
     initial !== undefined &&
-    liveTestKey(name.trim(), watchId, priority, channelIds) !==
+    liveTestKey(name.trim(), scopeNow, priority, channelIds) !==
       liveTestKey(
         initial.name,
-        initial.watch_id ?? "",
+        [...(initial.watch_ids ?? [])].sort().join(","),
         initial.priority,
         initial.channel_ids ?? [],
       );
   const saveProblem = filterProblem(save.error);
   const problem = live ?? saveProblem;
-  const watchList = watches.data ?? [];
+  // The scope's errors are about the scope that was there: they go when it changes.
+  const clearWatchErrors = () =>
+    setErrors((e) =>
+      Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith("watch_ids"))),
+    );
+  const watchErrors = Object.entries(errors).filter(
+    ([k]) => k === "watch_ids" || k.startsWith("watch_ids["),
+  );
 
   return (
     <Page title={initial ? `Edit ${initial.name}` : "New rule"}>
       <form noValidate onSubmit={submit} aria-label="Rule" className="flex flex-col gap-6">
         {unplaced(errors, [
           "name",
-          "watch_id",
+          ...watchErrors.map(([k]) => k),
           "priority",
           "filter",
           "channel_ids",
@@ -257,23 +271,19 @@ function RuleForm({ initial }: { initial?: Rule }) {
               />
             )}
           </Field>
-          <Field label="Watches" error={errors.watch_id}>
-            {(p) => (
-              <select
-                {...p}
-                value={watchId}
-                onChange={(e) => setWatchId(e.target.value)}
-                className={inputClass}
-              >
-                <option value="">All watches</option>
-                {watchList.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
+          <WatchPicker
+            all={allWatches}
+            setAll={(v) => {
+              setAllWatches(v);
+              clearWatchErrors();
+            }}
+            picks={picks}
+            setPicks={(v) => {
+              setPicks(v);
+              clearWatchErrors();
+            }}
+            errors={watchErrors.map(([, m]) => m)}
+          />
           <Field
             label="Priority"
             error={errors.priority}
@@ -369,32 +379,37 @@ function RuleForm({ initial }: { initial?: Rule }) {
                 Unsaved changes: a live test uses the saved rule.
               </p>
             )}
-            {showPreview && !live && (
-              <PreviewTable
-                items={preview.data}
-                loading={preview.isPending}
-                error={preview.isError ? preview.error : null}
-                liveTest={
-                  initial && {
-                    run: (it) => liveTest.mutate(it),
-                    pending: liveTest.isPending ? liveTest.variables.event.id : null,
-                    tested: liveTest.variables?.event.id ?? null,
-                    results: liveTest.isPending ? (
-                      <p className="text-sm text-muted">Sending…</p>
-                    ) : liveTest.isError ? (
-                      <p className="text-sm text-rose-700 dark:text-rose-300">
-                        {problemText(liveTest.error)}
-                      </p>
-                    ) : (
-                      liveTest.data &&
-                      liveTest.variables && (
-                        <LiveTestResults items={liveTest.data} item={liveTest.variables} />
-                      )
-                    ),
+            {showPreview &&
+              !live &&
+              (!allWatches && picks.length === 0 ? (
+                <p className="text-sm text-muted">Pick a watch to test against its events.</p>
+              ) : (
+                <PreviewTable
+                  items={preview.data}
+                  loading={preview.isPending}
+                  stale={settling}
+                  error={preview.isError ? preview.error : null}
+                  liveTest={
+                    initial && {
+                      run: (it) => liveTest.mutate(it),
+                      pending: liveTest.isPending ? liveTest.variables.event.id : null,
+                      tested: liveTest.variables?.event.id ?? null,
+                      results: liveTest.isPending ? (
+                        <p className="text-sm text-muted">Sending…</p>
+                      ) : liveTest.isError ? (
+                        <p className="text-sm text-rose-700 dark:text-rose-300">
+                          {problemText(liveTest.error)}
+                        </p>
+                      ) : (
+                        liveTest.data &&
+                        liveTest.variables && (
+                          <LiveTestResults items={liveTest.data} item={liveTest.variables} />
+                        )
+                      ),
+                    }
                   }
-                }
-              />
-            )}
+                />
+              ))}
           </div>
         </section>
 
@@ -577,11 +592,14 @@ export function FilterStatus({
 export function PreviewTable({
   items,
   loading,
+  stale = false,
   error,
   liveTest,
 }: {
   items: PreviewItem[] | undefined;
   loading: boolean;
+  /** The filter or scope changed and the new result is not in yet. */
+  stale?: boolean;
   error: Error | null;
   /** Edit page only: a saved rule to send the row's event through; results show under the tested row. */
   liveTest?: {
@@ -610,7 +628,10 @@ export function PreviewTable({
   }
   const matched = items.filter((i) => i.matched).length;
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      aria-busy={stale || undefined}
+      className={cn("flex flex-col gap-2 transition-opacity", stale && "opacity-60")}
+    >
       <p className="text-sm">
         <strong>{matched}</strong> of {items.length} recent events match.
       </p>

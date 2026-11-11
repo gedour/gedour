@@ -19,6 +19,7 @@ import (
 	"github.com/gedour/gedour/pkg/netguard"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/script"
+	"github.com/gedour/gedour/pkg/testpg"
 	"github.com/gedour/gedour/pkg/wake"
 )
 
@@ -299,6 +300,35 @@ func TestRuleTestNotFound(t *testing.T) {
 		if _, err := testRuleCall(context.Background(), r.service(alice), all, ev); err != nil {
 			t.Fatalf("all-watches rule, event %d: %v", ev, err)
 		}
+	}
+}
+
+// 013-AC6, 014-AC1: a rule on [A, B] tests an event of A or B; one of C, an unlisted watch of the owner, is a 404,
+// as is any event once the rule's list is emptied without all_watches.
+func TestRuleTestMultiWatchScope(t *testing.T) {
+	r := newRuleTestEnv(t)
+	alice := r.user(t, "alice")
+	a, b, c := r.watch(t, alice), r.watch(t, alice), r.watch(t, alice)
+	rule := testpg.InsertRule(t, r.pool, testpg.Rule{Owner: alice, Watches: []string{a, b}})
+	if _, err := r.pool.Exec(context.Background(), `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, rule, r.hook(t, alice, "mw")); err != nil {
+		t.Fatal(err)
+	}
+	evA, evB, evC := r.event(t, a, "release.published", "v1"), r.event(t, b, "release.published", "v1"), r.event(t, c, "release.published", "v1")
+	if _, err := testRuleCall(context.Background(), r.service(alice), rule, evC); status(err) != http.StatusNotFound {
+		t.Fatalf("event of unlisted watch C: %v", err)
+	}
+	for _, ev := range []int64{evA, evB} {
+		r.pastTests(t)
+		if _, err := testRuleCall(context.Background(), r.service(alice), rule, ev); err != nil {
+			t.Fatalf("listed event %d: %v", ev, err)
+		}
+	}
+	if _, err := r.pool.Exec(context.Background(), `DELETE FROM rule_watches WHERE rule_id = $1`, rule); err != nil {
+		t.Fatal(err)
+	}
+	r.pastTests(t)
+	if _, err := testRuleCall(context.Background(), r.service(alice), rule, evA); status(err) != http.StatusNotFound {
+		t.Fatalf("emptied list: %v", err)
 	}
 }
 

@@ -53,6 +53,8 @@ export function rule(over: Partial<Rule> = {}): Rule {
   return {
     id: "r1",
     name: "Releases",
+    watch_ids: [],
+    watches: [],
     watch_id: null,
     watch_name: null,
     filter: 'event.type == "release.published"',

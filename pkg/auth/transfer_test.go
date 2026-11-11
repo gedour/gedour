@@ -79,7 +79,10 @@ func (e *env) watchOf(t *testing.T, owner, name string, cred *string) string {
 
 func (e *env) ruleOf(t *testing.T, owner, name string, watch *string) string {
 	t.Helper()
-	return e.id(t, `INSERT INTO rules (owner_id, name, watch_id) VALUES ($1, $2, $3) RETURNING id::text`, owner, name, watch)
+	if watch == nil {
+		return e.ruleOn(t, owner, name)
+	}
+	return e.ruleOn(t, owner, name, *watch)
 }
 
 func (e *env) transfer(t *testing.T, token, csrf, watch, to string) (int, []byte) {

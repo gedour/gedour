@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
@@ -271,10 +272,11 @@ func TestWatchDeleteRacingRuleEdit(t *testing.T) {
 // The router holds an event of the watch FOR UPDATE and then takes KEY SHARE on a matching rule (the
 // deliveries FK). A delete of the watch holding that rule FOR UPDATE would wait on the event while the
 // router waits on the rule: the delete's NO KEY UPDATE and its events deleted before the watch let the
-// router through, whatever order the watch's cascades fire in.
+// router through, whatever order the watch's cascades fire in. 014-AC12: the same with a rule on the watch and
+// another, which the delete trims and keeps.
 func TestWatchDeleteRacingRouter(t *testing.T) {
 	for _, flipped := range []bool{false, true} {
-		t.Run(map[bool]string{false: "events cascade first", true: "rules cascade first"}[flipped], func(t *testing.T) {
+		t.Run(map[bool]string{false: "events cascade first", true: "rule_watches cascade first"}[flipped], func(t *testing.T) {
 			a := newDevApp(t)
 			if flipped {
 				testpg.FlipEventsCascade(t, a.pool)
@@ -286,6 +288,10 @@ func TestWatchDeleteRacingRouter(t *testing.T) {
 				ID string `json:"id"`
 			}
 			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on w", "watch_id": w.ID}, http.StatusCreated, &rule)
+			var other watchJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &other)
+			var both ruleJSON
+			a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "on both", "watch_ids": []string{w.ID, other.ID}}, http.StatusCreated, &both)
 			var ev int64
 			if err := a.pool.QueryRow(context.Background(), `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k') RETURNING id`, w.ID).Scan(&ev); err != nil {
 				t.Fatal(err)
@@ -301,7 +307,7 @@ func TestWatchDeleteRacingRouter(t *testing.T) {
 			}
 			deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w.ID, nil)
 			a.waitLockWaiters(t, 1)
-			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR KEY SHARE`, rule.ID); err != nil {
+			if _, err := router.Exec(ctx, `SELECT 1 FROM rules WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE`, []string{rule.ID, both.ID}); err != nil {
 				t.Fatalf("router's rule KEY SHARE: %v", err)
 			}
 			if err := router.Commit(ctx); err != nil {
@@ -309,6 +315,13 @@ func TestWatchDeleteRacingRouter(t *testing.T) {
 			}
 			if code := <-deleted; code != http.StatusNoContent {
 				t.Fatalf("delete: %d, want 204", code)
+			}
+			if n := a.countRows(t, `SELECT count(*) FROM rules WHERE id = $1`, rule.ID); n != 0 {
+				t.Error("the rule on the deleted watch alone survived")
+			}
+			if n := a.countRows(t, `SELECT count(*) FROM rule_watches WHERE rule_id = $1 AND watch_id = $2`, both.ID, other.ID) +
+				a.countRows(t, `SELECT count(*) FROM rule_watches WHERE watch_id = $1`, w.ID); n != 1 {
+				t.Error("the rule on both watches did not keep the other one alone")
 			}
 		})
 	}
@@ -325,9 +338,7 @@ func TestWatchDeleteRemovesOtherUsersData(t *testing.T) {
 	var hook channelJSON
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Hook", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/a"}}, http.StatusCreated, &hook)
 	var onWatch, everyWatch ruleJSON
-	if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, watch_id) VALUES ($1, 'on w', $2) RETURNING id::text`, bob.id, w.ID).Scan(&onWatch.ID); err != nil {
-		t.Fatal(err)
-	}
+	onWatch.ID = testpg.InsertRule(t, a.pool, testpg.Rule{Owner: bob.id, Name: "on w", Watches: []string{w.ID}})
 	a.exec(t, `INSERT INTO rule_channels (rule_id, channel_id) VALUES ($1, $2)`, onWatch.ID, hook.ID)
 	a.mustCall(t, bob, http.MethodPost, "/api/v1/rules", map[string]any{"name": "every watch", "channel_ids": []string{hook.ID}}, http.StatusCreated, &everyWatch)
 	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 't', '{}', 'k'), ($2, 't', '{}', 'k')`, w.ID, other.ID)
@@ -367,7 +378,7 @@ func TestPurgeRacingWatchDelete(t *testing.T) {
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &w)
 	const low, high = "00000000-0000-4000-8000-000000000001", "ffffffff-ffff-4fff-bfff-ffffffffffff"
 	for _, id := range []string{high, low} {
-		a.exec(t, `INSERT INTO rules (id, owner_id, name, watch_id) VALUES ($1, $2, $3, $4)`, id, dave.id, id, w.ID)
+		testpg.InsertRule(t, a.pool, testpg.Rule{ID: id, Owner: dave.id, Name: id, Watches: []string{w.ID}})
 	}
 	a.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave.id)
 	ctx := context.Background()
@@ -581,7 +592,7 @@ func TestPurgeRacingRouterRetries(t *testing.T) {
 	// Stored in the reverse of the router's order (created_at): the purge's delete meets the second rule first.
 	for _, r := range []struct{ name, channel, age string }{{"second", second, "0"}, {"first", first, "1 hour"}} {
 		var id string
-		if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, created_at) VALUES ($1, $2, now() - $3::interval) RETURNING id::text`,
+		if err := a.pool.QueryRow(context.Background(), `INSERT INTO rules (owner_id, name, created_at, all_watches) VALUES ($1, $2, now() - $3::interval, true) RETURNING id::text`,
 			dave.id, r.name, r.age).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
@@ -629,8 +640,8 @@ func TestPurgeRacingRouterRetries(t *testing.T) {
 }
 
 // Delete versus rule edit. The delete holds the rules it found and waits on the watch;
-// a rule created now and then locked by an edit escapes its first lock. The delete's cascade waits on that
-// rule while the edit waits on the watch. The delete is real, the edit's two statements are driven by hand:
+// a rule created now and then locked by an edit escapes its first lock. The delete's second rule lock waits on
+// that rule while the edit waits on the watch. The delete is real, the edit's two statements are driven by hand:
 // nothing parks a real edit between them. Its long timeout leaves detection, and the retry, to the delete.
 func TestWatchDeleteRacingNewRuleRetries(t *testing.T) {
 	a := newDevApp(t)
@@ -666,7 +677,7 @@ func TestWatchDeleteRacingNewRuleRetries(t *testing.T) {
 	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	a.waitQueryLocked(t, "DELETE FROM watches%")
+	a.waitQueryLocked(t, "SELECT 1 FROM rules WHERE id IN (SELECT rule_id FROM rule_watches%")
 	if _, err := edit.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w.ID); err != nil {
 		t.Fatalf("edit's watch check: %v", err)
 	}
@@ -681,5 +692,173 @@ func TestWatchDeleteRacingNewRuleRetries(t *testing.T) {
 	}
 	if n := a.countRows(t, `SELECT count(*) FROM audit_log WHERE action = 'watch.deleted'`); n != 1 {
 		t.Fatalf("%d delete audit rows, want 1", n)
+	}
+}
+
+// 014-AC12: an edit moves rule R from [B] onto A while A's delete waits on A, then a second edit, holding R, moves
+// it back to [B]. Once it holds A, the delete locks the rules on A again, waits for that edit and sees R off A:
+// R stays on B. Without that second lock its emptied-rule delete would decide on the list it read before the edit.
+func TestWatchDeleteRacingRuleScopeEdit(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	w := a.watches(t, alice, 2)
+	var r ruleJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/rules", map[string]any{"name": "r", "watch_ids": []string{w[1]}}, http.StatusCreated, &r)
+	ctx := context.Background()
+	hold, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, w[0]); err != nil {
+		t.Fatal(err)
+	}
+	deleted := a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+w[0], nil)
+	a.waitQueryLocked(t, "%FROM watches w%FOR UPDATE OF w")
+	a.mustCall(t, alice, http.MethodPatch, "/api/v1/rules/"+r.ID, map[string]any{"watch_ids": []string{w[0]}}, http.StatusOK, nil)
+	edit, err := a.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = edit.Rollback(ctx) }()
+	if _, err := edit.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.waitQueryLocked(t, "%FROM rules%")
+	if _, err := edit.Exec(ctx, `DELETE FROM rule_watches WHERE rule_id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := edit.Exec(ctx, `INSERT INTO rule_watches (rule_id, watch_id) VALUES ($1, $2)`, r.ID, w[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := edit.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := <-deleted; code != http.StatusNoContent {
+		t.Fatalf("delete: %d, want 204", code)
+	}
+	var got ruleJSON
+	a.mustCall(t, alice, http.MethodGet, "/api/v1/rules/"+r.ID, nil, http.StatusOK, &got)
+	if len(got.WatchIDs) != 1 || got.WatchIDs[0] != w[1] {
+		t.Fatalf("rule after the race: %+v", got)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM rule_watches rw LEFT JOIN watches x ON x.id = rw.watch_id WHERE x.id IS NULL`); n != 0 {
+		t.Fatalf("%d rule_watches rows on a deleted watch", n)
+	}
+}
+
+// 014-AC12: a rule of erin's moves onto dave's watch while dave's purge waits on that watch, then a second edit,
+// holding the rule, moves it back to erin's. Once it holds the watches, the purge locks the rules on them again,
+// waits for that edit and sees the rule off them: it stays. Without that lock its delete would decide on the
+// list it read before the edit.
+func TestPurgeRacingRuleScopeEdit(t *testing.T) {
+	a := newDevApp(t)
+	admin, dave, erin := a.signIn(t, "admin"), a.signIn(t, "dave"), a.signIn(t, "erin")
+	a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+	dw, ew := a.watches(t, dave, 1)[0], a.watches(t, erin, 1)[0]
+	r := testpg.InsertRule(t, a.pool, testpg.Rule{Owner: erin.id, Name: "r", Watches: []string{ew}})
+	a.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave.id)
+	ctx := context.Background()
+	begin := func() pgx.Tx {
+		t.Helper()
+		tx, err := a.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback(ctx) })
+		return tx
+	}
+	run := func(tx pgx.Tx, sql string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	// moveTo is updateRule's scope change, driven by hand.
+	moveTo := func(tx pgx.Tx, w string) {
+		t.Helper()
+		run(tx, `DELETE FROM rule_watches WHERE rule_id = $1`, r)
+		run(tx, `INSERT INTO rule_watches (rule_id, watch_id) VALUES ($1, $2)`, r, w)
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hold := begin()
+	run(hold, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, dw)
+	purge := a.callAsync(admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/purge", nil)
+	a.waitQueryLocked(t, "%FROM watches WHERE owner_id%FOR UPDATE%")
+	edit := begin()
+	run(edit, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r)
+	run(edit, `SELECT 1 FROM watches WHERE id = $1 FOR KEY SHARE`, dw)
+	moveTo(edit, dw)
+	back := begin()
+	run(back, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r)
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.waitQueryLocked(t, "%FROM rules%")
+	moveTo(back, ew)
+	if code := <-purge; code != http.StatusNoContent {
+		t.Fatalf("purge: %d, want 204", code)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM rule_watches WHERE rule_id = $1 AND watch_id = $2`, r, ew); n != 1 {
+		t.Fatal("erin's rule, back on her watch, went with the purge")
+	}
+	if n := a.countRows(t, `SELECT (after -> 'deleted' ->> 'other_users_rules')::int FROM audit_log WHERE action = 'user.purge'`); n != 0 {
+		t.Fatalf("audit other_users_rules %d, want 0", n)
+	}
+}
+
+// 014-AC12: bob's rule lists dave's watch and alice's. Dave's purge and alice's delete of her watch queue on the
+// rule, in either order; whichever goes second leaves it with no watch, and deletes it.
+func TestPurgeRacingWatchDeleteOnOneRule(t *testing.T) {
+	for _, purgeFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "purge first", false: "delete first"}[purgeFirst], func(t *testing.T) {
+			a := newDevApp(t)
+			admin, alice, bob, dave := a.signIn(t, "admin"), a.signIn(t, "alice"), a.signIn(t, "bob"), a.signIn(t, "dave")
+			a.exec(t, `UPDATE sessions SET is_admin = true WHERE user_id = $1`, admin.id)
+			dw, aw := a.watches(t, dave, 1)[0], a.watches(t, alice, 1)[0]
+			r := testpg.InsertRule(t, a.pool, testpg.Rule{Owner: bob.id, Name: "r", Watches: []string{dw, aw}})
+			a.exec(t, `UPDATE users SET disabled_at = now() WHERE id = $1`, dave.id)
+			ctx := context.Background()
+			hold, err := a.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = hold.Rollback(ctx) }()
+			if _, err := hold.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
+				t.Fatal(err)
+			}
+			purge := func() <-chan int {
+				return a.callAsync(admin, http.MethodPost, "/api/v1/admin/users/"+dave.id+"/purge", nil)
+			}
+			del := func() <-chan int { return a.callAsync(alice, http.MethodDelete, "/api/v1/watches/"+aw, nil) }
+			var p, d <-chan int
+			if purgeFirst {
+				p = purge()
+				a.waitLockWaiters(t, 1)
+				d = del()
+			} else {
+				d = del()
+				a.waitLockWaiters(t, 1)
+				p = purge()
+			}
+			a.waitLockWaiters(t, 2)
+			if err := hold.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if pc, dc := <-p, <-d; pc != http.StatusNoContent || dc != http.StatusNoContent {
+				t.Fatalf("purge %d, delete %d: want 204 both", pc, dc)
+			}
+			if n := a.countRows(t, `SELECT count(*) FROM rules WHERE id = $1`, r); n != 0 {
+				t.Fatal("the rule left with no watch survived")
+			}
+			if n := a.countRows(t, `SELECT count(*) FROM rules r WHERE NOT all_watches AND NOT EXISTS (SELECT 1 FROM rule_watches rw WHERE rw.rule_id = r.id)`); n != 0 {
+				t.Fatalf("%d rules left on no watch", n)
+			}
+		})
 	}
 }

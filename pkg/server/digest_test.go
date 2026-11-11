@@ -129,7 +129,7 @@ func TestPurgeRacingDigestClaim(t *testing.T) {
 		'{"chat_id": "-100123"}') RETURNING id::text`, dave.id).Scan(&ch); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, delivery, digest_at, digest_tz) VALUES ($1, 'r', 'digest', '{07:00}', 'UTC') RETURNING id::text`, dave.id).Scan(&rule); err != nil {
+	if err := a.pool.QueryRow(ctx, `INSERT INTO rules (owner_id, name, delivery, digest_at, digest_tz, all_watches) VALUES ($1, 'r', 'digest', '{07:00}', 'UTC', true) RETURNING id::text`, dave.id).Scan(&rule); err != nil {
 		t.Fatal(err)
 	}
 	a.exec(t, `WITH e AS (INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{"tag": "v1"}', 'k') RETURNING id)

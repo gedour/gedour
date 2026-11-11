@@ -94,7 +94,9 @@ describe("WatchDetailPage", () => {
     renderApp("/watches/w1");
     await userEvent.click(await screen.findByRole("button", { name: "Delete watch" }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog).toHaveTextContent(/its events and every rule on it/);
+    expect(dialog).toHaveTextContent(
+      /its events and takes it out of every rule; a rule left with no watch goes too/,
+    );
     expect(dialog).toHaveTextContent(/Every inbox item and delivery for those events/);
     // 009-AC10: the delete dialog names no share.
     expect(dialog).not.toHaveTextContent(/shar/i);

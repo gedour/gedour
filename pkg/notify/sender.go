@@ -50,8 +50,12 @@ const (
 	TalkSignatureHeader = "X-Nextcloud-Talk-Bot-Signature"
 )
 
-// SendTimeout bounds one HTTP delivery (webhook, Telegram, Nextcloud Talk, Web Push).
+// SendTimeout bounds one HTTP delivery (webhook, Nextcloud Talk, Web Push).
 const SendTimeout = 10 * time.Second
+
+// TelegramTimeout bounds one Telegram send: a timeout on a message Telegram already posted resends it
+// (sendMessage has no idempotency key). Stays under config.HTTPWriteTimeout, a channel test answers inline.
+const TelegramTimeout = 20 * time.Second
 
 const (
 	maxResponse    = 64 << 10
@@ -166,8 +170,8 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 
 // post sends body and returns the status and the first bytes of the answer. label names the
 // destination in errors in place of the URL.
-func (s *Sender) post(ctx context.Context, label, target string, body []byte, hdr http.Header) (int, []byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, SendTimeout)
+func (s *Sender) post(ctx context.Context, timeout time.Duration, label, target string, body []byte, hdr http.Header) (int, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
@@ -238,7 +242,7 @@ func (s *Sender) webhook(ctx context.Context, c WebhookConfig, key string, d Del
 	hdr.Set(SignatureHeader, Sign(key, body))
 	hdr.Set(EventHeader, d.Event.Type)
 	hdr.Set(DeliveryHeader, strconv.FormatInt(d.ID, 10))
-	code, _, err := s.post(ctx, label, c.URL, body, hdr)
+	code, _, err := s.post(ctx, SendTimeout, label, c.URL, body, hdr)
 	if err != nil {
 		return err
 	}
@@ -276,7 +280,7 @@ func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token, text str
 	}
 	// The token is in the path: label stands in for the URL in every error.
 	const label = "telegram"
-	code, head, err := s.post(ctx, label, strings.TrimRight(s.TelegramURL, "/")+"/bot"+token+"/sendMessage", body, http.Header{})
+	code, head, err := s.post(ctx, TelegramTimeout, label, strings.TrimRight(s.TelegramURL, "/")+"/bot"+token+"/sendMessage", body, http.Header{})
 	if err != nil {
 		return err
 	}
@@ -365,7 +369,7 @@ func (s *Sender) talk(ctx context.Context, c NextcloudTalkConfig, secret string,
 	hdr.Set(TalkSignatureHeader, TalkSignature(secret, nonce, text))
 	target := strings.TrimRight(c.URL, "/") + "/ocs/v2.php/apps/spreed/api/v1/bot/" + url.PathEscape(c.Conversation) + "/message"
 	label := postLabel("nextcloud talk", c.URL)
-	code, _, err := s.post(ctx, label, target, body, hdr)
+	code, _, err := s.post(ctx, SendTimeout, label, target, body, hdr)
 	if err != nil {
 		return err
 	}

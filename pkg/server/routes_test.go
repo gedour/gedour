@@ -749,10 +749,11 @@ func TestInboxAPI(t *testing.T) {
 	if got := a.inboxIDs(t, alice, "all"); len(got) != 3 {
 		t.Fatalf("all hides archived: %v", got)
 	}
-	var count struct{ Unread int }
+	var count struct{ Unread, Read int }
 	a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox/count", nil, http.StatusOK, &count)
-	if count.Unread != 2 {
-		t.Fatalf("count %d", count.Unread)
+	// all[1] is read; all[0], read then archived, counts in neither.
+	if count.Unread != 2 || count.Read != 1 {
+		t.Fatalf("count %+v", count)
 	}
 	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/unarchive", map[string]any{"ids": all[:1]}, http.StatusOK, &res)
 	if res.Unread != 3 {

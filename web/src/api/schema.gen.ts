@@ -442,7 +442,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Unread items in the caller's inbox */
+    /** Unread and read items in the caller's inbox, archive excluded */
     get: operations["count-inbox"];
     put?: never;
     post?: never;
@@ -1106,6 +1106,11 @@ export interface components {
       semver: number;
     };
     CountOutputBody: {
+      /**
+       * Format: int64
+       * @description Read items not archived
+       */
+      read: number;
       /**
        * Format: int64
        * @description Unread items not archived

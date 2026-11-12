@@ -74,8 +74,10 @@ type claimed struct {
 	channelID   string
 	ruleID      *string
 	attempts    int
-	// batch is a digest's deliveries, all under token; nil for a delivery sent alone.
+	// batch is a digest's or a poll's deliveries, all under token; nil for a delivery sent alone.
 	batch []claimed
+	// poll marks a batch of one poll's events sent at once (017), not a digest.
+	poll bool
 }
 
 // Run delivers until ctx ends, claiming as slots free up and sleeping until the next delivery is due or a
@@ -171,7 +173,11 @@ func (d *Deliverer) claim(ctx context.Context, n int) ([]claimed, error) {
 		if jobs, err := d.claimDigests(ctx, 1, true); err != nil || len(jobs) > 0 {
 			return jobs, err
 		}
-		return d.claimSingles(ctx, 1)
+		if jobs, err := d.claimSingles(ctx, 1); err != nil || len(jobs) > 0 {
+			return jobs, err
+		}
+		// The older singles may be a poll group held back (017-AC10): the slot goes to a due digest then.
+		return d.claimDigests(ctx, 1, false)
 	}
 	jobs, err := d.claimSingles(ctx, n-1)
 	if err != nil {
@@ -186,23 +192,71 @@ func (d *Deliverer) claim(ctx context.Context, n int) ([]claimed, error) {
 	return append(jobs, digests...), err
 }
 
-// claimSingles leases up to n due deliveries sent alone, oldest due first.
+// claimSinglesSQL is claimSingles' claim: $1 the lease in seconds, $2 the slots, $3 the groupable channel types.
+const claimSinglesSQL = `WITH lead AS (SELECT x.id, x.channel_id, e.watch_id, e.observed_at, r.priority = 'high' AS high,
+				x.rule_id IS NOT NULL AND c.type = ANY($3) AS poll
+			FROM deliveries x JOIN channels c ON c.id = x.channel_id JOIN events e ON e.id = x.event_id LEFT JOIN rules r ON r.id = x.rule_id
+			WHERE x.status IN ('pending', 'failed') AND x.next_attempt_at <= now() AND (x.leased_until IS NULL OR x.leased_until <= now()) AND NOT x.digest
+				AND (x.rule_id IS NULL OR NOT c.type = ANY($3) OR (
+					NOT EXISTS (SELECT 1 FROM events u WHERE u.watch_id = e.watch_id AND u.observed_at = e.observed_at AND u.routed_at IS NULL)
+					AND NOT EXISTS (SELECT 1 FROM deliveries o JOIN events oe ON oe.id = o.event_id JOIN rules ro ON ro.id = o.rule_id
+						WHERE o.status IN ('pending', 'failed') AND o.next_attempt_at <= now() AND NOT o.digest AND o.id <> x.id
+							AND o.channel_id = x.channel_id AND oe.watch_id = e.watch_id AND oe.observed_at = e.observed_at
+							AND (ro.priority = 'high') = (r.priority = 'high') AND (o.id < x.id OR o.leased_until > now()))))
+			ORDER BY x.next_attempt_at LIMIT $2 FOR UPDATE OF x SKIP LOCKED),
+		want AS (SELECT o.id, g.id AS lead FROM lead g JOIN deliveries o ON o.channel_id = g.channel_id
+				JOIN events e ON e.id = o.event_id AND e.watch_id = g.watch_id AND e.observed_at = g.observed_at
+				JOIN rules r ON r.id = o.rule_id AND (r.priority = 'high') = g.high
+			WHERE g.poll AND o.status IN ('pending', 'failed') AND o.next_attempt_at <= now() AND NOT o.digest
+			UNION ALL SELECT id, id FROM lead WHERE NOT poll),
+		held AS (SELECT o.id, w.lead FROM deliveries o JOIN want w ON w.id = o.id
+			WHERE o.status IN ('pending', 'failed') AND o.next_attempt_at <= now() AND (o.leased_until IS NULL OR o.leased_until <= now()) AND NOT o.digest
+			FOR UPDATE OF o SKIP LOCKED),
+		whole AS (SELECT lead, gen_random_uuid() AS token FROM want GROUP BY lead HAVING count(*) = (SELECT count(*) FROM held WHERE held.lead = want.lead))
+		UPDATE deliveries x SET claim_token = whole.token, leased_until = now() + make_interval(secs => $1)
+		FROM held JOIN whole ON whole.lead = held.lead WHERE x.id = held.id
+		RETURNING x.id, x.event_id, x.claim_token::text, x.channel_id::text, x.rule_id::text, x.attempts`
+
+// claimSingles leases up to n due deliveries sent alone, oldest due first. A due row on a channel that lists
+// events (Telegram, Talk, email, Web Push) brings, under its token, every due row of its poll: same channel, watch,
+// observed_at and priority (017). Only the poll's lowest due row leads, so claimers contend on one lock per group,
+// and a poll still routing or with a member leased elsewhere is passed over, never taking a slot (017-AC1,
+// 017-AC10). A row whose rule is gone has no priority and stays alone; a group of one is a plain single delivery.
+// events_watch_observed_idx keeps each member check to its poll's events, not a scan of events per due row.
 func (d *Deliverer) claimSingles(ctx context.Context, n int) ([]claimed, error) {
-	rows, err := d.pool.Query(ctx, `UPDATE deliveries x SET claim_token = gen_random_uuid(), leased_until = now() + make_interval(secs => $1)
-		FROM (SELECT id FROM deliveries WHERE status IN ('pending', 'failed') AND next_attempt_at <= now()
-			AND (leased_until IS NULL OR leased_until <= now()) AND NOT digest
-			ORDER BY next_attempt_at LIMIT $2 FOR UPDATE SKIP LOCKED) due
-		WHERE x.id = due.id
-		RETURNING x.id, x.event_id, x.claim_token::text, x.channel_id::text, x.rule_id::text, x.attempts`,
-		DeliveryLease.Seconds(), n)
+	rows, err := d.pool.Query(ctx, claimSinglesSQL, DeliveryLease.Seconds(), n, digestTypes)
 	if err != nil {
 		return nil, fmt.Errorf("claim deliveries: %w", err)
 	}
-	jobs, err := pgx.CollectRows(rows, scanClaimed)
+	all, err := pgx.CollectRows(rows, scanClaimed)
 	if err != nil {
 		return nil, fmt.Errorf("claim deliveries: %w", err)
+	}
+	jobs := batches(all)
+	for i, j := range jobs {
+		if len(j.batch) == 1 {
+			jobs[i] = j.batch[0]
+		} else {
+			jobs[i].poll = true
+		}
 	}
 	return jobs, nil
+}
+
+// batches gathers claimed rows by token, one job each.
+func batches(all []claimed) []claimed {
+	var jobs []claimed
+	at := map[string]int{}
+	for _, c := range all {
+		i, ok := at[c.token]
+		if !ok {
+			i = len(jobs)
+			at[c.token] = i
+			jobs = append(jobs, claimed{token: c.token, channelID: c.channelID})
+		}
+		jobs[i].batch = append(jobs[i].batch, c)
+	}
+	return jobs
 }
 
 func scanClaimed(r pgx.CollectableRow) (claimed, error) {
@@ -240,18 +294,7 @@ func (d *Deliverer) claimDigests(ctx context.Context, n int, older bool) ([]clai
 	if err != nil {
 		return nil, fmt.Errorf("claim digests: %w", err)
 	}
-	var jobs []claimed
-	at := map[string]int{}
-	for _, c := range all {
-		i, ok := at[c.token]
-		if !ok {
-			i = len(jobs)
-			at[c.token] = i
-			jobs = append(jobs, claimed{token: c.token, channelID: c.channelID})
-		}
-		jobs[i].batch = append(jobs[i].batch, c)
-	}
-	return jobs, nil
+	return batches(all), nil
 }
 
 // deliveryColumns are the event (e) and watch (w) columns of a delivery, scanned into deliveryFields.

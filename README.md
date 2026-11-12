@@ -427,6 +427,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   and answer late, and a retry after a timeout sends it twice. Email: multipart text + HTML through
   the instance's SMTP server, at most 10 recipients per channel.
 - Nextcloud Talk: see [below](#nextcloud-talk-channels).
+- One message per poll: events of one watch poll sent at once to the same Telegram, Nextcloud Talk, email or
+  Web Push channel, at the same priority (high apart from normal), go out as one message in the digest
+  layout below, headed "N new events" (Web Push: that title, the watch name, opening the inbox), read or not.
+  They wait until every event of the poll is routed (one router pass in practice), then are claimed,
+  retried and recorded together; each is `dead` after its own 5th attempt. A poll of one
+  event sends the single message. Webhook and script channels get each event alone.
 - Digest: a rule's `delivery` is `immediate` (default) or `digest`, with `at`, 1 to 24 local times (`HH:MM`),
   and `tz`, an IANA time zone (default `UTC`). A digest rule's deliveries to Telegram, Nextcloud Talk, email
   and Web Push channels wait for the rule's next time; its webhook and script channels still get each event

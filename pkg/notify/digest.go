@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -15,6 +16,8 @@ type Digest struct {
 	// ID is the lead delivery, Talk's reference; 0 for a test.
 	ID         int64
 	Deliveries []Delivery
+	// Poll marks the events of one poll sent at once (017): counted as new, not unread.
+	Poll bool
 }
 
 type digestGroup struct {
@@ -52,13 +55,19 @@ type digestStyle struct {
 	maxItems      int // 0: no cap
 }
 
-func countEvents(n int) string { return plural(n, "unread event") }
+func (dg Digest) count() string {
+	if dg.Poll {
+		return plural(len(dg.Deliveries), "new event")
+	}
+	return plural(len(dg.Deliveries), "unread event")
+}
 
 // render lists ds by watch. Over the cap it stops before the first line that does not fit and ends
 // with "+N more", never leaving a watch heading without an event under it.
-func (st digestStyle) render(ds []Delivery) string {
+func (st digestStyle) render(dg Digest) string {
+	ds := dg.Deliveries
 	gs := groups(ds)
-	parts := []string{st.header(countEvents(len(ds)))}
+	parts := []string{st.header(dg.count())}
 	for _, g := range gs {
 		parts = append(parts, st.group(g.watch))
 		for _, m := range g.msgs {
@@ -118,7 +127,7 @@ func TelegramDigest(dg Digest, inbox string) string {
 			return fmt.Sprintf("+%d more: <a href=\"%s\">open the inbox</a>", n, html.EscapeString(inbox))
 		},
 		sep: "\n", limit: maxTelegramLen, size: func(s string) int { return len(s) },
-	}.render(dg.Deliveries)
+	}.render(dg)
 }
 
 // TalkDigest is the Markdown digest, cut to maxTalkLen characters.
@@ -140,7 +149,7 @@ func TalkDigest(dg Digest, inbox string) string {
 			return fmt.Sprintf("+%d more: [open the inbox](%s)", n, talkLink(inbox))
 		},
 		sep: "\n", limit: maxTalkLen, size: utf8.RuneCountInString,
-	}.render(dg.Deliveries)
+	}.render(dg)
 }
 
 // Mail digest caps: a client renders a long mail, but not an unbounded one.
@@ -167,11 +176,11 @@ func MailDigest(dg Digest, inbox string) Message {
 			return fmt.Sprintf("+%d more: %s", n, inbox)
 		},
 		sep: "\r\n", limit: maxMailBytes, size: func(s string) int { return len(s) }, maxItems: maxMailEvents,
-	}.render(dg.Deliveries)
+	}.render(dg)
 	if inbox != "" {
 		body += "\r\n\r\nInbox: " + inbox
 	}
-	return Message{Title: "gedour: " + countEvents(len(dg.Deliveries)), Detail: strings.TrimPrefix(body, "\r\n")}
+	return Message{Title: "gedour: " + dg.count(), Detail: strings.TrimPrefix(body, "\r\n")}
 }
 
 // SendDigest sends dg through ch as one message; the channel's silent setting applies.
@@ -204,10 +213,15 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 
 // PushDigestPayload is the Web Push digest of a channel: the count as title, the first watch names as body,
 // opening the inbox; the tag per channel lets one channel's digest replace its last without hiding another's.
+// A poll's tag is its lead delivery's: it never replaces an earlier poll's notification still unseen.
 func PushDigestPayload(dg Digest, channelID string, silent bool) []byte {
 	var names []string
 	for _, g := range groups(dg.Deliveries) {
 		names = append(names, g.watch)
 	}
-	return fitPush(PushMessage{Title: countEvents(len(dg.Deliveries)), Body: strings.Join(names, ", "), URL: "/inbox", Tag: "gedour-digest-" + channelID, Silent: silent})
+	tag := "gedour-digest-" + channelID
+	if dg.Poll {
+		tag = "gedour-poll-" + strconv.FormatInt(dg.ID, 10)
+	}
+	return fitPush(PushMessage{Title: dg.count(), Body: strings.Join(names, ", "), URL: "/inbox", Tag: tag, Silent: silent})
 }

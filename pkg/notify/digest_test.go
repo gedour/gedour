@@ -197,3 +197,60 @@ func sampleDigest(now time.Time) Digest {
 		{Event: Event{Type: "pr.opened", ObservedAt: now, Payload: map[string]any{"number": 1.0, "author": "gedour"}}, Watch: w},
 	}}
 }
+
+// 017-AC2, 017-AC11: a poll's events read "N new events" on every type (email subject, Web Push title, tagged
+// per poll), keep the digest cap and "+N more"; a digest still reads "unread".
+func TestGroupPollDigest(t *testing.T) {
+	dg := digestOf(2, func(i int) string { return fmt.Sprint("v", i) })
+	dg.ID, dg.Poll = 7, true
+	if got := TelegramDigest(dg, ""); !strings.HasPrefix(got, "<b>2 new events</b>") {
+		t.Errorf("telegram %q", got)
+	}
+	if got := TalkDigest(dg, ""); !strings.HasPrefix(got, "**2 new events**") {
+		t.Errorf("talk %q", got)
+	}
+	if m := MailDigest(dg, ""); m.Title != "gedour: 2 new events" {
+		t.Errorf("mail subject %q", m.Title)
+	}
+	var m PushMessage
+	if err := json.Unmarshal(PushDigestPayload(dg, "ch", false), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Title != "2 new events" || m.URL != "/inbox" || m.Tag != "gedour-poll-7" {
+		t.Errorf("push %+v", m)
+	}
+	dg.Poll = false
+	if got := TelegramDigest(dg, ""); !strings.HasPrefix(got, "<b>2 unread events</b>") {
+		t.Errorf("digest %q", got)
+	}
+
+	big := digestOf(400, func(i int) string { return fmt.Sprintf("v%d-%s", i, strings.Repeat("x", 200)) })
+	big.Poll = true
+	for name, text := range map[string]string{"telegram": TelegramDigest(big, "https://g.test/inbox"), "talk": TalkDigest(big, "https://g.test/inbox")} {
+		lines := strings.Split(text, "\n")
+		if !strings.HasPrefix(lines[0], "**400 new events**") && !strings.HasPrefix(lines[0], "<b>400 new events</b>") {
+			t.Errorf("%s header %q", name, lines[0])
+		}
+		if last := lines[len(lines)-1]; !strings.HasPrefix(last, "+") || !strings.Contains(last, "more") || !strings.Contains(last, "https://g.test/inbox") {
+			t.Errorf("%s last line %q", name, last)
+		}
+	}
+}
+
+// 017-AC2: SendDigest mails one poll with the "new events" subject.
+func TestGroupPollMail(t *testing.T) {
+	s := newSender(t, "127.0.0.0/8")
+	sink := newSink(t, nil, false, false)
+	s.Mailer = &Mailer{Addr: sink.ln.Addr().String(), From: from, TLS: TLSNone}
+	dg := sampleDigest(time.Now())
+	dg.Poll = true
+	if err := s.SendDigest(context.Background(), Channel{Type: TypeEmail, Config: []byte(`{"to":["a@x.test"]}`)}, dg); err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	data := sink.data
+	sink.mu.Unlock()
+	if !strings.Contains(data, "Subject: gedour: 2 new events") {
+		t.Errorf("mail: %s", data)
+	}
+}

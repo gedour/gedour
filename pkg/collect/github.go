@@ -384,8 +384,12 @@ func sortReleases(rs []Release) {
 // release.published; a prerelease turned release is release.promoted.
 func diffReleases(old, cur ReleaseState) []Event {
 	before := map[string]Release{}
+	var floor time.Time
 	for _, r := range old.Releases {
 		before[r.Tag] = r
+		if r.PublishedAt != nil && r.PublishedAt.After(floor) {
+			floor = *r.PublishedAt
+		}
 	}
 	var events []Event
 	// Oldest first, so the timeline reads in release order.
@@ -396,6 +400,9 @@ func diffReleases(old, cur ReleaseState) []Event {
 		payload := map[string]any{"tag": r.Tag, "name": r.Name, "prerelease": r.Prerelease, "url": r.URL}
 		prev, seen := before[r.Tag]
 		switch {
+		case !seen && r.PublishedAt != nil && r.PublishedAt.Before(floor):
+			// Older than the newest seen: it slid back into the fetched window (filtered prereleases or
+			// deleted releases had pushed it out), it is not new.
 		case !seen || prev.Draft:
 			events = append(events, Event{Type: "release.published", Subject: r.Tag, OccurredAt: r.PublishedAt, Payload: payload})
 		case prev.Prerelease && !r.Prerelease:

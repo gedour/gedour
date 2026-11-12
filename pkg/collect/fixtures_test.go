@@ -560,3 +560,60 @@ func TestDiffDiscussion(t *testing.T) {
 		})
 	}
 }
+
+// An old release that slides out of the fetched window and back in is not new; a newer one always is.
+func TestDiffReleasesReappear(t *testing.T) {
+	rel := func(tag string, day int) Release {
+		at := time.Date(2026, 1, day, 12, 0, 0, 0, time.UTC)
+		return Release{Tag: tag, PublishedAt: &at}
+	}
+	v9, v8, v7, v6 := rel("v1.0.9", 9), rel("v1.0.8", 8), rel("v1.0.7", 7), rel("v1.0.6", 6)
+	st := func(rs ...Release) ReleaseState { return ReleaseState{Releases: rs} }
+	steps := []struct {
+		state ReleaseState
+		want  []string
+	}{
+		{st(v9, v8, v7, v6), nil},
+		{st(v9, v8, v7), nil},
+		{st(v9, v8), nil},
+		{st(v9, v8, v7), []string{}}, // v1.0.7 back in the window
+		{st(rel("v1.1.0", 10), v9, v8, v7), []string{`release.published v1.1.0 {"name":"","prerelease":false,"tag":"v1.1.0","url":""}`}},
+		// A new tag published in the same second as the newest seen is still new.
+		{st(rel("v1.1.0", 10), rel("v1.0.10", 10), v9, v8, v7), []string{`release.published v1.0.10 {"name":"","prerelease":false,"tag":"v1.0.10","url":""}`}},
+	}
+	for i := 1; i < len(steps); i++ {
+		want := steps[i].want
+		if want == nil {
+			want = []string{}
+		}
+		check(t, summary(t, diffReleases(steps[i-1].state, steps[i].state)), want)
+	}
+	// No dated release in old: no floor, an undated release stays new.
+	check(t, summary(t, diffReleases(st(), st(Release{Tag: "v0.1.0"}))), []string{`release.published v0.1.0 {"name":"","prerelease":false,"tag":"v0.1.0","url":""}`})
+	check(t, summary(t, diffReleases(st(v9), st(v9, Release{Tag: "v0.1.0"}))), []string{`release.published v0.1.0 {"name":"","prerelease":false,"tag":"v0.1.0","url":""}`})
+}
+
+// The live shape: the page holds prereleases too, so new nightlies push an old stable release out of it
+// and deleted ones let it back in.
+func TestGitHubReleasesNightliesReappear(t *testing.T) {
+	day := map[string]int{"v1.0.7": 7, "v1.0.8": 8, "v1.0.9": 9, "nightly-1": 10, "nightly-2": 11, "nightly-3": 12}
+	page := func(tags ...string) ReleaseState {
+		var items []string
+		for _, tag := range tags {
+			items = append(items, fmt.Sprintf(`{"tag_name":%q,"prerelease":%t,"published_at":"2026-01-%02dT12:00:00Z"}`,
+				tag, strings.HasPrefix(tag, "nightly"), day[tag]))
+		}
+		s, err := normalizeGitHubReleases([]byte("["+strings.Join(items, ",")+"]"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	full := page("nightly-1", "v1.0.9", "v1.0.8", "v1.0.7")
+	pushed := page("nightly-3", "nightly-2", "nightly-1", "v1.0.9")
+	if got := tags(pushed.Releases); !slices.Equal(got, []string{"v1.0.9"}) {
+		t.Fatalf("pushed state: %v", got)
+	}
+	check(t, summary(t, diffReleases(full, pushed)), []string{})
+	check(t, summary(t, diffReleases(pushed, full)), []string{})
+}

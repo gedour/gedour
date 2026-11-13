@@ -80,8 +80,9 @@ func Permanent(err error) error { return permanentError{err} }
 
 // TelegramConfig is the non-secret config of a telegram channel; the bot token is its secret.
 type TelegramConfig struct {
-	ChatID string `json:"chat_id"`
-	Silent bool   `json:"silent"`
+	ChatID     string `json:"chat_id"`
+	Silent     bool   `json:"silent"`
+	GedourLink *bool  `json:"gedour_link,omitempty"`
 }
 
 // NextcloudTalkConfig is the config of a Nextcloud Talk channel; the bot's shared secret is its secret.
@@ -89,12 +90,17 @@ type NextcloudTalkConfig struct {
 	URL          string `json:"url"`
 	Conversation string `json:"conversation"`
 	Silent       bool   `json:"silent"`
+	GedourLink   *bool  `json:"gedour_link,omitempty"`
 }
 
 // EmailConfig is the config of an email channel; the SMTP server is instance config.
 type EmailConfig struct {
-	To []string `json:"to"`
+	To         []string `json:"to"`
+	GedourLink *bool    `json:"gedour_link,omitempty"`
 }
+
+// linkOn reads gedour_link: absent is on (017), so channels saved before it get the link without a migration.
+func linkOn(p *bool) bool { return p == nil || *p }
 
 // WebhookConfig is the config of a webhook channel; the HMAC key is its secret.
 type WebhookConfig struct {
@@ -122,8 +128,20 @@ type Sender struct {
 	VAPIDSubject string
 	// HTTPHosts may receive a push over plain http; other push endpoints need https.
 	HTTPHosts []string
-	// PublicURL is the first GEDOUR_PUBLIC_URL, for the inbox link of a cut digest; empty: no link.
+	// PublicURL is the first GEDOUR_PUBLIC_URL, for the gedour and inbox links; empty: no link.
 	PublicURL string
+}
+
+// eventURL is the inbox deep link of event id (010-AC13) when link is on; empty without a public URL.
+func (s *Sender) eventURL(link *bool, id int64) string {
+	if s.PublicURL == "" || !linkOn(link) {
+		return ""
+	}
+	if id == 0 {
+		// A test event has no inbox item, as PushPayload does.
+		return s.inboxURL()
+	}
+	return strings.TrimRight(s.PublicURL, "/") + "/inbox?event=" + strconv.FormatInt(id, 10)
 }
 
 func (s *Sender) now() time.Time {
@@ -142,12 +160,14 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("telegram config: %w", err)
 		}
+		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
 		return s.telegram(ctx, c, ch.Secret, TelegramText(msg))
 	case TypeNextcloudTalk:
 		var c NextcloudTalkConfig
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("nextcloud talk config: %w", err)
 		}
+		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
 		return s.talk(ctx, c, ch.Secret, d.ID, TalkText(msg))
 	case TypeEmail:
 		var c EmailConfig
@@ -157,6 +177,7 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 		if s.Mailer == nil {
 			return errors.New("email: no SMTP server configured")
 		}
+		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
 		return s.Mailer.Send(ctx, c.To, msg, s.now())
 	case TypeWebhook:
 		var c WebhookConfig
@@ -262,12 +283,20 @@ func TelegramText(msg Message) string {
 	if msg.URL != "" {
 		b.WriteString("\n<a href=\"" + html.EscapeString(msg.URL) + "\">Open upstream</a>")
 	}
-	if b.Len() <= maxTelegramLen {
-		return b.String()
+	var gedour string
+	if msg.Gedour != "" {
+		gedour = "\n<a href=\"" + html.EscapeString(msg.Gedour) + "\">Open in gedour</a>"
 	}
-	// Over Telegram's limit: the title alone, capped so that even fully escaped it fits.
+	if b.Len()+len(gedour) <= maxTelegramLen {
+		return b.String() + gedour
+	}
+	// Over Telegram's limit: the title alone, capped so that even fully escaped it fits, with the gedour link if it fits too.
 	r := []rune(msg.Title)
-	return "<b>" + html.EscapeString(string(r[:min(len(r), 600)])) + "</b>"
+	title := "<b>" + html.EscapeString(string(r[:min(len(r), 600)])) + "</b>"
+	if len(title)+len(gedour) <= maxTelegramLen {
+		return title + gedour
+	}
+	return title
 }
 
 func (s *Sender) telegram(ctx context.Context, c TelegramConfig, token, text string) error {
@@ -327,7 +356,7 @@ func talkTitle(title string, n int) string {
 }
 
 // TalkText is the Markdown text of msg. A URL over maxTalkLink is always left out. Over the cap the text
-// falls back to the title and link, cutting the title to keep the link: Talk never answers 413.
+// falls back to the title and links, cutting the title to keep them: Talk never answers 413.
 func TalkText(msg Message) string {
 	title := "**" + talkEscaper.Replace(msg.Title) + "**"
 	var detail, link string
@@ -336,6 +365,9 @@ func TalkText(msg Message) string {
 	}
 	if u := talkLink(msg.URL); u != "" && utf8.RuneCountInString(u) <= maxTalkLink {
 		link = "\n[Open upstream](" + u + ")"
+	}
+	if msg.Gedour != "" {
+		link += "\n[Open in gedour](" + talkLink(msg.Gedour) + ")"
 	}
 	if text := title + detail + link; utf8.RuneCountInString(text) <= maxTalkLen {
 		return text

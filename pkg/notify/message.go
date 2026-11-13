@@ -66,6 +66,8 @@ type Message struct {
 	Detail string
 	// URL is the upstream page, http(s) only.
 	URL string
+	// Gedour is the event's inbox deep link, set by the sender when the channel's gedour_link is on.
+	Gedour string
 }
 
 func str(v any) string {

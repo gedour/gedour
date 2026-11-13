@@ -165,18 +165,21 @@ const (
 type digestRow struct {
 	nd                               notify.Delivery
 	readable, active, read, archived bool
+	ruleID, ruleName, priority       *string
 }
 
 // loadDigest reads the batch's events, oldest first, and ends the deliveries that must not go out: skipped
 // when the owner read or archived the item (no attempt spent), dead when the owner may no longer receive
-// it (012-AC4, 012-AC7). It returns the digest of the rest and their ids.
+// it (012-AC4, 012-AC7). A poll sent at once skips nothing on the inbox state (017-AC9). It returns the digest of
+// the rest and their ids.
 func (d *Deliverer) loadDigest(ctx context.Context, log *zap.Logger, typ string, j claimed, attempts int) (notify.Digest, []int64, error) {
-	var dg notify.Digest
+	dg := notify.Digest{Poll: j.poll}
 	rows, err := d.pool.Query(ctx, `SELECT x.id, e.id, e.type, e.occurred_at, e.observed_at, e.payload, w.id::text, w.name, w.kind,
-			`+watch.ReadableSQL("w", "c.owner_id")+`, `+activeOwner+`, i.read_at IS NOT NULL, i.archived_at IS NOT NULL
+			`+watch.ReadableSQL("w", "c.owner_id")+`, `+activeOwner+`, i.read_at IS NOT NULL, i.archived_at IS NOT NULL,
+			r.id::text, r.name, r.priority
 		FROM deliveries x JOIN events e ON e.id = x.event_id JOIN watches w ON w.id = e.watch_id
 		JOIN channels c ON c.id = x.channel_id JOIN users u ON u.id = c.owner_id
-		LEFT JOIN inbox_items i ON i.user_id = c.owner_id AND i.event_id = e.id
+		LEFT JOIN inbox_items i ON i.user_id = c.owner_id AND i.event_id = e.id LEFT JOIN rules r ON r.id = x.rule_id
 		WHERE x.claim_token = $1 ORDER BY e.observed_at, e.id`, j.token)
 	if err != nil {
 		return dg, nil, fmt.Errorf("load digest: %w", err)
@@ -185,7 +188,10 @@ func (d *Deliverer) loadDigest(ctx context.Context, log *zap.Logger, typ string,
 		var x digestRow
 		e := &x.nd.Event
 		err := r.Scan(&x.nd.ID, &e.ID, &e.Type, &e.OccurredAt, &e.ObservedAt, &e.Payload, &x.nd.Watch.ID, &x.nd.Watch.Name, &x.nd.Watch.Kind,
-			&x.readable, &x.active, &x.read, &x.archived)
+			&x.readable, &x.active, &x.read, &x.archived, &x.ruleID, &x.ruleName, &x.priority)
+		if err == nil && x.ruleID != nil {
+			x.nd.Rule = &notify.Rule{ID: *x.ruleID, Name: *x.ruleName, Priority: *x.priority}
+		}
 		return x, err
 	})
 	if err != nil {
@@ -200,6 +206,9 @@ func (d *Deliverer) loadDigest(ctx context.Context, log *zap.Logger, typ string,
 			dead[errUnreadable] = append(dead[errUnreadable], x.nd.ID)
 		case !x.active:
 			dead[errOwnerDisabled] = append(dead[errOwnerDisabled], x.nd.ID)
+		case j.poll:
+			dg.Deliveries = append(dg.Deliveries, x.nd)
+			ids = append(ids, x.nd.ID)
 		case x.archived:
 			skipped[skippedArchived] = append(skipped[skippedArchived], x.nd.ID)
 		case x.read:
@@ -231,9 +240,10 @@ func (d *Deliverer) loadDigest(ctx context.Context, log *zap.Logger, typ string,
 	return dg, ids, nil
 }
 
-// deliverDigest sends a claimed digest as one message; its deliveries share the outcome (012-AC3, 012-AC7).
+// deliverDigest sends a claimed digest, or a poll's events, as one message; its deliveries share the outcome
+// (012-AC3, 012-AC7, 017-AC8).
 func (d *Deliverer) deliverDigest(stop context.Context, j claimed) {
-	log := d.log.With(zap.String("channel_id", j.channelID), zap.Int("deliveries", len(j.batch)))
+	log := d.log.With(zap.String("channel_id", j.channelID), zap.Int("deliveries", len(j.batch)), zap.Bool("poll", j.poll))
 	ctx, cancel := context.WithTimeout(stop, sendTimeout)
 	defer cancel()
 	start := time.Now()
@@ -254,6 +264,15 @@ func (d *Deliverer) deliverDigest(stop context.Context, j claimed) {
 			}
 		}
 	}
+	if err == nil && j.poll && len(ids) == 1 {
+		// A poll cut to one event (the others gone since the claim) is a single message (017-AC3).
+		for _, c := range j.batch {
+			if c.id == ids[0] {
+				d.deliver(stop, c)
+				return
+			}
+		}
+	}
 	if err == nil && ch.Type == notify.TypeNextcloudTalk {
 		// The lowest id leads: the batch's other rows share its lease and never count as an earlier claim.
 		j.id = dg.ID
@@ -263,8 +282,13 @@ func (d *Deliverer) deliverDigest(stop context.Context, j claimed) {
 	}
 	switch {
 	case err == nil && ch.Type == notify.TypeWebPush:
+		var rule *notify.Rule
+		if j.poll {
+			// One priority per poll group (claimSingles): a high group keeps its high urgency (005).
+			rule = dg.Deliveries[0].Rule
+		}
 		_, err = pushFanOut(ctx, d.pool, d.box, d.sender, ch, ids, func(silent bool) ([]byte, string) {
-			return notify.PushDigestPayload(dg, ch.ID, silent), notify.PushUrgency(silent, nil)
+			return notify.PushDigestPayload(dg, ch.ID, silent), notify.PushUrgency(silent, rule)
 		})
 	case err == nil:
 		err = d.sender.SendDigest(ctx, ch, dg)

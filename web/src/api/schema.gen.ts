@@ -1013,7 +1013,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. */
+      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
       config: {
         [key: string]: unknown;
       };
@@ -1210,7 +1210,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. */
+      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
       config: {
         [key: string]: unknown;
       };

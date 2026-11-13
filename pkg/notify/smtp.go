@@ -162,6 +162,9 @@ func BuildMail(from *mail.Address, to []string, msg Message, now time.Time) ([]b
 	if msg.URL != "" {
 		text += "\r\n" + msg.URL + "\r\n"
 	}
+	if msg.Gedour != "" {
+		text += "\r\nOpen in gedour: " + msg.Gedour + "\r\n"
+	}
 	page := "<p><strong>" + html.EscapeString(msg.Title) + "</strong></p>"
 	if msg.Detail != "" {
 		// A digest's Detail holds one line per event.
@@ -169,6 +172,9 @@ func BuildMail(from *mail.Address, to []string, msg Message, now time.Time) ([]b
 	}
 	if msg.URL != "" {
 		page += `<p><a href="` + html.EscapeString(msg.URL) + `">Open upstream</a></p>`
+	}
+	if msg.Gedour != "" {
+		page += `<p><a href="` + html.EscapeString(msg.Gedour) + `">Open in gedour</a></p>`
 	}
 	for _, part := range []struct{ typ, body string }{{"text/plain", text}, {"text/html", page}} {
 		pw, err := mw.CreatePart(textproto.MIMEHeader{

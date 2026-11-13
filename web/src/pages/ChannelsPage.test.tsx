@@ -139,7 +139,7 @@ describe("ChannelsPage", () => {
     expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
       name: "Phone",
       type: "telegram",
-      config: { chat_id: "-1001", silent: false },
+      config: { chat_id: "-1001", silent: false, gedour_link: true },
       secret: "123:abc",
     });
 
@@ -157,7 +157,7 @@ describe("ChannelsPage", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Ops",
         type: "email",
-        config: { to: ["a@x.test", "b@x.test", "c@x.test"] },
+        config: { to: ["a@x.test", "b@x.test", "c@x.test"], gedour_link: true },
       }),
     );
   });
@@ -211,7 +211,12 @@ describe("ChannelsPage", () => {
     expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
       name: "Room",
       type: "nextcloud_talk",
-      config: { url: "https://cloud.test/", conversation: "abcd1234", silent: false },
+      config: {
+        url: "https://cloud.test/",
+        conversation: "abcd1234",
+        silent: false,
+        gedour_link: true,
+      },
       secret: "s".repeat(40),
     });
   });
@@ -246,8 +251,54 @@ describe("ChannelsPage", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
       name: "Deploy bot",
-      config: { url: "https://cloud.test", conversation: "abcd1234", silent: false },
+      config: {
+        url: "https://cloud.test",
+        conversation: "abcd1234",
+        silent: false,
+        gedour_link: true,
+      },
     });
+  });
+
+  // 017-AC17: "Link to gedour" is checked for a new Telegram, Talk or email channel, absent elsewhere; unchecked
+  // saves gedour_link false, which reloads unchecked.
+  it("saves Link to gedour unchecked and reloads it unchecked", async () => {
+    let items: Channel[] = [];
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) => {
+        if (init?.method !== "POST") return Response.json({ items });
+        const body = JSON.parse(String(init.body)) as Pick<Channel, "name" | "type" | "config">;
+        items = [channel({ ...body, id: "c9" })];
+        return Response.json(items[0], { status: 201 });
+      },
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    let dialog = screen.getByRole("dialog");
+    const link = () => within(dialog).queryByRole("checkbox", { name: "Link to gedour" });
+    for (const kind of ["Webhook", "Web Push"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(link()).not.toBeInTheDocument();
+    }
+    for (const kind of ["Email", "Nextcloud Talk", "Telegram"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(link()).toBeChecked();
+      expect(link()).toHaveAccessibleDescription(/^Ends each message with a link/);
+    }
+    await userEvent.click(link() as HTMLElement);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Phone");
+    await userEvent.type(within(dialog).getByLabelText("Chat ID"), "-1001");
+    await userEvent.type(within(dialog).getByLabelText("Bot token"), "123:abc");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toMatchObject({
+      config: { chat_id: "-1001", silent: false, gedour_link: false },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Phone" }));
+    dialog = screen.getByRole("dialog");
+    expect(link()).not.toBeChecked();
   });
 
   // 003-AC5: the switch is on the Telegram and Talk forms only, named and operable from the keyboard.
@@ -679,7 +730,7 @@ describe("ChannelsPage", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Phone",
         type: "telegram",
-        config: { chat_id: "-1001", silent: false },
+        config: { chat_id: "-1001", silent: false, gedour_link: true },
         secret: "123:abc",
       }),
     );

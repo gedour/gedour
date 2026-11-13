@@ -76,12 +76,14 @@ func TestGroupTelegram(t *testing.T) {
 		t.Errorf("%d distinct sent_at, want 1", n)
 	}
 
-	// 017-AC3: a single event, byte-identical to the message before this spec.
-	e.poll(t, w, "v9")
+	// 017-AC3: a single event, the message before this spec plus its gedour link (017-AC12).
+	single := e.poll(t, w, "v9")
 	routeAll(t, e.router())
 	e.round(t, d)
-	want := notify.TelegramText(notify.Format(notify.Delivery{Watch: notify.Watch{Name: "org/alpha"},
-		Event: notify.Event{Type: "release.published", Payload: map[string]any{"tag": "v9"}}}))
+	msg := notify.Format(notify.Delivery{Watch: notify.Watch{Name: "org/alpha"},
+		Event: notify.Event{Type: "release.published", Payload: map[string]any{"tag": "v9"}}})
+	msg.Gedour = "https://gedour.test/inbox?event=" + strconv.FormatInt(single[0], 10)
+	want := notify.TelegramText(msg)
 	if got := e.messages(); len(got) != 2 || got[1].Text != want {
 		t.Fatalf("single: %+v, want %q", got, want)
 	}
@@ -577,12 +579,100 @@ func TestGroupCutToOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.deliver(ctx, jobs[0])
-	want := notify.TelegramText(notify.Format(notify.Delivery{Watch: notify.Watch{Name: "org/alpha"},
-		Event: notify.Event{Type: "release.published", Payload: map[string]any{"tag": "v1"}}}))
-	if got := e.messages(); len(got) != 1 || got[0].Text != want {
+	msg := notify.Format(notify.Delivery{Watch: notify.Watch{Name: "org/alpha"},
+		Event: notify.Event{Type: "release.published", Payload: map[string]any{"tag": "v1"}}})
+	msg.Gedour = "https://gedour.test/inbox?event=" + strconv.FormatInt(evs[0], 10)
+	if got, want := e.messages(), notify.TelegramText(msg); len(got) != 1 || got[0].Text != want {
 		t.Fatalf("got %+v, want the single message %q", got, want)
 	}
 	if x := e.of(t, evs[0]); x.status != "sent" || x.attempts != 1 {
 		t.Errorf("survivor %+v, want sent", x)
+	}
+}
+
+// 017-AC12, 017-AC13, 017-AC14: through the deliverer, a Telegram channel without gedour_link ends a single
+// message with the event's deep link, a poll group and a scheduled digest with one inbox link; gedour_link false
+// sends all three as before this spec.
+func TestGroupGedourLink(t *testing.T) {
+	e := newDigestEnv(t)
+	on, off := e.tgChannel(t, e.alice), e.tgChannel(t, e.alice)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"chat_id": "-2", "gedour_link": false}' WHERE id = $1`, off); err != nil {
+		t.Fatal(err)
+	}
+	w := e.namedWatch(t, "org/alpha")
+	e.rule(t, e.alice, &w, "", on, off)
+	d := e.deliverer(t, e.pool)
+	const inbox = `<a href="https://gedour.test/inbox">Open the inbox</a>`
+	byChat := func() map[string]string {
+		out := map[string]string{}
+		for _, m := range e.messages() {
+			out[m.ChatID] = m.Text
+		}
+		return out
+	}
+
+	single := e.poll(t, w, "v1")
+	routeAll(t, e.router())
+	e.round(t, d)
+	msg := notify.Format(notify.Delivery{Watch: notify.Watch{Name: "org/alpha"}, Event: notify.Event{Type: "release.published", Payload: map[string]any{"tag": "v1"}}})
+	before := notify.TelegramText(msg)
+	got := byChat()
+	if want := before + "\n" + `<a href="https://gedour.test/inbox?event=` + strconv.FormatInt(single[0], 10) + `">Open in gedour</a>`; got["-100123"] != want {
+		t.Errorf("single on: %q, want %q", got["-100123"], want)
+	}
+	if got["-2"] != before {
+		t.Errorf("single off: %q, want %q", got["-2"], before)
+	}
+
+	e.mu.Lock()
+	e.got = nil
+	e.mu.Unlock()
+	e.poll(t, w, "v2", "v3")
+	routeAll(t, e.router())
+	e.round(t, d)
+	got = byChat()
+	if !strings.HasSuffix(got["-100123"], "\n"+inbox) || strings.Count(got["-100123"], "gedour.test") != 1 || got["-2"]+"\n\n"+inbox != got["-100123"] {
+		t.Errorf("group: on %q, off %q", got["-100123"], got["-2"])
+	}
+
+	e.mu.Lock()
+	e.got = nil
+	e.mu.Unlock()
+	w2 := e.namedWatch(t, "org/beta")
+	e.digestRule(t, e.alice, &w2, "", on, off)
+	e.event(t, w2, "release.published", "v4")
+	e.event(t, w2, "release.published", "v5")
+	routeAll(t, e.router())
+	e.round(t, d)
+	got = byChat()
+	if !strings.Contains(got["-100123"], "unread events") || strings.Count(got["-100123"], "gedour.test") != 1 || got["-2"]+"\n\n"+inbox != got["-100123"] {
+		t.Errorf("digest: on %q, off %q", got["-100123"], got["-2"])
+	}
+}
+
+// 017-AC18: Web Push keeps its links: a grouped notification opens /inbox, a single one /inbox?event=<id>.
+func TestGroupWebPushLinks(t *testing.T) {
+	p := newPushEnv(t)
+	alice := p.user(t, "alice")
+	p.device(t, alice, "a", false)
+	ch := p.channel(t, alice, false)
+	w := p.watch(t, alice)
+	p.rule(t, alice, &w, "", ch)
+	p.poll(t, w, "v1", "v2")
+	routeAll(t, p.router())
+	p.once(t, p.deliverer(t))
+	single := p.poll(t, w, "v3")
+	routeAll(t, p.router())
+	p.once(t, p.deliverer(t))
+	var urls []string
+	for _, r := range p.up.Received() {
+		var m notify.PushMessage
+		if err := json.Unmarshal([]byte(r.Body), &m); err != nil {
+			t.Fatal(err)
+		}
+		urls = append(urls, m.URL)
+	}
+	if want := []string{"/inbox", "/inbox?event=" + strconv.FormatInt(single[0], 10)}; fmt.Sprint(urls) != fmt.Sprint(want) {
+		t.Fatalf("push URLs %v, want %v", urls, want)
 	}
 }

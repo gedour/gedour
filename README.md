@@ -450,6 +450,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   the digest channels of a rule have one schedule and the rule has no immediate Telegram, Talk, email or Web
   Push channel. Any other rule with a digest channel stays immediate and is named in a `migration_warning`
   log line: its events then go out at once on every channel. Waiting digest deliveries keep their time.
+- gedour link: with `GEDOUR_PUBLIC_URL` set, a Telegram, Nextcloud Talk or email message ends with
+  "Open in gedour", a link to `<first public URL>/inbox?event=<id>`; a grouped message or a digest ends with
+  one "Open the inbox" link to `<first public URL>/inbox` (an email digest's `Inbox:` line is that link). The
+  link counts toward the cap: a cut message keeps it, a cut digest carries it once, in its "+N more" line.
+  `gedour_link: false` in the channel config ("Link to gedour" in the channel form) turns it off; absent
+  means on. Off, or without `GEDOUR_PUBLIC_URL`, messages are as without it.
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing
@@ -488,8 +494,8 @@ Nextcloud 32 or later is required for gedour to stay under Nextcloud's 401 throt
 - Delivery: `POST {url}/ocs/v2.php/apps/spreed/api/v1/bot/{token}/message` with `OCS-APIRequest: true`,
   `X-Nextcloud-Talk-Bot-Random` and `X-Nextcloud-Talk-Bot-Signature` (hex HMAC-SHA256 of the random value
   followed by the message). Body: `message` (Markdown), `referenceId` (SHA-256 of the delivery id, the same
-  on a retry), `silent`. A message over 31000 characters is cut to its title and link; the title is shortened
-  when needed to keep the link, and a URL over 30000 characters once encoded is always left out.
+  on a retry), `silent`. A message over 31000 characters is cut to its title and links; the title is shortened
+  when needed to keep the links, and a URL over 30000 characters once encoded is always left out.
 - Only a 201 is sent: a proxy or SSO page answering 200 is not a post. 401, 404 and 413 are final at once
   (`dead`, shown as Failed) with the reason; fix the channel, then retry the delivery by hand. Anything else,
   other 2xx, 400, 429, 5xx and timeouts included, follows the retry policy above. Redirects are not followed.

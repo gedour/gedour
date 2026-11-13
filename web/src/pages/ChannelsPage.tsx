@@ -298,6 +298,7 @@ function ChannelForm({
     queryFn: listChannelTypes,
     staleTime: Infinity,
   });
+  const linkHint = useId();
   const [type, setType] = useState<ChannelKind>(channel?.type ?? "webhook");
   const [name, setName] = useState(channel?.name ?? "");
   const cfg = channel?.config ?? {};
@@ -306,6 +307,8 @@ function ChannelForm({
   const [url, setUrl] = useState(String(cfg.url ?? ""));
   const [conversation, setConversation] = useState(String(cfg.conversation ?? ""));
   const [silent, setSilent] = useState(cfg.silent === true);
+  // 017: absent means on, so a channel saved before the setting reads checked.
+  const [gedourLink, setGedourLink] = useState(cfg.gedour_link !== false);
   const [scriptId, setScriptId] = useState(String(cfg.script_id ?? ""));
   const [picked, setPicked] = useState<string[] | null>(
     Array.isArray(cfg.devices) ? cfg.devices.map(String) : null,
@@ -357,9 +360,9 @@ function ChannelForm({
   const available = types.data?.find((t) => t.type === type);
 
   const config = () => {
-    if (type === "telegram") return { chat_id: chatId, silent };
-    if (type === "nextcloud_talk") return { url, conversation, silent };
-    if (type === "email") return { to: splitRecipients(to) };
+    if (type === "telegram") return { chat_id: chatId, silent, gedour_link: gedourLink };
+    if (type === "nextcloud_talk") return { url, conversation, silent, gedour_link: gedourLink };
+    if (type === "email") return { to: splitRecipients(to), gedour_link: gedourLink };
     if (type === "script") return { script_id: scriptId };
     if (type === "web_push") return { devices: picked ?? "all", silent };
     return { url };
@@ -729,6 +732,24 @@ function ChannelForm({
               </button>
             )}
           </Field>
+        )}
+        {(type === "telegram" || type === "nextcloud_talk" || type === "email") && (
+          <div className="flex flex-col gap-1.5">
+            <label className="inline-flex w-fit items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={gedourLink}
+                onChange={(e) => setGedourLink(e.target.checked)}
+                aria-describedby={linkHint}
+                className="size-4 accent-beacon"
+              />
+              Link to gedour
+            </label>
+            <p id={linkHint} className="text-xs text-muted">
+              Ends each message with a link to the event in gedour, or to the inbox for several
+              events.
+            </p>
+          </div>
         )}
         <DialogActions>
           <Button type="button" variant="ghost" onClick={onClose}>

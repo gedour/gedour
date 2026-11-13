@@ -62,7 +62,7 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent; nextcloud_talk: url, conversation, silent; email: to; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent."`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox."`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -306,7 +306,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 		case len(to) > notify.MaxRecipients:
 			errs = append(errs, configError("to", fmt.Sprintf("at most %d recipients", notify.MaxRecipients), len(to)))
 		}
-		norm = notify.EmailConfig{To: to}
+		norm = notify.EmailConfig{To: to, GedourLink: c.GedourLink}
 	case notify.TypeWebhook:
 		var c notify.WebhookConfig
 		if err := decodeConfig(raw, &c); err != nil {

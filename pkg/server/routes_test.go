@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/mail"
@@ -19,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
+	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/filter"
 	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/route"
@@ -197,6 +199,63 @@ func TestTelegramSilentConfig(t *testing.T) {
 		t.Fatalf("an existing channel must stay unchanged: %v", v)
 	}
 	a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "Bad", "type": "telegram", "config": map[string]any{"chat_id": "-4", "silent": 1}, "secret": botToken}, http.StatusBadRequest)
+}
+
+// 017-AC15: gedour_link is a boolean on Telegram, Talk and email, kept as sent and absent when not given; a
+// non-boolean, or the key on another type, is a 400. 017-AC12: "Send test" ends with the gedour link.
+func TestGedourLinkConfig(t *testing.T) {
+	a, _, _ := newPushApp(t)
+	alice := a.signIn(t, "alice")
+	a.sender.Mailer = &notify.Mailer{Addr: "127.0.0.1:1", From: &mail.Address{Address: "g@x.test"}, TLS: notify.TLSNone}
+	ok := map[string]map[string]any{
+		"telegram":       {"name": "T", "type": "telegram", "config": map[string]any{"chat_id": "-1"}, "secret": botToken},
+		"nextcloud_talk": {"name": "N", "type": "nextcloud_talk", "config": map[string]any{"url": "https://cloud.example", "conversation": "abcd"}, "secret": strings.Repeat("s", 40)},
+		"email":          {"name": "E", "type": "email", "config": map[string]any{"to": []string{"a@x.test"}}},
+	}
+	for typ, body := range ok {
+		var ch channelJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", body, http.StatusCreated, &ch)
+		if v, set := ch.Config["gedour_link"]; set {
+			t.Errorf("%s: gedour_link %v stored when absent", typ, v)
+		}
+		cfg := maps.Clone(body["config"].(map[string]any))
+		cfg["gedour_link"] = false
+		a.mustCall(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"config": cfg}, http.StatusOK, &ch)
+		if ch.Config["gedour_link"] != false {
+			t.Errorf("%s: %+v, want gedour_link false", typ, ch.Config)
+		}
+		for _, bad := range []any{"yes", 1, []any{true}} {
+			cfg["gedour_link"] = bad
+			p := a.problemOf(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"config": cfg}, http.StatusBadRequest)
+			if fmt.Sprint(p.locations()) != "[body.config]" {
+				t.Errorf("%s gedour_link %v: %v", typ, bad, p.locations())
+			}
+		}
+	}
+	for _, body := range []map[string]any{
+		{"name": "w", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/x", "gedour_link": true}},
+		{"name": "s", "type": "script", "config": map[string]any{"script_id": "00000000-0000-0000-0000-000000000000", "gedour_link": true}},
+		{"name": "p", "type": "web_push", "config": map[string]any{"devices": "all", "gedour_link": false}},
+	} {
+		p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", body, http.StatusBadRequest)
+		if fmt.Sprint(p.locations()) != "[body.config]" {
+			t.Errorf("%s: %v", body["type"], p.locations())
+		}
+	}
+
+	up := testupstream.New()
+	srv := httptest.NewServer(up)
+	t.Cleanup(srv.Close)
+	a.sender.TelegramURL, a.sender.PublicURL = srv.URL+"/tg", "https://gedour.test"
+	var ch channelJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", map[string]any{"name": "T2", "type": "telegram", "config": map[string]any{"chat_id": "-2"}, "secret": botToken}, http.StatusCreated, &ch)
+	var res struct {
+		OK bool `json:"ok"`
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/channels/"+ch.ID+"/test", nil, http.StatusOK, &res)
+	if got := up.Received(); !res.OK || len(got) != 1 || !strings.Contains(got[0].Body, "https://gedour.test/inbox") || strings.Contains(got[0].Body, "inbox?event=") || !strings.Contains(got[0].Body, "Open in gedour") {
+		t.Fatalf("test send: %+v %+v", res, got)
+	}
 }
 
 // 001-AC15/001-AC16: channels per type, validated on save, secrets write-only, private to their owner.

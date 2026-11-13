@@ -210,7 +210,7 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
   );
   await expect(page.getByRole("link", { name: "Inbox, 2 unread" })).toBeVisible();
 
-  // 001-AC16: the receiver verifies the signature over the raw body.
+  // 001-AC16: the receiver verifies the signature over the raw body. 017-AC6: one call per event of the poll.
   let hooks: Received[] = [];
   await expect
     .poll(
@@ -231,23 +231,35 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
     expect(JSON.parse(h.body).rule.name).toBe(`Releases ${t}`);
   }
 
-  // The email reached mailpit.
+  // 017-AC2, 017-AC13: the poll's two events reached mailpit as one mail, oldest first, its Inbox line the one
+  // gedour link (GEDOUR_PUBLIC_URL is the e2e base URL).
+  let mails: { ID: string; Subject: string }[] = [];
   await expect
     .poll(
       async () => {
         const { messages } = (await (
           await page.request.get(`${MAILPIT}/api/v1/messages?limit=200`)
         ).json()) as {
-          messages: { Subject: string; To: { Address: string }[] }[];
+          messages: { ID: string; Subject: string; To: { Address: string }[] }[];
         };
-        return messages
-          .filter((m) => m.To.some((a) => a.Address === mailTo))
-          .map((m) => m.Subject)
-          .sort();
+        mails = messages.filter((m) => m.To.some((a) => a.Address === mailTo));
+        return mails.map((m) => m.Subject);
       },
       { timeout: 15_000 },
     )
-    .toEqual([`${watch.name}: v2.103.3 published`, `${watch.name}: v2.105.0 published`]);
+    .toEqual(["gedour: 2 new events"]);
+  const mail = (await (
+    await page.request.get(`${MAILPIT}/api/v1/message/${mails[0]?.ID}`)
+  ).json()) as { Text: string };
+  const inboxURL = `${new URL(page.url()).origin}/inbox`;
+  const text = mail.Text.replace(/\r\n/g, "\n").trim();
+  expect(text).toMatch(
+    new RegExp(
+      `^gedour: 2 new events\\n\\n${watch.name}\\n- v2\\.103\\.3 published: \\S+\\n- v2\\.105\\.0 published: \\S+\\n\\nInbox: ${inboxURL.replace(/\./g, "\\.")}$`,
+    ),
+  );
+  expect(text.split(inboxURL)).toHaveLength(2);
+  expect(text).not.toContain("Open in gedour");
 
   // 001-AC20: bulk read, then bulk archive.
   await selectAll(page);
@@ -280,7 +292,7 @@ test("a rule routes upstream changes to the inbox and the channels", async ({ pa
 });
 
 // 001-AC17: a script channel runs on routed events in the sandbox: its http.fetch reaches the
-// (allowlisted) receiver and the delivery shows the script's logs.
+// (allowlisted) receiver and the delivery shows the script's logs. 017-AC6: one run per event of the poll.
 test("a script channel runs its script on a routed event", async ({ page }) => {
   const t = tag();
   await setFixture(page, "a");
@@ -368,25 +380,32 @@ test("a script channel runs its script on a routed event", async ({ page }) => {
 
 // 003-AC2, 003-AC3: routed events reach Talk in a request the fake's signature check accepts; a wrong
 // secret (401) and a missing room (404) end at once with the reason; a 429 stays scheduled for retry.
+// 017-AC2, 017-AC5, 017-AC13: a poll's two events are one message per channel, ending with one inbox link; a second
+// watch's poll is a message of its own.
 test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
   const t = tag();
   await setFixture(page, "a");
   await page.goto("/channels");
   const call = await api(page);
-  const res = await call("POST", "/api/v1/watches", {
-    name: `Talk CLI ${t}`,
-    kind: "github_repo",
-    schedule: "1h",
-    config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
-  });
-  expect(res.status()).toBe(201);
-  const watch = (await res.json()) as { id: string; name: string };
-  await expect
-    .poll(
-      async () => (await (await call("GET", `/api/v1/watches/${watch.id}`)).json()).last_status,
-      { timeout: 15_000 },
-    )
-    .toBe("ok");
+  const watches: { id: string; name: string }[] = [];
+  for (const name of [`Talk CLI ${t}`, `Talk CLI bis ${t}`]) {
+    const res = await call("POST", "/api/v1/watches", {
+      name,
+      kind: "github_repo",
+      schedule: "1h",
+      config: { repo: "cli/cli", include_prereleases: true, api_url: UPSTREAM },
+    });
+    expect(res.status()).toBe(201);
+    watches.push((await res.json()) as { id: string; name: string });
+  }
+  const [watch, other] = watches as [(typeof watches)[0], (typeof watches)[0]];
+  for (const w of watches) {
+    await expect
+      .poll(async () => (await (await call("GET", `/api/v1/watches/${w.id}`)).json()).last_status, {
+        timeout: 15_000,
+      })
+      .toBe("ok");
+  }
 
   const channels: Record<string, string> = {};
   for (const [name, conversation, secret, silent] of [
@@ -411,9 +430,19 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
     channel_ids: Object.values(channels),
   });
   expect(rule.status()).toBe(201);
+  // The other watch's poll reaches the wrong-secret channel only: once the first poll's 401 pauses it, the other waits.
+  const otherRule = await call("POST", "/api/v1/rules", {
+    name: `Talk bis ${t}`,
+    watch_id: other.id,
+    filter: 'event.type == "release.published"',
+    channel_ids: [channels.badsecret],
+  });
+  expect(otherRule.status()).toBe(201);
 
   await setFixture(page, "b");
-  expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
+  for (const w of watches) {
+    expect((await call("POST", `/api/v1/watches/${w.id}/run`)).status()).toBe(202);
+  }
   let got: Received[] = [];
   await expect
     .poll(
@@ -424,15 +453,17 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
       },
       { timeout: 20_000 },
     )
-    .toBe(2);
+    .toBe(1);
   const bodies = got.map(
     (r) => JSON.parse(r.body) as { message: string; referenceId: string; silent: boolean },
   );
-  expect(bodies.map((b) => b.message.split("\n")[0]).sort()).toEqual([
-    `**${watch.name}: v2.103.3 published**`,
-    `**${watch.name}: v2.105.0 published**`,
-  ]);
-  expect(new Set(bodies.map((b) => b.referenceId)).size).toBe(2);
+  const inboxURL = `${new URL(page.url()).origin}/inbox`;
+  expect(bodies[0]?.message).toMatch(
+    new RegExp(
+      `^\\*\\*2 new events\\*\\*\\n\\n\\*\\*${watch.name}\\*\\*\\n- \\[v2\\.103\\.3 published\\]\\(\\S+\\)\\n- \\[v2\\.105\\.0 published\\]\\(\\S+\\)\\n\\n\\[Open the inbox\\]\\(${inboxURL.replace(/\./g, "\\.")}\\)$`,
+    ),
+  );
+  expect(bodies[0]?.message.split(inboxURL)).toHaveLength(2);
   got.forEach((r, i) => {
     const body = bodies[i];
     const random = r.header["X-Nextcloud-Talk-Bot-Random"] ?? "";
@@ -457,6 +488,7 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
     ["gone", "dead", "HTTP 404"],
     ["busy", "failed", "HTTP 429"],
   ] as const) {
+    // 017-AC1, 017-AC8: one outcome for the poll's two deliveries.
     await expect
       .poll(async () => (await deliveries(name)).map((d) => d.status), { timeout: 20_000 })
       .toEqual([status, status]);
@@ -465,30 +497,34 @@ test("a rule routes upstream changes to Nextcloud Talk", async ({ page }) => {
       if (reason) expect(d.last_error).toContain(reason);
     }
   }
-  // 003-AC8: the 401 pauses the channel: the other delivery waits without using an attempt.
+  // 003-AC8: the 401 pauses the channel: the other poll's deliveries wait without using an attempt.
   await expect
     .poll(async () => (await deliveries("badsecret")).map((d) => d.status).sort(), {
       timeout: 20_000,
     })
-    .toEqual(["dead", "failed"]);
+    .toEqual(["dead", "dead", "failed", "failed"]);
   const bad = await deliveries("badsecret");
-  expect(bad.map((d) => d.attempts).sort()).toEqual([0, 1]);
+  expect(bad.map((d) => d.attempts).sort()).toEqual([0, 0, 1, 1]);
   expect(bad.find((d) => d.status === "dead")?.last_error).toMatch(/: HTTP 401$/);
-  expect(bad.find((d) => d.status === "failed")?.last_error).toContain("paused");
+  for (const d of bad.filter((d) => d.status === "failed"))
+    expect(d.last_error).toContain("paused");
   const refused = (await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[];
   expect(refused.filter((r) => r.endpoint === `talk-wrong${t}-rejected`)).toHaveLength(1);
 
-  // 003-AC3: the UI shows the permanent failure with its reason, no retry scheduled.
+  // 003-AC3: the UI shows the permanent failure with its reason, no retry scheduled (the poll's two rows alike).
   await page.goto("/channels");
   await page.getByLabel("Channel", { exact: true }).selectOption({ label: `Talk badsecret ${t}` });
-  const row = page
+  const rows = page
     .getByRole("table", { name: "Deliveries" })
     .getByRole("row")
     .filter({ hasText: "1 / 5" });
-  await expect(row).toContainText("Failed");
-  await expect(row).toContainText("HTTP 401");
-  await expect(row).not.toContainText("Retrying");
-  await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
+  await expect(rows).toHaveCount(2);
+  for (const row of await rows.all()) {
+    await expect(row).toContainText("Failed");
+    await expect(row).toContainText("HTTP 401");
+    await expect(row).not.toContainText("Retrying");
+    await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
+  }
 });
 
 // 004-AC1, 004-AC4, 004-AC5, 004-AC7, 004-AC8: rules on payload.cves and on a pattern in payload.body each route the
@@ -613,83 +649,124 @@ test("a repository watch reports new issues, PRs and discussions", async ({ page
   await page.goto("/inbox");
   await setFixture(page, "a");
   const call = await api(page);
-  const res = await call("POST", "/api/v1/watches", {
-    name: `Items ${t}`,
-    kind: "github_repo",
-    schedule: "1h",
-    config: {
-      repo: "cli/cli",
-      include_prereleases: true,
-      api_url: UPSTREAM,
-      new_issues: true,
-      new_prs: true,
-      new_discussions: true,
-    },
-  });
-  expect(res.status()).toBe(201);
-  const { id } = (await res.json()) as { id: string };
-  await expect
-    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
-      timeout: 15_000,
-    })
-    .toBe("ok");
-  const rule = await call("POST", "/api/v1/rules", {
-    name: `Bugs ${t}`,
-    watch_id: id,
-    filter: '"bug" in event.payload.labels',
-  });
-  expect(rule.status()).toBe(201);
-  const ruleId = ((await rule.json()) as { id: string }).id;
-  const discRule = await call("POST", "/api/v1/rules", {
-    name: `Discussions ${t}`,
-    watch_id: id,
-    filter: 'event.type == "discussion.opened"',
-  });
-  expect(discRule.status()).toBe(201);
-  const discRuleId = ((await discRule.json()) as { id: string }).id;
+  // Paths of what this test created, deleted at the end whatever happens: rules first, watch last.
+  const created: string[] = [];
+  try {
+    const res = await call("POST", "/api/v1/watches", {
+      name: `Items ${t}`,
+      kind: "github_repo",
+      schedule: "1h",
+      config: {
+        repo: "cli/cli",
+        include_prereleases: true,
+        api_url: UPSTREAM,
+        new_issues: true,
+        new_prs: true,
+        new_discussions: true,
+      },
+    });
+    expect(res.status()).toBe(201);
+    const { id } = (await res.json()) as { id: string };
+    created.unshift(`/api/v1/watches/${id}`);
+    await expect
+      .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+        timeout: 15_000,
+      })
+      .toBe("ok");
+    const rule = await call("POST", "/api/v1/rules", {
+      name: `Bugs ${t}`,
+      watch_id: id,
+      filter: '"bug" in event.payload.labels',
+    });
+    expect(rule.status()).toBe(201);
+    created.unshift(`/api/v1/rules/${((await rule.json()) as { id: string }).id}`);
+    // 017-AC3, 017-AC12: the poll's one discussion goes to Talk alone, ending with its gedour link.
+    const talk = await call("POST", "/api/v1/channels", {
+      name: `Talk disc ${t}`,
+      type: "nextcloud_talk",
+      config: { url: `${UPSTREAM}/`, conversation: `disc${t}` },
+      secret: TALK_SECRET,
+    });
+    expect(talk.status()).toBe(201);
+    const talkId = ((await talk.json()) as { id: string }).id;
+    created.unshift(`/api/v1/channels/${talkId}`);
+    const discRule = await call("POST", "/api/v1/rules", {
+      name: `Discussions ${t}`,
+      watch_id: id,
+      filter: 'event.type == "discussion.opened"',
+      channel_ids: [talkId],
+    });
+    expect(discRule.status()).toBe(201);
+    created.unshift(`/api/v1/rules/${((await discRule.json()) as { id: string }).id}`);
 
-  await setFixture(page, "b");
-  await page.goto(`/watches/${id}`);
-  await expect(page.getByText("No changes yet")).toBeVisible();
-  await page
-    .getByRole("region", { name: "Status" })
-    .getByRole("button", { name: "Run now" })
-    .click();
-  await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
-    [
-      /Discussion #9515 opened by alice-q/,
-      /PR #9514 opened by dependabot\[bot\]/,
-      /Issue #9513 opened by alice-q/,
-      /v2\.105\.0 published/,
-      /v2\.103\.3 published/,
-      /v2\.104\.0-rc\.1 promoted to release/,
-    ],
-    { timeout: 15_000 },
-  );
+    await setFixture(page, "b");
+    await page.goto(`/watches/${id}`);
+    await expect(page.getByText("No changes yet")).toBeVisible();
+    await page
+      .getByRole("region", { name: "Status" })
+      .getByRole("button", { name: "Run now" })
+      .click();
+    await expect(page.getByRole("list", { name: "Events" }).getByRole("listitem")).toHaveText(
+      [
+        /Discussion #9515 opened by alice-q/,
+        /PR #9514 opened by dependabot\[bot\]/,
+        /Issue #9513 opened by alice-q/,
+        /v2\.105\.0 published/,
+        /v2\.103\.3 published/,
+        /v2\.104\.0-rc\.1 promoted to release/,
+      ],
+      { timeout: 15_000 },
+    );
 
-  const routed = async () =>
-    (
+    const routed = async () =>
+      (
+        (await (await call("GET", "/api/v1/inbox?state=all&limit=200")).json()).items as {
+          event: { type: string; payload: { number?: number } };
+          watch: { id: string };
+        }[]
+      )
+        .filter((i) => i.watch.id === id)
+        .map((i) => `${i.event.type} ${i.event.payload.number}`)
+        .sort();
+    await expect
+      .poll(routed, { timeout: 15_000 })
+      .toEqual(["discussion.opened 9515", "issue.opened 9513"]);
+    const discussion = (
       (await (await call("GET", "/api/v1/inbox?state=all&limit=200")).json()).items as {
-        event: { type: string; payload: { number?: number } };
+        event: { id: number; type: string };
         watch: { id: string };
       }[]
-    )
-      .filter((i) => i.watch.id === id)
-      .map((i) => `${i.event.type} ${i.event.payload.number}`)
-      .sort();
-  await expect
-    .poll(routed, { timeout: 15_000 })
-    .toEqual(["discussion.opened 9515", "issue.opened 9513"]);
-  await page.goto("/inbox?state=all");
-  await page.getByRole("button", { name: /Issue #9513 opened by alice-q/ }).click();
-  const panel = page.getByRole("complementary", { name: "Issue #9513 opened by alice-q" });
-  await expect(panel.getByRole("region", { name: "Details" })).toContainText("bug, enhancement");
-
-  await setFixture(page, "a");
-  // Alice's inbox is back as it was for a retry or a rerun.
-  await call("DELETE", `/api/v1/rules/${ruleId}`);
-  await call("DELETE", `/api/v1/rules/${discRuleId}`);
-  await call("DELETE", `/api/v1/watches/${id}`);
+    ).find((i) => i.watch.id === id && i.event.type === "discussion.opened");
+    let talked: Received[] = [];
+    await expect
+      .poll(
+        async () => {
+          const all = (await (
+            await page.request.get(`${UPSTREAM}/_received`)
+          ).json()) as Received[];
+          talked = all.filter((r) => r.endpoint === `talk-disc${t}`);
+          return talked.length;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(1);
+    const lines = (JSON.parse(talked[0]?.body ?? "{}") as { message: string }).message.split("\n");
+    expect(lines[0]).toBe(`**Items ${t}: Discussion #9515 opened by alice-q**`);
+    expect(lines.at(-2)).toMatch(/^\[Open upstream\]\(\S+\)$/);
+    expect(lines.at(-1)).toBe(
+      `[Open in gedour](${new URL(page.url()).origin}/inbox?event=${discussion?.event.id})`,
+    );
+    await page.goto("/inbox?state=all");
+    await page.getByRole("button", { name: /Issue #9513 opened by alice-q/ }).click();
+    const panel = page.getByRole("complementary", { name: "Issue #9513 opened by alice-q" });
+    await expect(panel.getByRole("region", { name: "Details" })).toContainText("bug, enhancement");
+  } finally {
+    // Alice's inbox is back as it was for a retry or a rerun.
+    await setFixture(page, "a");
+    for (const path of created) {
+      expect.soft((await call("DELETE", path)).ok(), path).toBe(true);
+    }
+  }
 });
 
 // 008-AC13, 008-AC9, 011-AC12: a pasted issue URL picks the GitHub issue kind, reactions box checked; the baseline
@@ -785,8 +862,8 @@ test("a discussion watch reports a close and a reply", async ({ page }) => {
   await call("DELETE", `/api/v1/watches/${id}`);
 });
 
-// 010-AC18: a rule targeting a Web Push channel pushes its routed events: the fake push service decrypts one
-// per event, linking to its inbox item, and each delivery is sent.
+// 010-AC18: a rule targeting a Web Push channel pushes its routed events and each delivery is sent.
+// 017-AC2, 017-AC18: the poll's two events are one notification, "2 new events" with the watch name, opening /inbox.
 test("a rule routes upstream changes to Web Push", async ({ page }) => {
   const t = tag();
   await setFixture(page, "a");
@@ -835,30 +912,23 @@ test("a rule routes upstream changes to Web Push", async ({ page }) => {
 
     await setFixture(page, "b");
     expect((await call("POST", `/api/v1/watches/${watch.id}/run`)).status()).toBe(202);
-    type Sent = { status: string; event: { id: number } };
-    let deliveries: Sent[] = [];
     await expect
       .poll(
-        async () => {
-          deliveries = (
-            await (await call("GET", `/api/v1/deliveries?channel_id=${channel.id}`)).json()
-          ).items as Sent[];
-          return deliveries.map((d) => d.status);
-        },
+        async () =>
+          (
+            (await (await call("GET", `/api/v1/deliveries?channel_id=${channel.id}`)).json())
+              .items as { status: string }[]
+          ).map((d) => d.status),
         { timeout: 20_000 },
       )
       .toEqual(["sent", "sent"]);
     const pushed = ((await (await page.request.get(`${UPSTREAM}/_received`)).json()) as Received[])
       .filter((r) => r.endpoint.startsWith("push-"))
-      .map((r) => JSON.parse(r.body) as { title: string; url: string })
-      .filter((m) => m.title.startsWith(`${watch.name}: `));
-    expect(pushed.map((m) => m.title).sort()).toEqual([
-      `${watch.name}: v2.103.3 published`,
-      `${watch.name}: v2.105.0 published`,
+      .map((r) => JSON.parse(r.body) as { title: string; body: string; url: string })
+      .filter((m) => m.body === watch.name || m.title.startsWith(`${watch.name}: `));
+    expect(pushed).toEqual([
+      expect.objectContaining({ title: "2 new events", body: watch.name, url: "/inbox" }),
     ]);
-    expect(pushed.map((m) => m.url).sort()).toEqual(
-      deliveries.map((d) => `/inbox?event=${d.event.id}`).sort(),
-    );
   } finally {
     // Leaves alice as she was: the watch takes its events and inbox items with it.
     await setFixture(page, "a");

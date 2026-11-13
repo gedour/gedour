@@ -18,6 +18,8 @@ type Digest struct {
 	Deliveries []Delivery
 	// Poll marks the events of one poll sent at once (017): counted as new, not unread.
 	Poll bool
+	// Link ends a Telegram or Talk message with one inbox link (017 gedour_link); a cut one's "+N more" is that link.
+	Link bool
 }
 
 type digestGroup struct {
@@ -52,7 +54,8 @@ type digestStyle struct {
 	sep           string
 	limit         int // 0: no cap
 	size          func(string) int
-	maxItems      int // 0: no cap
+	maxItems      int    // 0: no cap
+	footer        string // last line of an uncut message; empty: none
 }
 
 func (dg Digest) count() string {
@@ -73,6 +76,9 @@ func (st digestStyle) render(dg Digest) string {
 		for _, m := range g.msgs {
 			parts = append(parts, st.item(m))
 		}
+	}
+	if st.footer != "" {
+		parts = append(parts, st.footer)
 	}
 	full := strings.Join(parts, st.sep)
 	if (st.limit == 0 || st.size(full) <= st.limit) && (st.maxItems == 0 || len(ds) <= st.maxItems) {
@@ -111,6 +117,10 @@ func (s *Sender) inboxURL() string {
 
 // TelegramDigest is the HTML-mode digest; cut to Telegram's limit, counted in bytes as TelegramText does.
 func TelegramDigest(dg Digest, inbox string) string {
+	var footer string
+	if dg.Link && inbox != "" {
+		footer = "\n<a href=\"" + html.EscapeString(inbox) + "\">Open the inbox</a>"
+	}
 	return digestStyle{
 		header: func(s string) string { return "<b>" + html.EscapeString(s) + "</b>" },
 		group:  func(w string) string { return "\n<b>" + html.EscapeString(w) + "</b>" },
@@ -126,12 +136,16 @@ func TelegramDigest(dg Digest, inbox string) string {
 			}
 			return fmt.Sprintf("+%d more: <a href=\"%s\">open the inbox</a>", n, html.EscapeString(inbox))
 		},
-		sep: "\n", limit: maxTelegramLen, size: func(s string) int { return len(s) },
+		sep: "\n", limit: maxTelegramLen, size: func(s string) int { return len(s) }, footer: footer,
 	}.render(dg)
 }
 
 // TalkDigest is the Markdown digest, cut to maxTalkLen characters.
 func TalkDigest(dg Digest, inbox string) string {
+	var footer string
+	if dg.Link && inbox != "" {
+		footer = "\n[Open the inbox](" + talkLink(inbox) + ")"
+	}
 	return digestStyle{
 		header: func(s string) string { return "**" + talkEscaper.Replace(s) + "**" },
 		group:  func(w string) string { return "\n**" + talkEscaper.Replace(w) + "**" },
@@ -148,7 +162,7 @@ func TalkDigest(dg Digest, inbox string) string {
 			}
 			return fmt.Sprintf("+%d more: [open the inbox](%s)", n, talkLink(inbox))
 		},
-		sep: "\n", limit: maxTalkLen, size: utf8.RuneCountInString,
+		sep: "\n", limit: maxTalkLen, size: utf8.RuneCountInString, footer: footer,
 	}.render(dg)
 }
 
@@ -158,7 +172,8 @@ const (
 	maxMailBytes  = 256 << 10
 )
 
-// MailDigest is the digest mail: the count in the subject, one line per event in the body.
+// MailDigest is the digest mail: the count in the subject, one line per event in the body. Its Inbox line is
+// the gedour link, so it ignores Link.
 func MailDigest(dg Digest, inbox string) Message {
 	body := digestStyle{
 		header: func(string) string { return "" },
@@ -191,12 +206,14 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("telegram config: %w", err)
 		}
+		dg.Link = linkOn(c.GedourLink)
 		return s.telegram(ctx, c, ch.Secret, TelegramDigest(dg, s.inboxURL()))
 	case TypeNextcloudTalk:
 		var c NextcloudTalkConfig
 		if err := json.Unmarshal(ch.Config, &c); err != nil {
 			return fmt.Errorf("nextcloud talk config: %w", err)
 		}
+		dg.Link = linkOn(c.GedourLink)
 		return s.talk(ctx, c, ch.Secret, dg.ID, TalkDigest(dg, s.inboxURL()))
 	case TypeEmail:
 		var c EmailConfig

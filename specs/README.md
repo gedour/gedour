@@ -18,4 +18,4 @@
 | [014](014-rule-multi-watch.md) | Rules on several watches | shipped |
 | [015](015-event-driven-worker.md) | Event-driven worker loops | shipped |
 | [016](016-mcp-credentials.md) | Credentials over MCP | shipped |
-| [017](017-group-poll-events.md) | One message per poll | in progress |
+| [017](017-group-poll-events.md) | One message per poll, gedour link in messages | shipped |

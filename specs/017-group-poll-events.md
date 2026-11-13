@@ -1,6 +1,6 @@
 # 017 — One message per poll
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-12
 
@@ -64,38 +64,38 @@ Phase 2, gedour link:
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given a watch whose poll yields 2 events matched by an immediate rule on a Telegram
+- [x] **AC1** Given a watch whose poll yields 2 events matched by an immediate rule on a Telegram
   channel, the channel receives one message listing both, oldest first; both deliveries end `sent` with
   the same `sent_at`.
-- [ ] **AC2** Same as AC1 on Nextcloud Talk, email and Web Push: one message (one notification per
+- [x] **AC2** Same as AC1 on Nextcloud Talk, email and Web Push: one message (one notification per
   device for Web Push) per channel.
-- [ ] **AC3** A poll yielding 1 event sends the same message as before this spec (existing single-message
+- [x] **AC3** A poll yielding 1 event sends the same message as before this spec (existing single-message
   tests unchanged).
-- [ ] **AC4** Events of the same watch from two different polls are sent as separate messages.
-- [ ] **AC5** Events of two watches routed in the same pass are sent as separate messages.
-- [ ] **AC6** On a webhook or script channel, each event of the poll is sent alone.
-- [ ] **AC7** A high priority event and a normal one from the same poll on the same channel are sent as
+- [x] **AC4** Events of the same watch from two different polls are sent as separate messages.
+- [x] **AC5** Events of two watches routed in the same pass are sent as separate messages.
+- [x] **AC6** On a webhook or script channel, each event of the poll is sent alone.
+- [x] **AC7** A high priority event and a normal one from the same poll on the same channel are sent as
   two messages; two high priority events from one poll are grouped.
-- [ ] **AC8** A failed grouped send retries the whole group with the existing backoff; each delivery is
+- [x] **AC8** A failed grouped send retries the whole group with the existing backoff; each delivery is
   `dead` after its own `MaxAttempts`.
-- [ ] **AC9** A group whose events are read in the inbox before the send is still sent in full.
-- [ ] **AC10** A delivery held by another claim (lease) keeps its group from going out in part: the
+- [x] **AC9** A group whose events are read in the inbox before the send is still sent in full.
+- [x] **AC10** A delivery held by another claim (lease) keeps its group from going out in part: the
   group is claimed whole or not at all.
-- [ ] **AC11** A grouped message longer than the channel cap is cut on a whole line and ends with
+- [x] **AC11** A grouped message longer than the channel cap is cut on a whole line and ends with
   "+N more" and the inbox link (012-AC8 behaviour).
-- [ ] **AC12** Given `GEDOUR_PUBLIC_URL` set and a Telegram, Talk or email channel without `gedour_link`, a
+- [x] **AC12** Given `GEDOUR_PUBLIC_URL` set and a Telegram, Talk or email channel without `gedour_link`, a
   single-event message ends with a link to `<public URL>/inbox?event=<id>`.
-- [ ] **AC13** A grouped message and a digest on such a channel end with one link to
+- [x] **AC13** A grouped message and a digest on such a channel end with one link to
   `<public URL>/inbox`, never one per event.
-- [ ] **AC14** With `gedour_link: false`, or without `GEDOUR_PUBLIC_URL`, the message has no gedour
+- [x] **AC14** With `gedour_link: false`, or without `GEDOUR_PUBLIC_URL`, the message has no gedour
   link and is byte-identical to the message before this spec.
-- [ ] **AC15** A channel saved with a non-boolean `gedour_link`, or `gedour_link` on another channel
+- [x] **AC15** A channel saved with a non-boolean `gedour_link`, or `gedour_link` on another channel
   type, is a 400.
-- [ ] **AC16** A message over the channel cap with the link on is cut on a whole line, ends with
+- [x] **AC16** A message over the channel cap with the link on is cut on a whole line, ends with
   "+N more" and holds the inbox link once, within the cap.
-- [ ] **AC17** The channel form shows "Link to gedour" checked for a new Telegram, Talk or email channel,
+- [x] **AC17** The channel form shows "Link to gedour" checked for a new Telegram, Talk or email channel,
   saves the unchecked state as `gedour_link: false`, and reloads it unchecked.
-- [ ] **AC18** Web Push: a grouped notification opens `/inbox`; a single one still opens
+- [x] **AC18** Web Push: a grouped notification opens `/inbox`; a single one still opens
   `/inbox?event=<id>`.
 
 ## Phases
@@ -130,7 +130,7 @@ Phase 2, gedour link:
 
 ## Open questions
 
-- [ ] None blocking.
+- [x] None blocking.
 
 ## Decisions
 

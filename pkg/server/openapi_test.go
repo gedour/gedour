@@ -6,6 +6,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -115,5 +116,38 @@ func TestOpenAPIDrift(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatal("api/openapi.json is stale: run `make openapi` and commit the result")
+	}
+}
+
+// 018-AC5, 018-AC13: the rule schemas carry schedule and no at, and refuse unknown properties, so a body with at
+// is a 400 rather than ignored.
+func TestOpenAPIRuleSchedule(t *testing.T) {
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				AdditionalProperties *bool          `json:"additionalProperties"`
+				Properties           map[string]any `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(renderOpenAPI(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Rule", "CreateRuleInputBody", "UpdateRuleInputBody", "ScheduleEntry", "ScheduleEntryInput"} {
+		s, ok := doc.Components.Schemas[name]
+		if !ok {
+			t.Errorf("no %s schema", name)
+			continue
+		}
+		if s.AdditionalProperties == nil || *s.AdditionalProperties {
+			t.Errorf("%s accepts unknown properties", name)
+		}
+		if _, ok := s.Properties["at"]; ok {
+			t.Errorf("%s still has at", name)
+		}
+		_, sched := s.Properties["schedule"]
+		if want := !strings.HasPrefix(name, "Schedule"); sched != want {
+			t.Errorf("%s has schedule %v, want %v", name, sched, want)
+		}
 	}
 }

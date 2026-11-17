@@ -54,8 +54,8 @@ test("create, test, edit and delete a Nextcloud Talk channel", async ({ page }) 
   await expect(card).toHaveCount(0);
 });
 
-// 012-AC13, 012-AC14: the digest lives on the rule: times and zone saved, summarized in the list, shown back on
-// edit, locked while the priority is high; the channel form has no delivery settings.
+// 012-AC13, 012-AC14, 018-AC11, 018-AC12: the digest lives on the rule: times, days and zone saved, summarized in
+// the list, shown back on edit, locked while the priority is high; the channel form has no delivery settings.
 test("create a digest rule and see its schedule", async ({ page }) => {
   const name = `Digest ${tag()}`;
   await page.goto("/channels");
@@ -75,15 +75,25 @@ test("create a digest rule and see its schedule", async ({ page }) => {
   ).toBeVisible();
   await page.getByRole("button", { name: "Add a time" }).click();
   await page.getByLabel("Time 2", { exact: true }).fill("18:00");
+  for (const d of ["Saturday", "Sunday"])
+    await page.getByRole("button", { name: `${d}, time 1` }).click();
   await page.getByLabel("Time zone").fill("Europe/Paris");
   await page.getByRole("button", { name: "Create rule" }).click();
   await expect(page).toHaveURL(/\/rules$/);
 
   const item = page.getByRole("listitem").filter({ hasText: name });
-  await expect(item).toContainText("Digest at 09:00, 18:00 (Europe/Paris)");
+  await expect(item).toContainText("Digest at 09:00 Mon–Fri, 18:00 (Europe/Paris)");
   await item.getByRole("link", { name }).click();
   await expect(page.getByRole("radio", { name: /^Digest/ })).toBeChecked();
   await expect(page.getByLabel("Time 2", { exact: true })).toHaveValue("18:00");
+  await expect(page.getByRole("button", { name: "Friday, time 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "Saturday, time 1" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await expect(page.getByLabel("Time zone")).toHaveValue("Europe/Paris");
   await page.getByLabel("Priority").selectOption("high");
   await expect(page.getByRole("radio", { name: /^Digest/ })).toBeDisabled();

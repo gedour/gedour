@@ -15,39 +15,69 @@ import (
 	"github.com/gedour/gedour/pkg/notify"
 )
 
-// 012-AC1, 012-AC13, 012-AC14: a digest rule needs 1 to 24 HH:MM times and a known zone, and priority normal;
-// times are sorted and deduplicated, the zone defaults to UTC.
+// times builds a schedule body of every-day entries.
+func times(hm ...string) []ScheduleEntryInput {
+	out := make([]ScheduleEntryInput, len(hm))
+	for i, v := range hm {
+		out[i] = ScheduleEntryInput{Time: v}
+	}
+	return out
+}
+
+// 012-AC1, 012-AC13, 012-AC14, 018-AC2, 018-AC3, 018-AC4: a digest rule needs 1 to 24 distinct HH:MM times, each
+// on at least one known day (every day when days is absent), a known zone, and priority normal; entries are
+// sorted, one per time with the union of its days, the zone defaults to UTC.
 func TestRuleSchedule(t *testing.T) {
 	many := make([]string, 25)
 	for i := range many {
 		many[i] = time.Date(0, 1, 1, i%24, i/24, 0, 0, time.UTC).Format("15:04")
 	}
+	// 30 entries over 24 distinct times is under the cap.
+	merged := times(append(slices.Clone(many[:24]), many[:6]...)...)
 	for _, tt := range []struct {
 		name               string
 		delivery, priority string
-		at                 []string
+		in                 []ScheduleEntryInput
 		tz                 string
 		field              string // "" when valid
 		want               *schedule
 	}{
-		{name: "digest", delivery: deliveryDigest, at: []string{"18:00", "09:00", "09:00"}, tz: "Europe/Paris",
-			want: &schedule{At: []string{"09:00", "18:00"}, TZ: "Europe/Paris"}},
-		{name: "default tz", delivery: deliveryDigest, at: []string{"07:30"}, want: &schedule{At: []string{"07:30"}, TZ: "UTC"}},
+		{name: "digest", delivery: deliveryDigest, in: times("18:00", "09:00", "09:00"), tz: "Europe/Paris",
+			want: &schedule{At: []string{"09:00", "18:00"}, Days: []int16{everyDay, everyDay}, TZ: "Europe/Paris"}},
+		{name: "default tz", delivery: deliveryDigest, in: times("07:30"), want: &schedule{At: []string{"07:30"}, Days: []int16{everyDay}, TZ: "UTC"}},
+		{name: "days merged", delivery: deliveryDigest, in: []ScheduleEntryInput{
+			{Time: "18:00", Days: []string{"sun", "sat"}},
+			{Time: "09:00", Days: []string{"fri", "mon", "mon"}},
+			{Time: "09:00", Days: []string{"tue", "fri"}},
+		}, want: &schedule{At: []string{"09:00", "18:00"}, Days: []int16{0b10011, 0b1100000}, TZ: "UTC"}},
+		{name: "days merged into every day", delivery: deliveryDigest, in: []ScheduleEntryInput{{Time: "09:00", Days: []string{"mon"}}, {Time: "09:00"}},
+			want: &schedule{At: []string{"09:00"}, Days: []int16{everyDay}, TZ: "UTC"}},
+		{name: "24 distinct times", delivery: deliveryDigest, in: merged, want: func() *schedule {
+			s := &schedule{At: slices.Sorted(slices.Values(many[:24])), Days: make([]int16, 24), TZ: "UTC"}
+			for i := range s.Days {
+				s.Days[i] = everyDay
+			}
+			return s
+		}()},
 		{name: "immediate", delivery: deliveryImmediate},
 		{name: "immediate high", delivery: deliveryImmediate, priority: priorityHigh},
 		{name: "empty means immediate", delivery: ""},
-		{name: "no at", delivery: deliveryDigest, field: "at"},
-		{name: "25 times", delivery: deliveryDigest, at: many, field: "at"},
-		{name: "not HH:MM", delivery: deliveryDigest, at: []string{"9:00"}, field: "at[0]"},
-		{name: "24:00", delivery: deliveryDigest, at: []string{"09:00", "24:00"}, field: "at[1]"},
-		{name: "unknown tz", delivery: deliveryDigest, at: []string{"09:00"}, tz: "Europe/Atlantis", field: "tz"},
-		{name: "server tz", delivery: deliveryDigest, at: []string{"09:00"}, tz: "Local", field: "tz"},
-		{name: "high priority", delivery: deliveryDigest, priority: priorityHigh, at: []string{"09:00"}, field: "delivery"},
-		{name: "at without digest", delivery: deliveryImmediate, at: []string{"09:00"}, field: "at"},
+		{name: "no entry", delivery: deliveryDigest, field: "schedule"},
+		{name: "empty list", delivery: deliveryDigest, in: []ScheduleEntryInput{}, field: "schedule"},
+		{name: "25 times", delivery: deliveryDigest, in: times(many...), field: "schedule"},
+		{name: "not HH:MM", delivery: deliveryDigest, in: times("9:00"), field: "schedule[0].time"},
+		{name: "24:00", delivery: deliveryDigest, in: times("09:00", "24:00"), field: "schedule[1].time"},
+		{name: "no day", delivery: deliveryDigest, in: []ScheduleEntryInput{{Time: "09:00"}, {Time: "10:00", Days: []string{}}}, field: "schedule[1].days"},
+		{name: "unknown day", delivery: deliveryDigest, in: []ScheduleEntryInput{{Time: "09:00", Days: []string{"mon", "Tue"}}}, field: "schedule[0].days[1]"},
+		{name: "unknown day, bad time", delivery: deliveryDigest, in: []ScheduleEntryInput{{Time: "9", Days: []string{"lun"}}}, field: "schedule[0].days[0]"},
+		{name: "unknown tz", delivery: deliveryDigest, in: times("09:00"), tz: "Europe/Atlantis", field: "tz"},
+		{name: "server tz", delivery: deliveryDigest, in: times("09:00"), tz: "Local", field: "tz"},
+		{name: "high priority", delivery: deliveryDigest, priority: priorityHigh, in: times("09:00"), field: "delivery"},
+		{name: "schedule without digest", delivery: deliveryImmediate, in: times("09:00"), field: "schedule"},
 		{name: "tz without digest", delivery: deliveryImmediate, tz: "UTC", field: "tz"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, errs := ruleSchedule(tt.delivery, tt.priority, tt.at, tt.tz)
+			got, errs := ruleSchedule(tt.delivery, tt.priority, tt.in, tt.tz)
 			if tt.field == "" {
 				if len(errs) > 0 || !reflect.DeepEqual(got, tt.want) {
 					t.Fatalf("%+v, %v; want %+v", got, errs, tt.want)
@@ -58,6 +88,15 @@ func TestRuleSchedule(t *testing.T) {
 				t.Fatalf("errors %v, want one on body.%s", errs, tt.field)
 			}
 		})
+	}
+}
+
+// 018-AC2, 018-AC4: the API form lists days Monday first, every day spelled out.
+func TestScheduleEntries(t *testing.T) {
+	got := schedule{At: []string{"09:00", "18:00"}, Days: []int16{everyDay, 0b1100001}}.entries()
+	want := []ScheduleEntry{{Time: "09:00", Days: weekdays}, {Time: "18:00", Days: []string{"mon", "sat", "sun"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%+v, want %+v", got, want)
 	}
 }
 
@@ -123,13 +162,76 @@ func TestNextAt(t *testing.T) {
 		{"repeated, not twice", []string{"02:30"}, "2026-10-25T00:30:00Z", "2026-10-26T01:30:00Z"}, // skips 02:30 CET
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := nextAt(tt.at, paris, utc(tt.now)); !got.Equal(utc(tt.want)) {
+			if got := nextAt(tt.at, daily(len(tt.at)), paris, utc(tt.now)); !got.Equal(utc(tt.want)) {
 				t.Errorf("next %s, want %s", got.UTC().Format(time.RFC3339), tt.want)
 			}
 		})
 	}
-	if got := nextAt([]string{"07:00"}, time.UTC, utc("2026-06-10T08:00:00Z")); !got.Equal(utc("2026-06-11T07:00:00Z")) {
+	if got := nextAt([]string{"07:00"}, daily(1), time.UTC, utc("2026-06-10T08:00:00Z")); !got.Equal(utc("2026-06-11T07:00:00Z")) {
 		t.Errorf("UTC: %s", got)
+	}
+}
+
+// daily is n every-day masks.
+func daily(n int) []int16 {
+	d := make([]int16, n)
+	for i := range d {
+		d[i] = everyDay
+	}
+	return d
+}
+
+// 018-AC6, 018-AC7, 018-AC8: the next instant is the first (day, time) strictly after t on a day of the time's
+// mask, on the zone's calendar, scanning up to a week ahead; DST edges follow 012-AC2 on the days that run.
+func TestNextAtWeekdays(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workdays, sat, sun = 0b11111, 0b100000, 0b1000000
+	for _, tt := range []struct {
+		name string
+		loc  *time.Location
+		at   []string
+		days []int16
+		now  string
+		want string
+	}{
+		// 2026-06-12 is a Friday.
+		{"018-AC6 Friday after the time", paris, []string{"09:00"}, []int16{workdays}, "2026-06-12T08:00:00Z", "2026-06-15T07:00:00Z"},
+		{"018-AC6 Thursday before the time", paris, []string{"09:00"}, []int16{workdays}, "2026-06-11T06:00:00Z", "2026-06-11T07:00:00Z"},
+		{"018-AC6 Saturday", paris, []string{"09:00"}, []int16{workdays}, "2026-06-13T12:00:00Z", "2026-06-15T07:00:00Z"},
+		{"018-AC7 Saturday exactly", paris, []string{"09:00"}, []int16{sat}, "2026-06-13T07:00:00Z", "2026-06-20T07:00:00Z"},
+		{"018-AC7 Saturday before", paris, []string{"09:00"}, []int16{sat}, "2026-06-13T06:59:00Z", "2026-06-13T07:00:00Z"},
+		{"018-AC7 Sunday", paris, []string{"09:00"}, []int16{sat}, "2026-06-14T07:00:00Z", "2026-06-20T07:00:00Z"},
+		{"018-AC7 Monday", paris, []string{"09:00"}, []int16{sat}, "2026-06-15T07:00:00Z", "2026-06-20T07:00:00Z"},
+		// Friday 23:30 UTC is Saturday 08:30 in Tokyo: the zone's calendar decides the day.
+		{"zone calendar", tokyo, []string{"09:00"}, []int16{sat}, "2026-06-12T23:30:00Z", "2026-06-13T00:00:00Z"},
+		{"two times, other days", paris, []string{"09:00", "18:00"}, []int16{workdays, sat | sun}, "2026-06-12T08:00:00Z", "2026-06-13T16:00:00Z"},
+		// 2026-03-29 and 2026-10-25 are Sundays; Europe/Paris changes clock at 02:00 / 03:00.
+		{"018-AC8 spring forward gap", paris, []string{"02:30"}, []int16{sun}, "2026-03-27T12:00:00Z", "2026-03-29T01:00:00Z"},
+		{"018-AC8 after the gap", paris, []string{"02:30"}, []int16{sun}, "2026-03-29T01:00:00Z", "2026-04-05T00:30:00Z"},
+		{"018-AC8 fall back first", paris, []string{"02:30"}, []int16{sun}, "2026-10-23T12:00:00Z", "2026-10-25T00:30:00Z"},
+		{"018-AC8 fall back not twice", paris, []string{"02:30"}, []int16{sun}, "2026-10-25T00:30:00Z", "2026-11-01T01:30:00Z"},
+		{"018-AC8 skipped day keeps time", paris, []string{"09:00"}, []int16{workdays}, "2026-03-27T09:00:00Z", "2026-03-30T07:00:00Z"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now, err := time.Parse(time.RFC3339, tt.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := time.Parse(time.RFC3339, tt.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := nextAt(tt.at, tt.days, tt.loc, now); !got.Equal(want) {
+				t.Errorf("next %s, want %s", got.UTC().Format(time.RFC3339), tt.want)
+			}
+		})
 	}
 }
 
@@ -141,10 +243,16 @@ func TestScheduleNext(t *testing.T) {
 		s    schedule
 	}{
 		{"no at", schedule{TZ: "UTC"}},
-		{"one digit", schedule{At: []string{"9"}, TZ: "UTC"}},
-		{"hour 25", schedule{At: []string{"09:00", "25:00"}, TZ: "UTC"}},
-		{"one digit minute", schedule{At: []string{"09:7"}, TZ: "UTC"}},
-		{"unknown tz", schedule{At: []string{"09:00"}, TZ: "Europe/Atlantis"}},
+		{"one digit", schedule{At: []string{"9"}, Days: daily(1), TZ: "UTC"}},
+		{"hour 25", schedule{At: []string{"09:00", "25:00"}, Days: daily(2), TZ: "UTC"}},
+		{"one digit minute", schedule{At: []string{"09:7"}, Days: daily(1), TZ: "UTC"}},
+		{"unknown tz", schedule{At: []string{"09:00"}, Days: daily(1), TZ: "Europe/Atlantis"}},
+		// 018: day masks written outside checkSchedule.
+		{"no days", schedule{At: []string{"09:00"}, TZ: "UTC"}},
+		{"fewer days", schedule{At: []string{"09:00", "18:00"}, Days: daily(1), TZ: "UTC"}},
+		{"no day in mask", schedule{At: []string{"09:00"}, Days: []int16{0}, TZ: "UTC"}},
+		{"negative mask", schedule{At: []string{"09:00"}, Days: []int16{-1}, TZ: "UTC"}},
+		{"bit 7", schedule{At: []string{"09:00"}, Days: []int16{128}, TZ: "UTC"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got, err := tt.s.next(now, time.LoadLocation); err == nil {
@@ -152,7 +260,7 @@ func TestScheduleNext(t *testing.T) {
 			}
 		})
 	}
-	if got, err := (schedule{At: []string{"09:00"}}).next(now, time.LoadLocation); err != nil || !got.Equal(now.Add(time.Hour)) {
+	if got, err := (schedule{At: []string{"09:00"}, Days: daily(1)}).next(now, time.LoadLocation); err != nil || !got.Equal(now.Add(time.Hour)) {
 		t.Errorf("no tz: %s, %v; want UTC 09:00", got, err)
 	}
 }
@@ -173,10 +281,11 @@ func (e *env) digestRule(t *testing.T, owner string, watch *string, filter strin
 	return id
 }
 
-// setSchedule writes a rule's digest schedule behind the API, which reschedules nothing.
+// setSchedule writes a rule's every-day digest schedule behind the API, which reschedules nothing.
 func (e *env) setSchedule(t *testing.T, rule, at, tz string) {
 	t.Helper()
-	if _, err := e.pool.Exec(context.Background(), `UPDATE rules SET delivery = 'digest', digest_at = ARRAY[$2], digest_tz = $3 WHERE id = $1`, rule, at, tz); err != nil {
+	if _, err := e.pool.Exec(context.Background(), `UPDATE rules SET delivery = 'digest', digest_at = ARRAY[$2], digest_days = '{127}', digest_tz = $3 WHERE id = $1`,
+		rule, at, tz); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -310,7 +419,7 @@ func TestRoutingDigestEarliest(t *testing.T) {
 			ev := e.event(t, w, "release.published", "v1")
 			routeAll(t, e.router())
 			q := e.queued(t, ev, ch)
-			if want := nextAt([]string{soon}, time.UTC, now); !q.digest || q.rule != ids["soon"] || q.due.Sub(want).Abs() > time.Minute {
+			if want := nextAt([]string{soon}, daily(1), time.UTC, now); !q.digest || q.rule != ids["soon"] || q.due.Sub(want).Abs() > time.Minute {
 				t.Errorf("due %s, digest %v, rule %s; want %s by rule %s", q.due.UTC(), q.digest, q.rule, want, ids["soon"])
 			}
 		})
@@ -340,7 +449,7 @@ func TestRoutingDigestBadSchedule(t *testing.T) {
 	ctx := context.Background()
 	alice := e.user(t, "alice")
 	for name, set := range map[string]string{
-		"no at":      `digest_at = '{}'`,
+		"no at":      `digest_at = '{}', digest_days = '{}'`,
 		"null at":    `digest_at = NULL`,
 		"unknown tz": `digest_tz = 'Europe/Atlantis'`,
 	} {
@@ -382,7 +491,7 @@ func TestRoutingDigestEditInFlight(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM rules WHERE id = $1 FOR UPDATE`, r); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE rules SET delivery = 'immediate', digest_at = NULL, digest_tz = NULL WHERE id = $1`, r); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE rules SET delivery = 'immediate', digest_at = NULL, digest_days = NULL, digest_tz = NULL WHERE id = $1`, r); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -432,7 +541,7 @@ func TestDigestReschedule(t *testing.T) {
 	update := func(delivery string, at []string, tz *string) {
 		t.Helper()
 		in := &updateRuleInput{ID: rule}
-		in.Body.Delivery, in.Body.At, in.Body.TZ = &delivery, at, tz
+		in.Body.Delivery, in.Body.Schedule, in.Body.TZ = &delivery, times(at...), tz
 		if _, err := s.updateRule(ctx, in); err != nil {
 			t.Fatal(err)
 		}
@@ -460,6 +569,71 @@ func TestDigestReschedule(t *testing.T) {
 	unchanged("after immediate", beforeLeased, leased, false)
 	unchanged("after immediate", beforeFailed, failed, false)
 	unchanged("after immediate", beforeOther, other, true)
+}
+
+// 018-AC9: an edit of a rule's days alone, time and zone kept, moves its waiting, unleased deliveries to the new
+// next instant; a leased one stays.
+func TestDigestRescheduleDays(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	ch := e.tgChannel(t, alice)
+	rule := e.digestRule(t, alice, &w, "", ch)
+	waiting, leased := e.event(t, w, "release.published", "v1"), e.event(t, w, "release.published", "v2")
+	routeAll(t, e.router())
+	if _, err := e.pool.Exec(ctx, `UPDATE deliveries SET leased_until = now() + interval '1 minute' WHERE event_id = $1`, leased); err != nil {
+		t.Fatal(err)
+	}
+	before, beforeLeased := e.queued(t, waiting, ch), e.queued(t, leased, ch)
+	s := New(e.pool, zap.NewNop(), e.box, nil, nil, nil, nil, e.m)
+	s.viewer = func(context.Context) (string, bool) { return alice, true }
+	in := &updateRuleInput{ID: rule}
+	// Only the day after the one the delivery waits for: Go's Sunday-first index is the next day's Monday-first one.
+	in.Body.Schedule = []ScheduleEntryInput{{Time: "07:00", Days: []string{weekdays[before.due.UTC().Weekday()]}}}
+	if _, err := s.updateRule(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	q := e.queued(t, waiting, ch)
+	if want := before.due.Add(24 * time.Hour); !q.digest || !q.due.Equal(want) {
+		t.Errorf("after a days edit: due %s, digest %v; want %s", q.due.UTC(), q.digest, want.UTC())
+	}
+	if q := e.queued(t, leased, ch); !q.due.Equal(beforeLeased.due) {
+		t.Errorf("leased delivery moved to %s", q.due.UTC())
+	}
+}
+
+// 018-AC10: a digest rule a pre-018 binary writes during the rolling update, digest_days left NULL, runs every day:
+// the API lists all seven days, routing queues for the next time, an edit of another field passes.
+func TestDigestRuleWithoutDays(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	alice := e.user(t, "alice")
+	w := e.watch(t, alice)
+	ch := e.tgChannel(t, alice)
+	rule := e.rule(t, alice, &w, "", ch)
+	if _, err := e.pool.Exec(ctx, `UPDATE rules SET delivery = 'digest', digest_at = '{07:00,19:30}', digest_days = NULL, digest_tz = 'UTC' WHERE id = $1`, rule); err != nil {
+		t.Fatal(err)
+	}
+	s := New(e.pool, zap.NewNop(), e.box, nil, nil, nil, nil, e.m)
+	s.viewer = func(context.Context) (string, bool) { return alice, true }
+	want := []ScheduleEntry{{Time: "07:00", Days: weekdays}, {Time: "19:30", Days: weekdays}}
+	list, err := s.listRules(ctx, nil)
+	if err != nil || len(list.Body.Items) != 1 || !reflect.DeepEqual(list.Body.Items[0].Schedule, want) {
+		t.Fatalf("list: %+v, %v; want schedule %+v", list, err, want)
+	}
+	ev := e.event(t, w, "release.published", "v1")
+	routeAll(t, e.router())
+	if q, next := e.queued(t, ev, ch), nextAt([]string{"07:00", "19:30"}, daily(2), time.UTC, time.Now()); !q.digest || q.due.Sub(next).Abs() > time.Minute {
+		t.Errorf("queued due %s, digest %v; want %s in the digest", q.due.UTC(), q.digest, next.UTC())
+	}
+	in := &updateRuleInput{ID: rule}
+	name := "renamed"
+	in.Body.Name = &name
+	out, err := s.updateRule(ctx, in)
+	if err != nil || !reflect.DeepEqual(out.Body.Schedule, want) {
+		t.Fatalf("rename: %+v, %v", out, err)
+	}
 }
 
 // 012-AC18: a rule read as a digest by the rule query but disabled by the time its schedule is locked queues
@@ -551,14 +725,17 @@ func TestDigestRuleDisableWithEdit(t *testing.T) {
 		t.Helper()
 		in := &updateRuleInput{ID: rule}
 		// The watch is sent again, as the rule form does.
-		in.Body.Enabled, in.Body.At, in.Body.WatchID = &enabled, at, &w
+		in.Body.Enabled, in.Body.WatchID = &enabled, &w
+		if at != nil {
+			in.Body.Schedule = times(at...)
+		}
 		out, err := s.updateRule(ctx, in)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return out.Body
 	}
-	if r := patch(false, []string{"21:15"}); r.Enabled || r.Delivery != deliveryDigest || !slices.Equal(r.At, []string{"21:15"}) {
+	if r := patch(false, []string{"21:15"}); r.Enabled || r.Delivery != deliveryDigest || !reflect.DeepEqual(r.Schedule, []ScheduleEntry{{Time: "21:15", Days: weekdays}}) {
 		t.Errorf("after disable with an edit: %+v", r)
 	}
 	if q := e.queued(t, held, ch); !q.now() {

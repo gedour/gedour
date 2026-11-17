@@ -178,6 +178,19 @@ test("high priority at 375 px", async ({ page }) => {
   await expectNoHorizontalScroll(page);
 });
 
+// 018-AC11: a digest time's seven day toggles share one line at 375 px.
+test("the digest day toggles fit 375 px", async ({ page }) => {
+  await page.goto("/rules/new");
+  await page.getByRole("radio", { name: /^Digest/ }).check();
+  const days = page.getByRole("group", { name: "Days, time 1" }).getByRole("button");
+  await expect(days).toHaveCount(7);
+  const ys = new Set<number>();
+  for (const b of await days.all()) ys.add((await b.boundingBox())?.y ?? -1);
+  expect([...ys]).toHaveLength(1);
+  await expectNoHorizontalScroll(page);
+  await shot(page, "digest-days");
+});
+
 // 003-AC5: the Talk form, with its long setup commands, fits 375 px and Silent is reachable by touch.
 test("the Nextcloud Talk form fits 375 px", async ({ page }) => {
   await page.goto("/channels");

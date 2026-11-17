@@ -433,23 +433,26 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   They wait until every event of the poll is routed (one router pass in practice), then are claimed,
   retried and recorded together; each is `dead` after its own 5th attempt. A poll of one
   event sends the single message. Webhook and script channels get each event alone.
-- Digest: a rule's `delivery` is `immediate` (default) or `digest`, with `at`, 1 to 24 local times (`HH:MM`),
-  and `tz`, an IANA time zone (default `UTC`). A digest rule's deliveries to Telegram, Nextcloud Talk, email
-  and Web Push channels wait for the rule's next time; its webhook and script channels still get each event
-  at once. At a scheduled time each channel sends one message listing its due deliveries, from every digest
+- Digest: a rule's `delivery` is `immediate` (default) or `digest`, with `schedule`, entries `{time, days}` on
+  1 to 24 distinct times (`time` a local `HH:MM`; `days` among `mon`..`sun`, every day when absent or `null`),
+  and `tz`, an IANA time zone (default `UTC`). Entries of one time merge their days; the API returns them sorted
+  by time, days Monday first. A digest rule's deliveries to Telegram, Nextcloud Talk, email and Web Push
+  channels wait for the rule's next time; its webhook and script channels still get each event at once. At a
+  scheduled time each channel sends one message listing its due deliveries, from every digest
   rule, grouped by watch, oldest first, cut on a whole line past the type's cap (Telegram 4096 bytes, Talk
   31000 characters, email 256 KiB or 1000 events) with "+N more" and the inbox link. Web Push sends one
   notification "N unread events" opening the inbox. Only events still unread in the owner's inbox are
   listed: one read or archived meanwhile ends `skipped` (shown as Skipped) with the reason, and an empty
   digest sends nothing. Silent applies. A high priority rule cannot be a digest (400). An event matched by an
   immediate (or high) rule and a digest rule on the same channel is sent once, at once; matched by two digest
-  rules, it waits for the earlier of their next times. Editing a rule's times moves its waiting deliveries
-  to the new next time; switching it to `immediate`, disabling it or deleting it sends them at once.
+  rules, it waits for the earlier of their next times. Editing a rule's times, days or zone moves its waiting
+  deliveries to the new next time; switching it to `immediate`, disabling it or deleting it sends them at once.
   Channels carry no delivery setting (`delivery`, `at` or `tz` in a channel config is a 400) and "Send test"
   sends one test event. Upgrading moves each digest channel's schedule to the rules targeting it, when all
   the digest channels of a rule have one schedule and the rule has no immediate Telegram, Talk, email or Web
   Push channel. Any other rule with a digest channel stays immediate and is named in a `migration_warning`
-  log line: its events then go out at once on every channel. Waiting digest deliveries keep their time.
+  log line: its events then go out at once on every channel. Waiting digest deliveries keep their time. Upgrading
+  to weekday schedules (018) puts every day on each existing time.
 - gedour link: with `GEDOUR_PUBLIC_URL` set, a Telegram, Nextcloud Talk or email message ends with
   "Open in gedour", a link to `<first public URL>/inbox?event=<id>`; a grouped message or a digest ends with
   one "Open the inbox" link to `<first public URL>/inbox` (an email digest's `Inbox:` line is that link). The
@@ -749,6 +752,18 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   to one watch or all watches, scale web and worker to 0, run migration 26's `Down` section by hand (`psql`;
   it refuses a rule on several watches and names it, and changes nothing then), delete version 26 from
   `goose_db_version`, then deploy the older image.
+- Digest weekdays (migration 28). It adds `rules.digest_days`, every day on each existing digest time. During a
+  rolling update, pods of the previous version create digest rules without days (read as every day) and queue
+  digests daily, ignoring days. Their edits keep the stored days by position in the sorted times: a moved time
+  takes the days of the time now at its position, adding or removing a time on a rule with stored days fails
+  (500), and a rule they switch to immediate keeps its days until a new pod saves it. A pre-018 UI's or MCP
+  client's `at` gets a 400 from new pods, a new client's `schedule` a 400 from old ones. A new UI refuses to
+  edit a digest rule an old pod read. A pre-018 UI shows 09:00 for a rule a new pod read, and its save, if an
+  old pod takes it, writes that 09:00 in place of its times (a 500 instead on a rule with stored days and
+  several times). Rollback: edit every
+  rule with restricted days back to every day (an immediate rule that kept days: save it once), scale web and
+  worker to 0, run migration 28's `Down` section by hand (`psql`; it refuses a rule not on every day and names
+  it), delete version 28 from `goose_db_version`, then deploy the older image.
 
 ## Endpoints
 

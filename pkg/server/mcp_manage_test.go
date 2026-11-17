@@ -952,6 +952,30 @@ func TestMCPManageSeveralWatchRule(t *testing.T) {
 	}
 }
 
+// 018-AC1: create_rule takes a schedule and list_rules returns it.
+func TestMCPRuleSchedule(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	key, _ := m.key(t, alice.id, "manage", "")
+	res := m.tool(t, key, "create_rule", map[string]any{"name": "workdays", "delivery": "digest",
+		"schedule": []map[string]any{{"time": "09:00", "days": []string{"fri", "mon", "tue", "wed", "thu"}}}}, nil)
+	if res.IsError {
+		t.Fatalf("create_rule: %+v", res)
+	}
+	res = m.tool(t, key, "list_rules", nil, nil)
+	if res.IsError {
+		t.Fatalf("list_rules: %+v", res)
+	}
+	items, _ := res.data(t).(map[string]any)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("list_rules items %v", items)
+	}
+	got, _ := json.Marshal(items[0].(map[string]any)["schedule"])
+	if want := `[{"days":["mon","tue","wed","thu","fri"],"time":"09:00"}]`; string(got) != want {
+		t.Errorf("list_rules schedule %s, want %s", got, want)
+	}
+}
+
 // 016-AC12: the docs no longer describe the old ban on credentials through a key, hard-wrapped lines included.
 func TestDocsDescribeKeyCredentials(t *testing.T) {
 	stale := []string{"without a credential", "No tool takes a credential", "its config cannot change through a key", "no credential on a key's watch", "three refusals", "cannot attach"}

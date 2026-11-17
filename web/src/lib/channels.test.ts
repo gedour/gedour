@@ -6,7 +6,9 @@ import {
   channelTarget,
   digestErrors,
   digestSummary,
+  EVERY_DAY,
   timeZones,
+  type Weekday,
 } from "@/lib/channels";
 
 describe("channelTarget", () => {
@@ -42,36 +44,83 @@ describe("digest helpers", () => {
 
   // 012-AC13: a digest rule's summary names its times and zone; immediate has none.
   it("summarizes a digest schedule", () => {
-    expect(digestSummary({ delivery: "digest", at: ["09:00", "18:00"], tz: "Europe/Paris" })).toBe(
-      "Digest at 09:00, 18:00 (Europe/Paris)",
-    );
-    expect(digestSummary({ delivery: "digest", at: ["07:30"], tz: "" })).toBe(
+    const at = (...times: string[]) => times.map((time) => ({ time, days: EVERY_DAY }));
+    expect(
+      digestSummary({ delivery: "digest", schedule: at("09:00", "18:00"), tz: "Europe/Paris" }),
+    ).toBe("Digest at 09:00, 18:00 (Europe/Paris)");
+    expect(digestSummary({ delivery: "digest", schedule: at("07:30"), tz: "" })).toBe(
       "Digest at 07:30 (UTC)",
     );
-    expect(digestSummary({ delivery: "immediate", at: [], tz: "" })).toBeNull();
-    expect(digestSummary({ delivery: "digest", at: [], tz: "UTC" })).toBeNull();
+    expect(digestSummary({ delivery: "immediate", schedule: [], tz: "" })).toBeNull();
+    expect(digestSummary({ delivery: "digest", schedule: null, tz: "UTC" })).toBe("Digest (UTC)");
+    expect(digestSummary({ delivery: "digest", schedule: [], tz: "Europe/Paris" })).toBe(
+      "Digest (Europe/Paris)",
+    );
+    // A pre-018 server's rule: no schedule field at all.
+    const old = { delivery: "digest", tz: "" } as Parameters<typeof digestSummary>[0];
+    expect(digestSummary(old)).toBe("Digest (UTC)");
   });
 
-  // 012-AC11: the form refuses what the server refuses (012-AC1), keyed like its field errors.
+  // 018-AC12: days a time does not run on every day of, in runs: 3+ days collapse, 2 are listed, no wrap past Sunday.
+  it("names the days of a digest time", () => {
+    const one = (days: Weekday[] | null) =>
+      digestSummary({ delivery: "digest", schedule: [{ time: "09:00", days }], tz: "UTC" });
+    expect(one(EVERY_DAY)).toBe("Digest at 09:00 (UTC)");
+    expect(one(null)).toBe("Digest at 09:00 (UTC)");
+    expect(one(["mon", "tue", "wed", "thu", "fri"])).toBe("Digest at 09:00 Mon–Fri (UTC)");
+    expect(one(["sat"])).toBe("Digest at 09:00 Sat (UTC)");
+    expect(one(["sat", "sun"])).toBe("Digest at 09:00 Sat, Sun (UTC)");
+    expect(one(["mon", "wed", "fri"])).toBe("Digest at 09:00 Mon, Wed, Fri (UTC)");
+    expect(one(["mon", "tue", "wed", "fri"])).toBe("Digest at 09:00 Mon–Wed, Fri (UTC)");
+    expect(one(["mon", "sat", "sun"])).toBe("Digest at 09:00 Mon, Sat, Sun (UTC)");
+    expect(one(["tue", "wed", "thu", "fri", "sat", "sun"])).toBe("Digest at 09:00 Tue–Sun (UTC)");
+    expect(
+      digestSummary({
+        delivery: "digest",
+        schedule: [
+          { time: "09:00", days: ["mon", "tue", "wed", "thu", "fri"] },
+          { time: "18:00", days: ["sat", "sun"] },
+        ],
+        tz: "Europe/Paris",
+      }),
+    ).toBe("Digest at 09:00 Mon–Fri, 18:00 Sat, Sun (Europe/Paris)");
+  });
+
+  // 012-AC11, 018-AC11: the form refuses what the server refuses (012-AC1, 018-AC3), keyed like its field errors.
   it("mirrors the server's schedule checks", () => {
-    expect(digestErrors(["09:00", "18:00"], "Europe/Paris")).toEqual({});
-    expect(digestErrors(["09:00"], "")).toEqual({});
-    expect(digestErrors([], "UTC")).toEqual({ at: "at least one time of day" });
-    expect(digestErrors(["24:00", "9:00", "", "09:00", "09:00"], "UTC")).toEqual({
-      "at[0]": "a local time as HH:MM, e.g. 09:00",
-      "at[1]": "a local time as HH:MM, e.g. 09:00",
-      "at[2]": "a local time as HH:MM, e.g. 09:00",
-      "at[4]": "09:00 is already listed",
+    const at = (...times: string[]) => times.map((time) => ({ time, days: EVERY_DAY }));
+    expect(digestErrors(at("09:00", "18:00"), "Europe/Paris")).toEqual({});
+    expect(digestErrors(at("09:00"), "")).toEqual({});
+    expect(digestErrors([], "UTC")).toEqual({ schedule: "at least one time of day" });
+    expect(digestErrors(at("24:00", "9:00", "", "09:00", "09:00"), "UTC")).toEqual({
+      "schedule[0].time": "a local time as HH:MM, e.g. 09:00",
+      "schedule[1].time": "a local time as HH:MM, e.g. 09:00",
+      "schedule[2].time": "a local time as HH:MM, e.g. 09:00",
+      "schedule[4].time": "09:00 is already listed",
     });
-    const many = Array.from(
-      { length: 25 },
-      (_, i) => `${String(i % 24).padStart(2, "0")}:0${i >= 24 ? 1 : 0}`,
+    expect(
+      digestErrors(
+        [
+          { time: "09:00", days: ["mon"] },
+          { time: "", days: [] },
+        ],
+        "UTC",
+      ),
+    ).toEqual({
+      "schedule[1].time": "a local time as HH:MM, e.g. 09:00",
+      "schedule[1].days": "at least one day",
+    });
+    const many = at(
+      ...Array.from(
+        { length: 25 },
+        (_, i) => `${String(i % 24).padStart(2, "0")}:0${i >= 24 ? 1 : 0}`,
+      ),
     );
-    expect(digestErrors(many, "UTC")).toEqual({ at: "at most 24 times" });
+    expect(digestErrors(many, "UTC")).toEqual({ schedule: "at most 24 times" });
     expect(digestErrors(many.slice(0, 24), "UTC")).toEqual({});
     // Valid in Go though Intl renames them.
     for (const tz of ["Asia/Kolkata", "Etc/UTC", "UTC", "EST5EDT"])
-      expect(digestErrors(["09:00"], tz)).toEqual({});
+      expect(digestErrors([{ time: "09:00", days: ["sun"] }], tz)).toEqual({});
     for (const tz of [
       "Local",
       "Mars/Olympus",
@@ -82,7 +131,9 @@ describe("digest helpers", () => {
       "asia/kolkata",
       "etc/utc",
     ])
-      expect(digestErrors(["09:00"], tz)).toEqual({ tz: "an IANA time zone, e.g. Europe/Paris" });
+      expect(digestErrors([{ time: "09:00", days: ["sun"] }], tz)).toEqual({
+        tz: "an IANA time zone, e.g. Europe/Paris",
+      });
   });
 
   it("defaults to the browser's zone and lists zones where it can", () => {

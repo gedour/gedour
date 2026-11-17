@@ -31,7 +31,13 @@ import {
 } from "@/api/client";
 import { ChannelIcon, DeliveryLogs } from "@/components/ChannelBits";
 import { DeliveryFields } from "@/components/DeliveryFields";
-import { browserTimeZone, channelTarget, digestErrors } from "@/lib/channels";
+import {
+  browserTimeZone,
+  channelTarget,
+  digestErrors,
+  EVERY_DAY,
+  type DigestTime,
+} from "@/lib/channels";
 import { ErrorState } from "@/components/ErrorState";
 import { FilterReference } from "@/components/FilterReference";
 import { MAX_PICKS, WatchPicker } from "@/components/WatchPicker";
@@ -79,6 +85,18 @@ export function RuleFormPage() {
       </Page>
     );
   }
+  // A pre-018 server answers `at`, not `schedule`: seeding the default would overwrite the rule on save.
+  if (query.data.delivery === "digest" && !query.data.schedule?.length) {
+    return (
+      <Page title="Edit rule">
+        <ErrorState
+          title="The rule could not be loaded."
+          error={new Error("The server sent no digest schedule. Retry in a moment.")}
+          onRetry={() => void query.refetch()}
+        />
+      </Page>
+    );
+  }
   return <RuleForm key={query.data.id} initial={query.data} />;
 }
 
@@ -118,7 +136,13 @@ function RuleForm({ initial }: { initial?: Rule }) {
   const [priority, setPriority] = useState<Rule["priority"]>(initial?.priority ?? "normal");
   const [channelIds, setChannelIds] = useState<string[]>(initial?.channel_ids ?? []);
   const [digest, setDigest] = useState(initial?.delivery === "digest");
-  const [times, setTimes] = useState<string[]>(initial?.at?.length ? initial.at : ["09:00"]);
+  const [schedule, setSchedule] = useState<DigestTime[]>(() =>
+    initial?.schedule?.length
+      ? initial.schedule.map((e) => ({ time: e.time, days: e.days ?? EVERY_DAY }))
+      : [{ time: "09:00", days: EVERY_DAY }],
+  );
+  // The rows a save was checked against: server row errors are indexed by them.
+  const [sentSchedule, setSentSchedule] = useState<DigestTime[] | null>(null);
   const [tz, setTz] = useState(initial?.tz || browserTimeZone);
   // 012-AC14: high priority already sends at once, so it locks the rule to immediate.
   const digestOn = digest && priority !== "high";
@@ -162,7 +186,7 @@ function RuleForm({ initial }: { initial?: Rule }) {
         channel_ids: channelIds,
         watch_ids: sent.map((p) => p.id),
         ...(digestOn
-          ? { delivery: "digest" as const, at: times, tz: tz.trim() || "UTC" }
+          ? { delivery: "digest" as const, schedule, tz: tz.trim() || "UTC" }
           : { delivery: "immediate" as const }),
       };
       return initial ? updateRule(initial.id, body) : createRule(body);
@@ -207,12 +231,13 @@ function RuleForm({ initial }: { initial?: Rule }) {
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const local: Record<string, string> = digestOn ? digestErrors(times, tz.trim()) : {};
+    const local: Record<string, string> = digestOn ? digestErrors(schedule, tz.trim()) : {};
     // 014-AC13: an empty pick would save as all watches.
     if (!allWatches && picks.length === 0)
       local.watch_ids = "Pick at least one watch, or choose All watches.";
     if (!allWatches && picks.length > MAX_PICKS)
       local.watch_ids = `A rule takes ${MAX_PICKS} watches at most: unpick ${picks.length - MAX_PICKS}.`;
+    setSentSchedule(schedule);
     setErrors(local);
     if (Object.keys(local).length === 0) save.mutate(allWatches ? [] : picks);
   };
@@ -237,6 +262,11 @@ function RuleForm({ initial }: { initial?: Rule }) {
     setErrors((e) =>
       Object.fromEntries(Object.entries(e).filter(([k]) => !k.startsWith("watch_ids"))),
     );
+  // Rows changed since the save (setSchedule always makes a new array): their errors go to the top.
+  const rowErrorKeys =
+    schedule === sentSchedule
+      ? schedule.flatMap((_, i) => [`schedule[${i}].time`, `schedule[${i}].days`])
+      : [];
   const watchErrors = Object.entries(errors).filter(
     ([k]) => k === "watch_ids" || k.startsWith("watch_ids["),
   );
@@ -251,9 +281,9 @@ function RuleForm({ initial }: { initial?: Rule }) {
           "filter",
           "channel_ids",
           "delivery",
-          "at",
+          "schedule",
           "tz",
-          ...Object.keys(errors).filter((k) => k.startsWith("at[")),
+          ...rowErrorKeys,
         ]).map((m) => (
           <p key={m} role="alert" className="text-sm text-rose-700 dark:text-rose-300">
             {m}
@@ -465,19 +495,23 @@ function RuleForm({ initial }: { initial?: Rule }) {
             }
             digest={digest}
             setDigest={setDigest}
-            times={times}
-            setTimes={(v) => {
-              setTimes(v);
+            schedule={schedule}
+            setSchedule={(v) => {
+              setSchedule(v);
               // A schedule error is about the rows that were there: it goes when they change.
               setErrors((e) =>
                 Object.fromEntries(
-                  Object.entries(e).filter(([k]) => k !== "at" && !k.startsWith("at[")),
+                  Object.entries(e).filter(([k]) => k !== "schedule" && !k.startsWith("schedule[")),
                 ),
               );
             }}
             tz={tz}
             setTz={setTz}
-            errors={errors}
+            errors={Object.fromEntries(
+              Object.entries(errors).filter(
+                ([k]) => !k.startsWith("schedule[") || rowErrorKeys.includes(k),
+              ),
+            )}
           />
         </section>
 

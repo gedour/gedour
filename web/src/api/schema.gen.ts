@@ -1152,12 +1152,10 @@ export interface components {
       username?: string;
     };
     CreateRuleInputBody: {
-      /** @description Digest only: 1 to 24 local times HH:MM */
-      at?: string[] | null;
       /** @description The caller's channels */
       channel_ids?: string[] | null;
       /**
-       * @description digest needs at, and priority normal
+       * @description digest needs schedule, and priority normal
        * @default immediate
        * @enum {string}
        */
@@ -1171,6 +1169,8 @@ export interface components {
        * @enum {string}
        */
       priority: "normal" | "high";
+      /** @description Digest only: 1 to 24 distinct times; entries of one time merge their days */
+      schedule?: components["schemas"]["ScheduleEntryInput"][] | null;
       /** @description Digest only: IANA time zone, default UTC */
       tz?: string;
       /**
@@ -1678,14 +1678,12 @@ export interface components {
       name: string;
     };
     Rule: {
-      /** @description Digest: the local times of day, HH:MM, sorted; empty when immediate */
-      at: string[] | null;
       /** @description Channels besides the inbox, which is always on */
       channel_ids: string[] | null;
       /** Format: date-time */
       created_at: string;
       /**
-       * @description digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once
+       * @description digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the schedule's times; webhook and script channels still get each at once
        * @enum {string}
        */
       delivery: "immediate" | "digest";
@@ -1700,7 +1698,9 @@ export interface components {
        * @enum {string}
        */
       priority: "normal" | "high";
-      /** @description Digest: the IANA time zone of at; empty when immediate */
+      /** @description Digest: the send times, sorted, one per time; empty when immediate */
+      schedule: components["schemas"]["ScheduleEntry"][] | null;
+      /** @description Digest: the IANA time zone of schedule; empty when immediate */
       tz: string;
       /** Format: date-time */
       updated_at: string;
@@ -1774,6 +1774,18 @@ export interface components {
         | "gitlab_mr"
         | "oci_tags";
       name: string;
+    };
+    ScheduleEntry: {
+      /** @description Monday first */
+      days: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[] | null;
+      /** @description Local time of day, HH:MM */
+      time: string;
+    };
+    ScheduleEntryInput: {
+      /** @description Absent or null: every day */
+      days?: ("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")[] | null;
+      /** @description Local time of day, HH:MM */
+      time: string;
     };
     Script: {
       /** @description The script channels that run it */
@@ -1868,12 +1880,10 @@ export interface components {
       secret?: string;
     };
     UpdateRuleInputBody: {
-      /** @description Digest only: replaces the times */
-      at?: string[] | null;
       /** @description Replaces the list; [] keeps the inbox only */
       channel_ids?: string[] | null;
       /**
-       * @description immediate clears at and tz
+       * @description immediate clears schedule and tz
        * @enum {string}
        */
       delivery?: "immediate" | "digest";
@@ -1882,6 +1892,8 @@ export interface components {
       name?: string;
       /** @enum {string} */
       priority?: "normal" | "high";
+      /** @description Digest only: replaces the whole schedule */
+      schedule?: components["schemas"]["ScheduleEntryInput"][] | null;
       /** @description Digest only: empty string for UTC */
       tz?: string;
       /**

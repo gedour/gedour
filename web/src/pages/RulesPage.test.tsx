@@ -440,6 +440,30 @@ describe("RuleFormPage", () => {
     expect(await screen.findByRole("heading", { name: "Edit Releases" })).toBeInTheDocument();
   });
 
+  it.each([
+    ["no schedule", { at: ["07:30"] }],
+    ["an empty schedule", { schedule: [] }],
+  ])("refuses to edit a digest rule sent with %s", async (_, shape) => {
+    const old = { ...rule({ id: "r9", delivery: "digest" }), schedule: undefined, ...shape };
+    let calls = 0;
+    mockApi({
+      "/api/v1/rules/r9": () =>
+        Response.json(
+          calls++
+            ? rule({ id: "r9", delivery: "digest", schedule: [{ time: "07:30", days: ["mon"] }] })
+            : old,
+        ),
+      "/api/v1/rules/preview": { items: [] },
+    });
+    renderApp("/rules/r9");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The server sent no digest schedule.",
+    );
+    expect(screen.queryByLabelText(/^Time 1/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { name: "Edit Releases" })).toBeInTheDocument();
+  });
+
   it("says when a delete fails", async () => {
     mockApi({
       "/api/v1/rules/r1": (_: URL, init?: RequestInit) =>
@@ -533,7 +557,10 @@ describe("RuleFormPage", () => {
     expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
       name: "New",
       delivery: "digest",
-      at: ["09:00", "18:00"],
+      schedule: [
+        { time: "09:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] },
+        { time: "18:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] },
+      ],
       tz: "Europe/Paris",
     });
   });
@@ -545,7 +572,7 @@ describe("RuleFormPage", () => {
       "/api/v1/rules": (_: URL, init?: RequestInit) =>
         init?.method === "POST"
           ? problem(400, "invalid rule", [
-              { location: "body.at[0]", message: "server says no" },
+              { location: "body.schedule[0].time", message: "server says no" },
               { location: "body.delivery", message: "digest refused" },
             ])
           : Response.json({ items: [] }),
@@ -571,14 +598,22 @@ describe("RuleFormPage", () => {
     expect(screen.queryByText("server says no")).not.toBeInTheDocument();
     expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
       delivery: "digest",
-      at: ["09:00"],
+      schedule: [{ time: "09:00", days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }],
       tz: "UTC",
     });
   });
 
-  // 012-AC13, 012-AC18: the list names the schedule; editing shows it back, and Immediate drops at and tz.
+  // 012-AC13, 012-AC18, 018-AC12: the list names the schedule and its days; editing shows it back, and Immediate
+  // drops schedule and tz.
   it("shows and edits a digest rule's schedule", async () => {
-    const digest = rule({ delivery: "digest", at: ["09:00", "18:00"], tz: "Europe/Paris" });
+    const digest = rule({
+      delivery: "digest",
+      schedule: [
+        { time: "09:00", days: ["mon", "tue", "wed", "thu", "fri"] },
+        { time: "18:00", days: ["sat", "sun"] },
+      ],
+      tz: "Europe/Paris",
+    });
     const fn = mockApi({
       "/api/v1/rules": { items: [digest] },
       "/api/v1/rules/r1": () => Response.json(digest),
@@ -586,11 +621,25 @@ describe("RuleFormPage", () => {
     });
     const { router } = renderApp("/rules");
     const list = await screen.findByRole("list", { name: "Rules" });
-    expect(within(list).getByText("Digest at 09:00, 18:00 (Europe/Paris)")).toBeInTheDocument();
+    expect(
+      within(list).getByText("Digest at 09:00 Mon–Fri, 18:00 Sat, Sun (Europe/Paris)"),
+    ).toBeInTheDocument();
     await router.navigate("/rules/r1");
     expect(await screen.findByRole("radio", { name: /^Digest/ })).toBeChecked();
     expect(screen.getByLabelText("Time 1")).toHaveValue("09:00");
     expect(screen.getByLabelText("Time 2")).toHaveValue("18:00");
+    expect(screen.getByRole("button", { name: "Friday, time 1" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Saturday, time 1" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Saturday, time 2" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByLabelText("Time zone")).toHaveValue("Europe/Paris");
     await userEvent.click(screen.getByRole("radio", { name: /^Immediate/ }));
     expect(screen.queryByLabelText("Time zone")).not.toBeInTheDocument();
@@ -598,7 +647,7 @@ describe("RuleFormPage", () => {
     await waitFor(() => expect(lastCall(fn, "/api/v1/rules/r1", "PATCH")).toBeDefined());
     const body = lastCall(fn, "/api/v1/rules/r1", "PATCH")?.body as Record<string, unknown>;
     expect(body.delivery).toBe("immediate");
-    expect(body).not.toHaveProperty("at");
+    expect(body).not.toHaveProperty("schedule");
     expect(body).not.toHaveProperty("tz");
   });
 
@@ -627,7 +676,145 @@ describe("RuleFormPage", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
     const body = lastCall(fn, "/api/v1/rules", "POST")?.body as Record<string, unknown>;
     expect(body).toMatchObject({ priority: "high", delivery: "immediate" });
-    expect(body).not.toHaveProperty("at");
+    expect(body).not.toHaveProperty("schedule");
+  });
+
+  // 018-AC11: seven day toggles per time, all pressed for a new one; the saved rule matches the toggles.
+  it("sends the days toggled on each digest time", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? Response.json(rule({ name: "Days" }), { status: 201 })
+          : Response.json({ items: [] }),
+    });
+    const { router } = renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "Days");
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    for (const n of [1, 2]) {
+      const days = within(screen.getByRole("group", { name: `Days, time ${n}` })).getAllByRole(
+        "button",
+      );
+      expect(days.map((b) => b.textContent)).toEqual([
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+        "Sun",
+      ]);
+      for (const b of days) expect(b).toHaveAttribute("aria-pressed", "true");
+    }
+    await userEvent.type(screen.getByLabelText("Time 2"), "18:00");
+    for (const d of ["Sunday", "Saturday"])
+      await userEvent.click(screen.getByRole("button", { name: `${d}, time 1` }));
+    for (const d of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"])
+      await userEvent.click(screen.getByRole("button", { name: `${d}, time 2` }));
+    // Off then on again: it goes back to its place in the week.
+    await userEvent.click(screen.getByRole("button", { name: "Wednesday, time 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Wednesday, time 1" }));
+    expect(screen.getByRole("button", { name: "Saturday, time 1" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/rules"));
+    expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
+      schedule: [
+        { time: "09:00", days: ["mon", "tue", "wed", "thu", "fri"] },
+        { time: "18:00", days: ["sat", "sun"] },
+      ],
+    });
+  });
+
+  // 018-AC11: a time with no day is refused before sending; the server's days error lands on its row.
+  it("refuses a digest time with no day and places the server's days error", async () => {
+    const fn = mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? problem(400, "invalid rule", [
+              { location: "body.schedule[0].days", message: "server wants a day" },
+            ])
+          : Response.json({ items: [] }),
+    });
+    renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "None");
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    const group = screen.getByRole("group", { name: "Days, time 1" });
+    const live = group.closest("li")?.querySelector('[aria-live="polite"]');
+    expect(live).toBeInTheDocument();
+    expect(live).toBeEmptyDOMElement();
+    for (const b of within(group).getAllByRole("button")) await userEvent.click(b);
+    // Shown, and announced, as the last day goes, before any save.
+    expect(live).toHaveTextContent("at least one day");
+    expect(group).toHaveAccessibleDescription("at least one day");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    expect(group).toHaveAccessibleDescription("at least one day");
+    expect(lastCall(fn, "/api/v1/rules", "POST")).toBeUndefined();
+
+    // A toggle changes the row: its error goes.
+    await userEvent.click(screen.getByRole("button", { name: "Monday, time 1" }));
+    expect(screen.queryByText("at least one day")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    expect(await screen.findByText("server wants a day")).toBeInTheDocument();
+    expect(group).toHaveAccessibleDescription("server wants a day");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(lastCall(fn, "/api/v1/rules", "POST")?.body).toMatchObject({
+      schedule: [{ time: "09:00", days: ["mon"] }],
+    });
+  });
+
+  // 018-AC11: a row removed while the save is pending leaves its server error in the top alert.
+  it("shows a removed row's server error at the top", async () => {
+    let answer: (r: Response) => void = () => {};
+    mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? new Promise<Response>((r) => (answer = r))
+          : Response.json({ items: [] }),
+    });
+    renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "Gone");
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    await userEvent.type(screen.getByLabelText("Time 2"), "18:00");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await screen.findByRole("button", { name: "Saving…" });
+    await userEvent.click(screen.getByRole("button", { name: "Remove time 2" }));
+    answer(
+      problem(400, "invalid rule", [{ location: "body.schedule[1].days", message: "no day" }]),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("schedule[1].days: no day");
+  });
+
+  // 018-AC11: an earlier row removed while the save is pending: its error does not move to the row now at its index.
+  it("keeps a removed first row's server error off the row that took its place", async () => {
+    let answer: (r: Response) => void = () => {};
+    mockApi({
+      "/api/v1/rules/preview": { items: [] },
+      "/api/v1/rules": (_: URL, init?: RequestInit) =>
+        init?.method === "POST"
+          ? new Promise<Response>((r) => (answer = r))
+          : Response.json({ items: [] }),
+    });
+    renderApp("/rules/new");
+    await userEvent.type(await screen.findByLabelText("Name"), "Shift");
+    await userEvent.click(screen.getByRole("radio", { name: /^Digest/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a time" }));
+    await userEvent.type(screen.getByLabelText("Time 2"), "18:00");
+    await userEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await screen.findByRole("button", { name: "Saving…" });
+    await userEvent.click(screen.getByRole("button", { name: "Remove time 1" }));
+    answer(
+      problem(400, "invalid rule", [{ location: "body.schedule[0].time", message: "bad 09:00" }]),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("schedule[0].time: bad 09:00");
+    expect(screen.getByLabelText("Time 1")).toHaveValue("18:00");
+    expect(screen.getByLabelText("Time 1")).not.toHaveAttribute("aria-invalid");
   });
 
   // 012-AC13: focus follows the rows: a new row takes it, a removed one hands it back.

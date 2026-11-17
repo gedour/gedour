@@ -6,6 +6,7 @@ bin/
 *.test
 *.out
 coverage.txt
+*.tsbuildinfo
 web/node_modules/
 web/dist/*
 !web/dist/.gitkeep

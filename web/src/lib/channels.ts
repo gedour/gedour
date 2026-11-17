@@ -60,10 +60,49 @@ export function channelTarget(
 
 export const MAX_DIGEST_TIMES = 24;
 
-/** "Digest at 09:00, 18:00 (Europe/Paris)" for a digest rule, null for an immediate one. */
-export function digestSummary(r: Pick<Rule, "delivery" | "at" | "tz">): string | null {
-  if (r.delivery !== "digest" || !r.at?.length) return null;
-  return `Digest at ${r.at.join(", ")} (${r.tz || "UTC"})`;
+/** The week, Monday first (ISO 8601), as the API orders days. */
+export const WEEKDAYS = [
+  { id: "mon", short: "Mon", label: "Monday" },
+  { id: "tue", short: "Tue", label: "Tuesday" },
+  { id: "wed", short: "Wed", label: "Wednesday" },
+  { id: "thu", short: "Thu", label: "Thursday" },
+  { id: "fri", short: "Fri", label: "Friday" },
+  { id: "sat", short: "Sat", label: "Saturday" },
+  { id: "sun", short: "Sun", label: "Sunday" },
+] as const;
+export type Weekday = (typeof WEEKDAYS)[number]["id"];
+export const EVERY_DAY: Weekday[] = WEEKDAYS.map((d) => d.id);
+
+/** A digest time as the form edits it: days always listed, Monday first. */
+export interface DigestTime {
+  time: string;
+  days: Weekday[];
+}
+
+/** "Mon–Fri", "Sat, Sun", "Mon, Wed, Fri": runs of 3+ days collapse; the week starts Monday, so Sat–Mon does not wrap. */
+function dayRanges(days: readonly Weekday[]): string {
+  const on = WEEKDAYS.map((d) => days.includes(d.id));
+  const out: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    if (!on[i]) continue;
+    let j = i;
+    while (j < 6 && on[j + 1]) j++;
+    const run = WEEKDAYS.slice(i, j + 1).map((d) => d.short);
+    out.push(run.length >= 3 ? `${run[0]}–${run.at(-1)}` : run.join(", "));
+    i = j;
+  }
+  return out.join(", ");
+}
+
+/** "Digest at 09:00 Mon–Fri, 18:00 Sat, Sun (Europe/Paris)" for a digest rule, null for an immediate one; an every-day time names no days. */
+export function digestSummary(r: Pick<Rule, "delivery" | "schedule" | "tz">): string | null {
+  if (r.delivery !== "digest") return null;
+  // A pre-018 server sends `at`, not `schedule`: still a digest, times unknown.
+  if (!r.schedule?.length) return `Digest (${r.tz || "UTC"})`;
+  const times = r.schedule.map((e) =>
+    !e.days || e.days.length >= 7 ? e.time : `${e.time} ${dayRanges(e.days)}`,
+  );
+  return `Digest at ${times.join(", ")} (${r.tz || "UTC"})`;
 }
 
 /** The browser's zone, the form's default for a new digest. */
@@ -92,15 +131,17 @@ function knownTimeZone(tz: string): boolean {
 }
 
 /** The server's digest checks (pkg/route/digest.go), plus duplicate times; keyed like its field errors, empty tz means UTC. */
-export function digestErrors(at: string[], tz: string): Record<string, string> {
+export function digestErrors(schedule: DigestTime[], tz: string): Record<string, string> {
   const out: Record<string, string> = {};
-  at.forEach((v, i) => {
-    if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v))
-      out[`at[${i}]`] = "a local time as HH:MM, e.g. 09:00";
-    else if (at.indexOf(v) < i) out[`at[${i}]`] = `${v} is already listed`;
+  const times = schedule.map((e) => e.time);
+  schedule.forEach(({ time, days }, i) => {
+    if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time))
+      out[`schedule[${i}].time`] = "a local time as HH:MM, e.g. 09:00";
+    else if (times.indexOf(time) < i) out[`schedule[${i}].time`] = `${time} is already listed`;
+    if (days.length === 0) out[`schedule[${i}].days`] = "at least one day";
   });
-  if (at.length === 0) out.at = "at least one time of day";
-  else if (at.length > MAX_DIGEST_TIMES) out.at = `at most ${MAX_DIGEST_TIMES} times`;
+  if (schedule.length === 0) out.schedule = "at least one time of day";
+  else if (schedule.length > MAX_DIGEST_TIMES) out.schedule = `at most ${MAX_DIGEST_TIMES} times`;
   if (tz && (tz === "Local" || !knownTimeZone(tz))) out.tz = "an IANA time zone, e.g. Europe/Paris";
   return out;
 }

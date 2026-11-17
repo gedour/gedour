@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -29,32 +30,95 @@ var digestTimeRe = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 // its events at once (012-AC15).
 var digestTypes = []string{notify.TypeTelegram, notify.TypeNextcloudTalk, notify.TypeEmail, notify.TypeWebPush}
 
-// schedule is a digest rule's daily send times.
-type schedule struct {
-	At []string
-	TZ string
+// weekdays are a schedule's day names, Monday first; bit i of a day mask is weekdays[i] (018).
+var weekdays = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+
+const everyDay = 0b1111111
+
+// ScheduleEntry is one digest time and the weekdays it runs on.
+type ScheduleEntry struct {
+	Time string   `json:"time" doc:"Local time of day, HH:MM"`
+	Days []string `json:"days" enum:"mon,tue,wed,thu,fri,sat,sun" doc:"Monday first"`
 }
 
-// checkSchedule validates a rule's digest times and zone, normalized: sorted, deduplicated, UTC by default
-// (012-AC13). Error locations are the rule body's.
-func checkSchedule(at []string, tz string) (*schedule, []error) {
-	var errs []error
-	s := &schedule{TZ: "UTC", At: []string{}}
-	for i, v := range at {
-		if !digestTimeRe.MatchString(v) {
-			errs = append(errs, &huma.ErrorDetail{Location: "body.at[" + strconv.Itoa(i) + "]", Message: "a local time as HH:MM, e.g. 09:00", Value: v})
-			continue
-		}
-		if !slices.Contains(s.At, v) {
-			s.At = append(s.At, v)
+// ScheduleEntryInput is a ScheduleEntry as a rule body sends it.
+type ScheduleEntryInput struct {
+	Time string   `json:"time" doc:"Local time of day, HH:MM"`
+	Days []string `json:"days,omitempty" enum:"mon,tue,wed,thu,fri,sat,sun" minItems:"1" maxItems:"28" doc:"Absent or null: every day"`
+}
+
+// digestDaysSQL reads rule r's day masks; NULL is every day, as a pre-018 binary writes digest rules without them.
+const digestDaysSQL = `COALESCE(r.digest_days, array_fill(127::smallint, ARRAY[cardinality(COALESCE(r.digest_at, '{}'))]))`
+
+// schedule is a digest rule's send times, each with its weekday mask, as stored in digest_at and digest_days.
+type schedule struct {
+	At   []string
+	Days []int16
+	TZ   string
+}
+
+// entries is s in the API's form.
+func (s schedule) entries() []ScheduleEntry {
+	out := make([]ScheduleEntry, len(s.At))
+	for i, hm := range s.At {
+		out[i] = ScheduleEntry{Time: hm, Days: []string{}}
+		if i < len(s.Days) {
+			for b, d := range weekdays {
+				if s.Days[i]&(1<<b) != 0 {
+					out[i].Days = append(out[i].Days, d)
+				}
+			}
 		}
 	}
-	slices.Sort(s.At)
+	return out
+}
+
+// dayMask is the mask of days, every day when nil.
+func dayMask(days []string, loc string) (int16, []error) {
+	if days == nil {
+		return everyDay, nil
+	}
+	if len(days) == 0 {
+		return 0, []error{&huma.ErrorDetail{Location: loc, Message: "at least one day, e.g. [\"mon\"]", Value: days}}
+	}
+	var mask int16
+	var errs []error
+	for j, d := range days {
+		b := slices.Index(weekdays, d)
+		if b < 0 {
+			errs = append(errs, &huma.ErrorDetail{Location: loc + "[" + strconv.Itoa(j) + "]", Message: "a day among mon, tue, wed, thu, fri, sat, sun", Value: d})
+			continue
+		}
+		mask |= 1 << b
+	}
+	return mask, errs
+}
+
+// checkSchedule validates a rule's digest times and zone, normalized: sorted, one entry per time with the union of
+// its days, UTC by default (012-AC13, 018-AC2, 018-AC4). Error locations are the rule body's.
+func checkSchedule(in []ScheduleEntryInput, tz string) (*schedule, []error) {
+	var errs []error
+	masks := map[string]int16{}
+	for i, e := range in {
+		loc := "body.schedule[" + strconv.Itoa(i) + "]"
+		mask, derrs := dayMask(e.Days, loc+".days")
+		errs = append(errs, derrs...)
+		if !digestTimeRe.MatchString(e.Time) {
+			errs = append(errs, &huma.ErrorDetail{Location: loc + ".time", Message: "a local time as HH:MM, e.g. 09:00", Value: e.Time})
+			continue
+		}
+		masks[e.Time] |= mask
+	}
+	s := &schedule{TZ: "UTC", At: slices.Sorted(maps.Keys(masks))}
+	s.Days = make([]int16, len(s.At))
+	for i, hm := range s.At {
+		s.Days[i] = masks[hm]
+	}
 	switch {
-	case len(at) == 0:
-		errs = append(errs, &huma.ErrorDetail{Location: "body.at", Message: "at least one time of day, e.g. [\"09:00\"]", Value: at})
+	case len(in) == 0:
+		errs = append(errs, &huma.ErrorDetail{Location: "body.schedule", Message: "at least one time of day, e.g. [{\"time\": \"09:00\"}]", Value: in})
 	case len(s.At) > maxDigestTimes:
-		errs = append(errs, &huma.ErrorDetail{Location: "body.at", Message: fmt.Sprintf("at most %d times", maxDigestTimes), Value: len(s.At)})
+		errs = append(errs, &huma.ErrorDetail{Location: "body.schedule", Message: fmt.Sprintf("at most %d times", maxDigestTimes), Value: len(s.At)})
 	}
 	if tz != "" {
 		// "Local" is the server's zone, not a place the user picked.
@@ -73,25 +137,38 @@ func (s schedule) next(t time.Time, load func(string) (*time.Location, error)) (
 	if len(s.At) == 0 {
 		return time.Time{}, errors.New("digest schedule: no time of day")
 	}
-	for _, hm := range s.At {
+	if len(s.Days) != len(s.At) {
+		return time.Time{}, fmt.Errorf("digest schedule: %d day masks for %d times", len(s.Days), len(s.At))
+	}
+	for i, hm := range s.At {
 		if !digestTimeRe.MatchString(hm) {
 			return time.Time{}, fmt.Errorf("digest schedule: time %q is not HH:MM", hm)
+		}
+		if s.Days[i] <= 0 || s.Days[i] > everyDay {
+			return time.Time{}, fmt.Errorf("digest schedule: day mask %d of %s", s.Days[i], hm)
 		}
 	}
 	loc, err := load(s.TZ)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("digest time zone: %w", err)
 	}
-	return nextAt(s.At, loc, t), nil
+	return nextAt(s.At, s.Days, loc, t), nil
 }
 
-// nextAt is the first of the daily wall times at (HH:MM) in loc strictly after t. A time skipped by a
-// spring-forward falls on the instant the clock jumps; one repeated by a fall-back takes its first occurrence.
-func nextAt(at []string, loc *time.Location, t time.Time) time.Time {
+// nextAt is the first of the wall times at (HH:MM) in loc strictly after t, on a day of its mask in days (bit 0
+// Monday). A time skipped by a spring-forward falls on the instant the clock jumps; one repeated by a fall-back
+// takes its first occurrence.
+func nextAt(at []string, days []int16, loc *time.Location, t time.Time) time.Time {
 	var best time.Time
 	local := t.In(loc)
-	for day := range 2 {
-		for _, hm := range at {
+	// 8 days: a time on today's weekday only, already past, comes back in a week.
+	for day := range 8 {
+		// The calendar date's weekday, whatever the zone does to the instant.
+		bit := int16(1) << ((time.Date(local.Year(), local.Month(), local.Day()+day, 12, 0, 0, 0, time.UTC).Weekday() + 6) % 7)
+		for i, hm := range at {
+			if days[i]&bit == 0 {
+				continue
+			}
 			h, _ := strconv.Atoi(hm[:2])
 			m, _ := strconv.Atoi(hm[3:])
 			c := wallTime(local.Year(), local.Month(), local.Day()+day, h, m, loc)

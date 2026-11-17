@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,21 +36,21 @@ const (
 
 // Rule is a routing rule: events of its scope that pass its filter go to the owner's inbox and channels.
 type Rule struct {
-	ID         string      `json:"id" format:"uuid"`
-	Name       string      `json:"name"`
-	WatchIDs   []string    `json:"watch_ids" doc:"Sorted; empty: every watch of the owner"`
-	Watches    []RuleWatch `json:"watches" doc:"The listed watches, sorted like watch_ids"`
-	WatchID    *string     `json:"watch_id" format:"uuid" nullable:"true" deprecated:"true" doc:"Deprecated, use watch_ids: the watch of a one-watch rule, null for all watches and for several; a reader of this field alone takes a several-watch rule for all watches"`
-	WatchName  *string     `json:"watch_name" nullable:"true" deprecated:"true" doc:"Deprecated, use watches: the name of a one-watch rule's watch, null otherwise or while the owner no longer owns it"`
-	Filter     string      `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
-	Enabled    bool        `json:"enabled"`
-	Priority   string      `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
-	ChannelIDs []string    `json:"channel_ids" doc:"Channels besides the inbox, which is always on"`
-	Delivery   string      `json:"delivery" enum:"immediate,digest" doc:"digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the at times; webhook and script channels still get each at once"`
-	At         []string    `json:"at" doc:"Digest: the local times of day, HH:MM, sorted; empty when immediate"`
-	TZ         string      `json:"tz" doc:"Digest: the IANA time zone of at; empty when immediate"`
-	CreatedAt  time.Time   `json:"created_at"`
-	UpdatedAt  time.Time   `json:"updated_at"`
+	ID         string          `json:"id" format:"uuid"`
+	Name       string          `json:"name"`
+	WatchIDs   []string        `json:"watch_ids" doc:"Sorted; empty: every watch of the owner"`
+	Watches    []RuleWatch     `json:"watches" doc:"The listed watches, sorted like watch_ids"`
+	WatchID    *string         `json:"watch_id" format:"uuid" nullable:"true" deprecated:"true" doc:"Deprecated, use watch_ids: the watch of a one-watch rule, null for all watches and for several; a reader of this field alone takes a several-watch rule for all watches"`
+	WatchName  *string         `json:"watch_name" nullable:"true" deprecated:"true" doc:"Deprecated, use watches: the name of a one-watch rule's watch, null otherwise or while the owner no longer owns it"`
+	Filter     string          `json:"filter" doc:"expr expression over event and watch; empty matches every event"`
+	Enabled    bool            `json:"enabled"`
+	Priority   string          `json:"priority" enum:"normal,high" doc:"high marks the inbox items of the events this rule takes; set at routing, existing items keep theirs"`
+	ChannelIDs []string        `json:"channel_ids" doc:"Channels besides the inbox, which is always on"`
+	Delivery   string          `json:"delivery" enum:"immediate,digest" doc:"digest: Telegram, Nextcloud Talk, email and Web Push channels get this rule's events in one message at the schedule's times; webhook and script channels still get each at once"`
+	Schedule   []ScheduleEntry `json:"schedule" doc:"Digest: the send times, sorted, one per time; empty when immediate"`
+	TZ         string          `json:"tz" doc:"Digest: the IANA time zone of schedule; empty when immediate"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 type ruleOutput struct {
@@ -64,32 +65,32 @@ type listRulesOutput struct {
 
 type createRuleInput struct {
 	Body struct {
-		Name       string   `json:"name" minLength:"1" maxLength:"200"`
-		WatchIDs   []string `json:"watch_ids,omitempty" maxItems:"500" doc:"The caller's watches; absent or empty for all of them"`
-		WatchID    *string  `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one of the caller's watches, empty for all of them; not with watch_ids"`
-		Filter     string   `json:"filter,omitempty" maxLength:"2000"`
-		Enabled    *bool    `json:"enabled,omitempty" doc:"Defaults to true"`
-		Priority   string   `json:"priority,omitempty" enum:"normal,high" default:"normal"`
-		ChannelIDs []string `json:"channel_ids,omitempty" maxItems:"20" doc:"The caller's channels"`
-		Delivery   string   `json:"delivery,omitempty" enum:"immediate,digest" default:"immediate" doc:"digest needs at, and priority normal"`
-		At         []string `json:"at,omitempty" doc:"Digest only: 1 to 24 local times HH:MM"`
-		TZ         string   `json:"tz,omitempty" doc:"Digest only: IANA time zone, default UTC"`
+		Name       string               `json:"name" minLength:"1" maxLength:"200"`
+		WatchIDs   []string             `json:"watch_ids,omitempty" maxItems:"500" doc:"The caller's watches; absent or empty for all of them"`
+		WatchID    *string              `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one of the caller's watches, empty for all of them; not with watch_ids"`
+		Filter     string               `json:"filter,omitempty" maxLength:"2000"`
+		Enabled    *bool                `json:"enabled,omitempty" doc:"Defaults to true"`
+		Priority   string               `json:"priority,omitempty" enum:"normal,high" default:"normal"`
+		ChannelIDs []string             `json:"channel_ids,omitempty" maxItems:"20" doc:"The caller's channels"`
+		Delivery   string               `json:"delivery,omitempty" enum:"immediate,digest" default:"immediate" doc:"digest needs schedule, and priority normal"`
+		Schedule   []ScheduleEntryInput `json:"schedule,omitempty" maxItems:"168" doc:"Digest only: 1 to 24 distinct times; entries of one time merge their days"`
+		TZ         string               `json:"tz,omitempty" doc:"Digest only: IANA time zone, default UTC"`
 	}
 }
 
 type updateRuleInput struct {
 	ID   string `path:"id" format:"uuid"`
 	Body struct {
-		Name       *string  `json:"name,omitempty" minLength:"1" maxLength:"200"`
-		WatchIDs   []string `json:"watch_ids,omitempty" maxItems:"500" doc:"Replaces the list; [] for all the caller's watches; absent keeps it"`
-		WatchID    *string  `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one watch, empty string for all the caller's watches; not with watch_ids"`
-		Filter     *string  `json:"filter,omitempty" maxLength:"2000"`
-		Enabled    *bool    `json:"enabled,omitempty"`
-		Priority   *string  `json:"priority,omitempty" enum:"normal,high"`
-		ChannelIDs []string `json:"channel_ids,omitempty" maxItems:"20" doc:"Replaces the list; [] keeps the inbox only"`
-		Delivery   *string  `json:"delivery,omitempty" enum:"immediate,digest" doc:"immediate clears at and tz"`
-		At         []string `json:"at,omitempty" doc:"Digest only: replaces the times"`
-		TZ         *string  `json:"tz,omitempty" doc:"Digest only: empty string for UTC"`
+		Name       *string              `json:"name,omitempty" minLength:"1" maxLength:"200"`
+		WatchIDs   []string             `json:"watch_ids,omitempty" maxItems:"500" doc:"Replaces the list; [] for all the caller's watches; absent keeps it"`
+		WatchID    *string              `json:"watch_id,omitempty" deprecated:"true" doc:"Deprecated, use watch_ids: one watch, empty string for all the caller's watches; not with watch_ids"`
+		Filter     *string              `json:"filter,omitempty" maxLength:"2000"`
+		Enabled    *bool                `json:"enabled,omitempty"`
+		Priority   *string              `json:"priority,omitempty" enum:"normal,high"`
+		ChannelIDs []string             `json:"channel_ids,omitempty" maxItems:"20" doc:"Replaces the list; [] keeps the inbox only"`
+		Delivery   *string              `json:"delivery,omitempty" enum:"immediate,digest" doc:"immediate clears schedule and tz"`
+		Schedule   []ScheduleEntryInput `json:"schedule,omitempty" maxItems:"168" doc:"Digest only: replaces the whole schedule"`
+		TZ         *string              `json:"tz,omitempty" doc:"Digest only: empty string for UTC"`
 	}
 }
 
@@ -163,7 +164,7 @@ var ruleSelect = `SELECT r.id::text, r.name,
 			LEFT JOIN watches w ON w.id = rw.watch_id AND ` + watch.ReadableSQL("w", "@owner") + ` WHERE rw.rule_id = r.id), '{}'),
 		r.filter, r.enabled, r.priority,
 		COALESCE((SELECT array_agg(rc.channel_id::text ORDER BY rc.channel_id) FROM rule_channels rc WHERE rc.rule_id = r.id), '{}'),
-		r.delivery, COALESCE(r.digest_at, '{}'), COALESCE(r.digest_tz, ''), r.created_at, r.updated_at
+		r.delivery, COALESCE(r.digest_at, '{}'), ` + digestDaysSQL + `, COALESCE(r.digest_tz, ''), r.created_at, r.updated_at
 	FROM rules r
 	WHERE r.owner_id = @owner`
 
@@ -171,9 +172,11 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Rule, error) {
 		var x Rule
 		var names []*string
-		if err := r.Scan(&x.ID, &x.Name, &x.WatchIDs, &names, &x.Filter, &x.Enabled, &x.Priority, &x.ChannelIDs, &x.Delivery, &x.At, &x.TZ, &x.CreatedAt, &x.UpdatedAt); err != nil {
+		var s schedule
+		if err := r.Scan(&x.ID, &x.Name, &x.WatchIDs, &names, &x.Filter, &x.Enabled, &x.Priority, &x.ChannelIDs, &x.Delivery, &s.At, &s.Days, &x.TZ, &x.CreatedAt, &x.UpdatedAt); err != nil {
 			return x, err
 		}
+		x.Schedule = s.entries()
 		x.Watches = make([]RuleWatch, len(x.WatchIDs))
 		for i, id := range x.WatchIDs {
 			x.Watches[i] = RuleWatch{ID: id, Name: names[i]}
@@ -225,30 +228,39 @@ func filterError(src string) error {
 }
 
 // ruleSchedule validates a rule's delivery against its priority: nil for immediate (012-AC13, 012-AC14).
-func ruleSchedule(delivery, priority string, at []string, tz string) (*schedule, []error) {
+func ruleSchedule(delivery, priority string, entries []ScheduleEntryInput, tz string) (*schedule, []error) {
 	if delivery != deliveryDigest {
 		var errs []error
-		if len(at) > 0 {
-			errs = append(errs, &huma.ErrorDetail{Location: "body.at", Message: "only with delivery digest", Value: at})
+		if len(entries) > 0 {
+			errs = append(errs, &huma.ErrorDetail{Location: "body.schedule", Message: "only with delivery digest", Value: entries})
 		}
 		if tz != "" {
 			errs = append(errs, &huma.ErrorDetail{Location: "body.tz", Message: "only with delivery digest", Value: tz})
 		}
 		return nil, errs
 	}
-	s, errs := checkSchedule(at, tz)
+	s, errs := checkSchedule(entries, tz)
 	if priority == priorityHigh {
 		errs = append(errs, &huma.ErrorDetail{Location: "body.delivery", Message: "a high priority rule already sends at once: digest needs priority normal", Value: delivery})
 	}
 	return s, errs
 }
 
-// scheduleArgs are a schedule's digest_at and digest_tz column values, NULL for immediate.
-func scheduleArgs(s *schedule) (at []string, tz *string) {
+// scheduleArgs are a schedule's digest_at, digest_days and digest_tz column values, NULL for immediate.
+func scheduleArgs(s *schedule) (at []string, days []int16, tz *string) {
 	if s == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return s.At, &s.TZ
+	return s.At, s.Days, &s.TZ
+}
+
+// inputs is a stored schedule sent again, as an update that keeps it.
+func inputs(entries []ScheduleEntry) []ScheduleEntryInput {
+	out := make([]ScheduleEntryInput, len(entries))
+	for i, e := range entries {
+		out[i] = ScheduleEntryInput(e)
+	}
+	return out
 }
 
 // watchScope is the scope a body asks for.
@@ -471,11 +483,11 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 	}
 	scope, werrs := parseScope(b.WatchIDs, b.WatchID)
 	errs = append(errs, werrs...)
-	sched, serrs := ruleSchedule(b.Delivery, b.Priority, b.At, b.TZ)
+	sched, serrs := ruleSchedule(b.Delivery, b.Priority, b.Schedule, b.TZ)
 	if errs = append(errs, serrs...); len(errs) > 0 {
 		return nil, huma.Error400BadRequest("invalid rule", errs...)
 	}
-	at, tz := scheduleArgs(sched)
+	at, days, tz := scheduleArgs(sched)
 	enabled := b.Enabled == nil || *b.Enabled
 	var r Rule
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -486,9 +498,9 @@ func (s *Service) createRule(ctx context.Context, in *createRuleInput) (*ruleOut
 			return err
 		}
 		var id string
-		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, all_watches, filter, enabled, priority, delivery, digest_at, digest_tz)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id::text`,
-			me, name, len(scope.ids) == 0, src, enabled, b.Priority, b.Delivery, at, tz).Scan(&id)
+		err := tx.QueryRow(ctx, `INSERT INTO rules (owner_id, name, all_watches, filter, enabled, priority, delivery, digest_at, digest_days, digest_tz)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id::text`,
+			me, name, len(scope.ids) == 0, src, enabled, b.Priority, b.Delivery, at, days, tz).Scan(&id)
 		if isUniqueViolation(err) {
 			return ruleNameError(name)
 		}
@@ -544,29 +556,29 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 		if b.Priority != nil {
 			next.Priority = *b.Priority
 		}
-		next.At, next.TZ = before.At, before.TZ
+		entries := inputs(before.Schedule)
 		if b.Delivery != nil {
 			if next.Delivery = *b.Delivery; next.Delivery != deliveryDigest {
-				next.At, next.TZ = nil, ""
+				entries, next.TZ = nil, ""
 			}
 		}
-		if b.At != nil {
-			next.At = b.At
+		if b.Schedule != nil {
+			entries = b.Schedule
 		}
 		if b.TZ != nil {
 			next.TZ = *b.TZ
 		}
-		sched, serrs := ruleSchedule(next.Delivery, next.Priority, next.At, next.TZ)
+		sched, serrs := ruleSchedule(next.Delivery, next.Priority, entries, next.TZ)
 		if errs = append(errs, serrs...); len(errs) > 0 {
 			return huma.Error400BadRequest("invalid rule", errs...)
 		}
 		if err := scope.check(ctx, tx, me, before.WatchIDs); err != nil {
 			return err
 		}
-		at, tz := scheduleArgs(sched)
-		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, filter = $3, enabled = $4, priority = $5, delivery = $6, digest_at = $7, digest_tz = $8,
-			updated_at = now() WHERE id = $1`,
-			in.ID, next.Name, next.Filter, next.Enabled, next.Priority, next.Delivery, at, tz)
+		at, days, tz := scheduleArgs(sched)
+		_, err = tx.Exec(ctx, `UPDATE rules SET name = $2, filter = $3, enabled = $4, priority = $5, delivery = $6, digest_at = $7, digest_days = $8,
+			digest_tz = $9, updated_at = now() WHERE id = $1`,
+			in.ID, next.Name, next.Filter, next.Enabled, next.Priority, next.Delivery, at, days, tz)
 		if isUniqueViolation(err) {
 			return ruleNameError(next.Name)
 		}
@@ -582,7 +594,8 @@ func (s *Service) updateRule(ctx context.Context, in *updateRuleInput) (*ruleOut
 			// A disabled rule's schedule no longer applies: what it holds goes out at once (012-AC18).
 			sched = nil
 		}
-		if before.Delivery == deliveryDigest && (sched == nil || !slices.Equal(before.At, sched.At) || before.TZ != sched.TZ) {
+		// A days change alone moves them too (018-AC9).
+		if before.Delivery == deliveryDigest && (sched == nil || !reflect.DeepEqual(before.Schedule, sched.entries()) || before.TZ != sched.TZ) {
 			if err := reschedule(ctx, tx, in.ID, sched); err != nil {
 				return err
 			}

@@ -1001,6 +1001,36 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	var schemas struct {
+		Components struct {
+			Schemas map[string]any `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &schemas); err != nil {
+		t.Fatal(err)
+	}
+	// inline replaces each $ref as a tool's inputSchema does: it travels without the components (018 schedule).
+	var inline func(v any) any
+	inline = func(v any) any {
+		switch v := v.(type) {
+		case map[string]any:
+			if ref, ok := v["$ref"].(string); ok {
+				return inline(schemas.Components.Schemas[strings.TrimPrefix(ref, "#/components/schemas/")])
+			}
+			out := map[string]any{}
+			for k, x := range v {
+				out[k] = inline(x)
+			}
+			return out
+		case []any:
+			out := make([]any, len(v))
+			for i, x := range v {
+				out[i] = inline(x)
+			}
+			return out
+		}
+		return v
+	}
 	limits := map[string][2]float64{"list_inbox": {20, 50}, "list_watches": {50, 200}, "list_watch_events": {50, 50}, "list_watch_states": {20, 50}, "list_deliveries": {50, 50}}
 	if len(list.Tools) != len(readTools)+len(writeTools)+len(manageTools) {
 		t.Fatalf("%d tools", len(list.Tools))
@@ -1024,7 +1054,7 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 					if o.RequestBody != nil {
 						body := doc.Components.Schemas[strings.TrimPrefix(o.RequestBody.Content["application/json"].Schema.Ref, "#/components/schemas/")]
 						for name, schema := range body.Properties {
-							want[name] = schema
+							want[name], _ = inline(schema).(map[string]any)
 						}
 						required = append(required, body.Required...)
 					}

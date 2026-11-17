@@ -282,8 +282,8 @@ func (r *Router) digestDue(ctx context.Context, tx pgx.Tx, hits []matchRule) (ma
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	rows, err := tx.Query(ctx, `SELECT id::text, COALESCE(digest_at, '{}'), COALESCE(digest_tz, ''), now() FROM rules
-		WHERE id = ANY($1::uuid[]) AND delivery = 'digest' AND enabled FOR KEY SHARE`, ids)
+	rows, err := tx.Query(ctx, `SELECT r.id::text, COALESCE(r.digest_at, '{}'), `+digestDaysSQL+`, COALESCE(r.digest_tz, ''), now() FROM rules r
+		WHERE r.id = ANY($1::uuid[]) AND r.delivery = 'digest' AND r.enabled FOR KEY SHARE`, ids)
 	if err != nil {
 		return nil, nil, fmt.Errorf("digest rules: %w", err)
 	}
@@ -293,7 +293,7 @@ func (r *Router) digestDue(ctx context.Context, tx pgx.Tx, hits []matchRule) (ma
 		var id string
 		var s schedule
 		var now time.Time
-		if err := rows.Scan(&id, &s.At, &s.TZ, &now); err != nil {
+		if err := rows.Scan(&id, &s.At, &s.Days, &s.TZ, &now); err != nil {
 			return nil, nil, fmt.Errorf("digest rules: %w", err)
 		}
 		t, err := s.next(now, r.location)

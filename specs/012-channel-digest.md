@@ -4,6 +4,8 @@
 **Requested by**: babs
 **Date**: 2026-11-07
 
+> Spec 018 replaced the rule's `at` with `schedule`, a list of `{time, days}`; `at` below is the API of its time.
+
 ## Problem
 
 Every routed event sends one message on each channel its rule targets. A busy watch (a repository with

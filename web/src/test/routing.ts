@@ -62,7 +62,7 @@ export function rule(over: Partial<Rule> = {}): Rule {
     priority: "normal",
     channel_ids: ["c1"],
     delivery: "immediate",
-    at: [],
+    schedule: [],
     tz: "",
     created_at: "2026-11-01T00:00:00Z",
     updated_at: "2026-11-01T00:00:00Z",

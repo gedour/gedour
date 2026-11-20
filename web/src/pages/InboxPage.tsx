@@ -552,6 +552,8 @@ function InboxRow({
   onAction: (a: InboxAction) => void;
 }) {
   const s = summarizeEvent(item.event);
+  // Two watches can publish the same tag: control names carry the watch.
+  const label = `${item.watch.name}: ${s.text}`;
   const unread = !item.read_at;
   const at = new Date(item.created_at);
   return (
@@ -568,7 +570,7 @@ function InboxRow({
       )}
     >
       <SelectTile
-        label={s.text}
+        label={label}
         selected={selected}
         selecting={selecting}
         onToggle={onToggle}
@@ -584,22 +586,24 @@ function InboxRow({
         aria-current={active || undefined}
         className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-offset-4"
       >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {/* Container, not viewport, breakpoints: the detail panel narrows the list on wide screens. */}
+        <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
           <span
             className={cn(
-              "line-clamp-2 break-words sm:line-clamp-1",
-              unread ? "font-semibold text-ink" : "text-muted",
+              "line-clamp-2 break-all @md:line-clamp-1 @md:break-words",
+              unread ? "font-semibold text-ink" : "font-medium text-muted",
             )}
+            title={item.watch.name}
           >
             {unread && <span className="sr-only">Unread: </span>}
-            {s.text}
+            {item.watch.name}
           </span>
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
-            {item.priority === "high" && <PriorityBadge />}
-            <span className={cn("rounded px-1.5 py-px ring-1 ring-inset", TONE_CLASS[s.tone])}>
-              {s.badge}
+          {/* Four lines when narrow: a long file name must not push the status out of sight. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted @md:flex-nowrap">
+            <span className="line-clamp-4 min-w-0 break-words @md:line-clamp-none @md:truncate">
+              {s.text}
             </span>
-            <span className="truncate">{item.watch.name}</span>
+            {item.priority === "high" && <PriorityBadge />}
           </span>
         </span>
         <time
@@ -617,7 +621,7 @@ function InboxRow({
       {/* Pinned to the row's right edge: the next row lands under the pointer at the same spot. */}
       <div
         role="group"
-        aria-label={`Actions: ${s.text}`}
+        aria-label={`Actions: ${label}`}
         className="absolute top-1/2 right-2 hidden -translate-y-1/2 items-center gap-0.5 rounded-md border border-line bg-surface p-0.5 shadow-xs group-hover:flex group-has-[:focus-visible]:flex"
       >
         <Button

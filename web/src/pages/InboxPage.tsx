@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   Archive,
   ArchiveRestore,
+  CheckCheck,
   ExternalLink,
   Flag,
   Mail,
@@ -13,7 +14,7 @@ import {
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 
-import { getWatch, inboxAction, listInbox, listRules } from "@/api/client";
+import { getWatch, inboxAction, listInbox, listRules, readWatchInbox } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { SelectionBar, SelectTile } from "@/components/Selection";
@@ -215,6 +216,30 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     inFlight.current++;
     act.mutate({ action, ids, patch });
   };
+  // Server-side, loaded or not: no patch, the refetch shows it. 020-AC14, 020-AC16.
+  const readWatch = useMutation({
+    mutationFn: (w: InboxItem["watch"]) => readWatchInbox(w.id),
+    onError: (err) => toast(`Could not update the inbox: ${problemText(err)}`, "error"),
+    onSuccess: ({ updated }, w) => {
+      // The panel holds its own copy of the opened item.
+      setOpened((o) =>
+        o?.watch.id === w.id && !o.read_at && !o.archived_at ? { ...o, ...PATCH.read() } : o,
+      );
+      toast(
+        updated === 0
+          ? `Nothing unread from ${w.name}`
+          : `${updated} item${updated === 1 ? "" : "s"} from ${w.name} marked read`,
+      );
+      // Returned: pending lasts until the list shows the reads, so a second click cannot beat it.
+      return Promise.all([
+        client.invalidateQueries({ queryKey: COUNT_KEY }),
+        client.invalidateQueries({ queryKey: LIST_KEY }),
+      ]);
+    },
+  });
+  // None while one is out: a second click would toast a contradicting "Nothing unread".
+  const readWatchOf = (w: InboxItem["watch"]) =>
+    readWatch.isPending ? undefined : () => readWatch.mutate(w);
   const actOnOpened = (a: InboxAction) => {
     if (opened) run(a, [opened.id]);
   };
@@ -502,7 +527,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                 </h2>
                 <ul
                   aria-label={`Inbox, ${g.label}`}
-                  className="overflow-hidden rounded-xl border border-line bg-surface"
+                  className="@container/inbox overflow-hidden rounded-xl border border-line bg-surface"
                 >
                   {g.items.map((it) => {
                     const idx = items.indexOf(it);
@@ -522,6 +547,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                           setCursor(true);
                         }}
                         onAction={(a) => run(a, [it.id])}
+                        onReadWatch={readWatchOf(it.watch)}
                         filterTo={`?${filterParams(state, highOnly, it.watch.id)}`}
                       />
                     );
@@ -540,7 +566,14 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
               </Button>
             )}
           </div>
-          {opened && wide && <InboxPanel item={opened} onClose={close} onAction={actOnOpened} />}
+          {opened && wide && (
+            <InboxPanel
+              item={opened}
+              onClose={close}
+              onAction={actOnOpened}
+              onReadWatch={readWatchOf(opened.watch)}
+            />
+          )}
         </div>
       )}
       {/* Narrow screens: a modal dialog, which traps focus and gives it back on close. */}
@@ -552,7 +585,11 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
       >
         {opened && !wide && (
           <>
-            <DetailBody item={opened} onAction={actOnOpened} />
+            <DetailBody
+              item={opened}
+              onAction={actOnOpened}
+              onReadWatch={readWatchOf(opened.watch)}
+            />
             <DialogActions>
               <Button variant="ghost" ref={closeRef} onClick={close}>
                 Close
@@ -593,6 +630,7 @@ function InboxRow({
   onOpen,
   onFocus,
   onAction,
+  onReadWatch,
   filterTo,
 }: {
   item: InboxItem;
@@ -605,6 +643,7 @@ function InboxRow({
   onOpen: () => void;
   onFocus: () => void;
   onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
   filterTo: string;
 }) {
   const s = summarizeEvent(item.event);
@@ -711,6 +750,19 @@ function InboxRow({
         >
           {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          title={`Mark all from ${item.watch.name} read`}
+          aria-label={`Mark all from ${item.watch.name} read`}
+          // Under 28rem the panel or dialog carries the action: the row keeps its text.
+          // Not disabled: that would drop the focus to <body>.
+          className="@max-md/inbox:hidden aria-disabled:opacity-50"
+          aria-disabled={!onReadWatch}
+          onClick={onReadWatch}
+        >
+          <CheckCheck aria-hidden />
+        </Button>
       </div>
     </li>
   );
@@ -738,10 +790,12 @@ function InboxPanel({
   item,
   onClose,
   onAction,
+  onReadWatch,
 }: {
   item: InboxItem;
   onClose: () => void;
   onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
 }) {
   const titleId = useId();
   return (
@@ -760,7 +814,7 @@ function InboxPanel({
           <X aria-hidden />
         </Button>
       </div>
-      <DetailBody item={item} onAction={onAction} />
+      <DetailBody item={item} onAction={onAction} onReadWatch={onReadWatch} />
     </aside>
   );
 }
@@ -784,7 +838,15 @@ function DetailHeader({ item }: { item: InboxItem }) {
   );
 }
 
-function DetailBody({ item, onAction }: { item: InboxItem; onAction: (a: InboxAction) => void }) {
+function DetailBody({
+  item,
+  onAction,
+  onReadWatch,
+}: {
+  item: InboxItem;
+  onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
+}) {
   const s = summarizeEvent(item.event);
   const rows = payloadRows(item.event.payload);
   const notes = item.event.payload.body;
@@ -853,6 +915,16 @@ function DetailBody({ item, onAction }: { item: InboxItem; onAction: (a: InboxAc
         >
           {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
           {item.archived_at ? "Unarchive" : "Archive"}
+        </Button>
+        <Button
+          variant="outline"
+          className="max-w-full aria-disabled:opacity-50"
+          title={`Mark all from ${item.watch.name} read`}
+          aria-disabled={!onReadWatch}
+          onClick={onReadWatch}
+        >
+          <CheckCheck aria-hidden />
+          <span className="min-w-0 truncate">Mark all from {item.watch.name} read</span>
         </Button>
       </div>
     </div>

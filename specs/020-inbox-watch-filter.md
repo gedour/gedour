@@ -1,6 +1,6 @@
 # 020 — Inbox filter by watch
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-20
 
@@ -17,7 +17,7 @@ removable chip next to the other filters. The usual flow: click the noisy watch,
 remove the chip. The filter lives in the URL, so back, reload and shared links keep it.
 
 For the one-click case, each row gets a third quick action, "Mark all from <watch> read", also in the
-detail panel. It marks every unread item of that watch read on the server, loaded or not.
+detail panel; on a list narrower than 28rem the row keeps two actions and the panel or dialog carries it. It marks every unread item of that watch read on the server, loaded or not.
 
 ## Scope
 
@@ -29,7 +29,7 @@ detail panel. It marks every unread item of that watch read on the server, loade
 - An empty state for a filter that matches nothing, with a way to remove the filter.
 - `POST /api/v1/inbox/watches/{id}/read` marks the caller's unread items of one watch read; MCP tool
   `mark_watch_inbox_read`.
-- A third quick action on each row and a button in the detail panel call it, then show a toast with the
+- A third quick action on each row (lists at least 28rem wide) and a button in the detail panel call it, then show a toast with the
   count.
 
 ## Out of scope
@@ -42,34 +42,34 @@ detail panel. It marks every unread item of that watch read on the server, loade
 
 ## Acceptance criteria
 
-- [ ] **AC1** Given items from watches A and B, when `GET /api/v1/inbox?watch=<A>` is called, then only
+- [x] **AC1** Given items from watches A and B, when `GET /api/v1/inbox?watch=<A>` is called, then only
   A's items come back, newest first, with `state`, `priority` and the cursor applied as without the filter.
-- [ ] **AC2** `watch` set to a watch the caller cannot read, or to an unknown ID, returns an empty list,
+- [x] **AC2** `watch` set to a watch the caller cannot read, or to an unknown ID, returns an empty list,
   never another user's items.
-- [ ] **AC3** `watch` that is not a UUID returns a 4xx validation error naming `query.watch`.
-- [ ] **AC4** The MCP `list_inbox` tool accepts `watch` and returns the same items as the HTTP call.
-- [ ] **AC5** Clicking a row's watch name shows only that watch's items, keeps the tab and the High
+- [x] **AC3** `watch` that is not a UUID returns a 4xx validation error naming `query.watch`.
+- [x] **AC4** The MCP `list_inbox` tool accepts `watch` and returns the same items as the HTTP call.
+- [x] **AC5** Clicking a row's watch name shows only that watch's items, keeps the tab and the High
   priority toggle, and does not open the item.
-- [ ] **AC6** While the filter is on, a chip shows the watch name; clicking its remove button lists every
+- [x] **AC6** While the filter is on, a chip shows the watch name; clicking its remove button lists every
   watch again, in the same tab.
-- [ ] **AC7** The filter is in the URL (`?watch=<id>`): reload and browser back restore it, and the chip
+- [x] **AC7** The filter is in the URL (`?watch=<id>`): reload and browser back restore it, and the chip
   shows the watch name even when no item is loaded (the Unread tab emptied by marking all read).
-- [ ] **AC8** Filtered, select all then Mark read marks only the loaded items of that watch.
-- [ ] **AC9** A filter that matches nothing shows "Nothing from <watch name> here" with a button that
+- [x] **AC8** Filtered, select all then Mark read marks only the loaded items of that watch.
+- [x] **AC9** A filter that matches nothing shows "Nothing from <watch name> here" with a button that
   removes the filter.
-- [ ] **AC10** The watch name is a real link, reachable by Tab, with an accessible name naming the watch
+- [x] **AC10** The watch name is a real link, reachable by Tab, with an accessible name naming the watch
   (e.g. "Show only <watch name>"); the row stays valid HTML (no link nested in the row's button).
-- [ ] **AC11** Given 120 unread items from watch A (more than one page) and unread items from B, when
+- [x] **AC11** Given 120 unread items from watch A (more than one page) and unread items from B, when
   `POST /api/v1/inbox/watches/<A>/read` is called, then all 120 of A's are read, B's are untouched, and the
   response gives `updated: 120` and the new global `unread` count; other open tabs get the new count.
-- [ ] **AC12** Archived items and items already read are left as they are (`read_at` of a first read is
+- [x] **AC12** Archived items and items already read are left as they are (`read_at` of a first read is
   kept); a watch the caller cannot read, or an unknown one, gives `updated: 0` and changes nothing.
-- [ ] **AC13** The MCP `mark_watch_inbox_read` tool (write scope) does the same as the HTTP call.
-- [ ] **AC14** Each row's quick actions include "Mark all from <watch name> read" (accessible name and
-  tooltip); clicking it marks the watch's items read, refreshes the list and the tab counts, and shows
+- [x] **AC13** The MCP `mark_watch_inbox_read` tool (write scope) does the same as the HTTP call.
+- [x] **AC14** On a list at least 28rem wide, each row's quick actions include "Mark all from <watch
+  name> read" (accessible name and tooltip); narrower, the panel or dialog carries it (AC15); clicking it marks the watch's items read, refreshes the list and the tab counts, and shows
   "N items from <watch name> marked read" (or "Nothing unread from <watch name>" when N is 0).
-- [ ] **AC15** The detail panel and the mobile dialog have the same action, so it works without hover.
-- [ ] **AC16** A failed call shows the inbox's usual error toast and changes nothing on screen.
+- [x] **AC15** The detail panel and the mobile dialog have the same action, so it works without hover.
+- [x] **AC16** A failed call shows the inbox's usual error toast and changes nothing on screen.
 
 ## Phases
 

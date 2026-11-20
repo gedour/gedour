@@ -62,6 +62,7 @@ var rows = []row{
 	{name: "mark_inbox_unread", op: "unread-inbox", scope: scopeWrite, desc: "Mark inbox items unread, taking archived ones out of the archive. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
 	{name: "archive_inbox", op: "archive-inbox", scope: scopeWrite, desc: "Archive inbox items. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
 	{name: "unarchive_inbox", op: "unarchive-inbox", scope: scopeWrite, desc: "Take inbox items out of the archive. ids is an array of inbox item IDs from list_inbox; IDs of items that are not the key owner's are ignored."},
+	{name: "mark_watch_inbox_read", op: "read-watch-inbox", scope: scopeWrite, desc: "Mark every unread inbox item of one watch read, loaded or not; archived items are left out. id is a watch ID from list_watches or an inbox item's watch.id; a watch that is not the key owner's changes nothing."},
 	{name: "run_watch", op: "run-watch", scope: scopeWrite, openWorld: true, limited: true,
 		desc: "Schedule a run of a watch now; the worker runs it, this call does not wait; refused while the upstream's rate limit holds the watch." + budgetNote},
 	{name: "get_filter_reference", op: "get-filter-reference", scope: scopeManage, readOnly: true, desc: "What a rule's filter may use, and its limits."},

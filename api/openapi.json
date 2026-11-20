@@ -4601,6 +4601,51 @@
         ]
       }
     },
+    "/api/v1/inbox/watches/{id}/read": {
+      "post": {
+        "description": "Archived items are left out. A watch the caller cannot read, or an unknown one, changes nothing.",
+        "operationId": "read-watch-inbox",
+        "parameters": [
+          {
+            "description": "Watch ID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Watch ID",
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkOutputBody"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark every unread item of one watch read in the caller's inbox",
+        "tags": [
+          "inbox"
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "get-me",

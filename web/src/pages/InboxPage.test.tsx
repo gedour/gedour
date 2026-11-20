@@ -30,6 +30,15 @@ function inboxServer(initial: InboxItem[], extra: Parameters<typeof mockApi>[0] 
     return Response.json({ updated: ids.length, unread: unread() });
   };
   const now = new Date().toISOString();
+  const readWatch = (watch: string) => () => {
+    let updated = 0;
+    items = items.map((i) =>
+      i.watch.id === watch && !i.read_at && !i.archived_at
+        ? (updated++, { ...i, read_at: now })
+        : i,
+    );
+    return Response.json({ updated, unread: unread() });
+  };
   const fn = mockApi({
     "/api/v1/inbox": (url: URL) => {
       const state = url.searchParams.get("state");
@@ -54,6 +63,8 @@ function inboxServer(initial: InboxItem[], extra: Parameters<typeof mockApi>[0] 
     "/api/v1/inbox/unread": act((i) => ({ ...i, read_at: null })),
     "/api/v1/inbox/archive": act((i) => ({ ...i, archived_at: now })),
     "/api/v1/inbox/unarchive": act((i) => ({ ...i, archived_at: null })),
+    [`/api/v1/inbox/watches/${W2}/read`]: readWatch(W2),
+    "/api/v1/inbox/watches/w1/read": readWatch("w1"),
     ...extra,
   });
   return { fn, items: () => items };
@@ -946,6 +957,249 @@ describe("InboxPage", () => {
       await userEvent.click(screen.getByRole("button", { name: "Remove filter Unknown watch" }));
       expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
       expect(router.state.location.search).toBe("?state=all");
+    });
+
+    // 020-AC14: the row's third quick action reads the whole watch on the server, refreshes the list
+    // and the counts, names the count in a toast, and neither opens the row nor touches the selection.
+    it("marks all from a watch read from the row", async () => {
+      const srv = inboxServer(mixed(), watchRoute);
+      renderApp("/inbox?state=all");
+      await screen.findByText("v4.0.0 published");
+      expect(await screen.findByTestId("unread-badge")).toHaveTextContent("4");
+      await userEvent.click(
+        screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v3.0.0 published" }),
+      );
+      const quick = within(
+        screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+      ).getByRole("button", { name: "Mark all from Go releases read" });
+      expect(quick).toHaveAttribute("title", "Mark all from Go releases read");
+      expect(quick.parentElement?.closest("button")).toBeNull();
+      await userEvent.click(quick);
+      expect(await screen.findByText("2 items from Go releases marked read")).toBeInTheDocument();
+      expect(lastCall(srv.fn, `/api/v1/inbox/watches/${W2}/read`, "POST")).toBeDefined();
+      await waitFor(() =>
+        expect(rows().map((r) => r.dataset.unread)).toEqual(["false", "true", "false", "true"]),
+      );
+      await waitFor(() => expect(screen.getByTestId("unread-badge")).toHaveTextContent("2"));
+      expect(screen.queryByRole("complementary", { name: /published/ })).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v3.0.0 published" }),
+      ).toBeChecked();
+
+      await userEvent.click(
+        within(
+          screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+        ).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      expect(await screen.findByText("Nothing unread from Go releases")).toBeInTheDocument();
+    });
+
+    // 020-AC14: one item reads in the singular, and the list refreshes even when the global count did
+    // not move (an item of another watch arrived meanwhile).
+    it("names a single item in the singular and refreshes the list", async () => {
+      let read = false;
+      mockApi({
+        "/api/v1/inbox": () =>
+          Response.json({
+            items: [
+              inboxItem(2, { read_at: yesterday() }),
+              inboxItem(1, read ? { read_at: yesterday() } : {}),
+            ],
+          }),
+        "/api/v1/inbox/count": { unread: 1, read: 1 },
+        "/api/v1/inbox/watches/w1/read": () => {
+          read = true;
+          return Response.json({ updated: 1, unread: 1 });
+        },
+      });
+      renderApp("/inbox?state=all");
+      await screen.findByText("v2.0.0 published");
+      expect(rows().map((r) => r.dataset.unread)).toEqual(["false", "true"]);
+      await userEvent.click(
+        within(
+          screen.getByRole("group", { name: "Actions: GitHub CLI releases: v2.0.0 published" }),
+        ).getByRole("button", { name: "Mark all from GitHub CLI releases read" }),
+      );
+      expect(
+        await screen.findByText("1 item from GitHub CLI releases marked read"),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(rows().map((r) => r.dataset.unread)).toEqual(["false", "false"]));
+    });
+
+    // 020-AC15: the detail panel and the narrow dialog carry the same action, no hover needed.
+    it.each([
+      ["panel", true, "complementary"],
+      ["dialog", false, "dialog"],
+    ] as const)("marks all from a watch read from the %s", async (_, wide, role) => {
+      setMedia(WIDE, wide);
+      const srv = inboxServer(mixed(), watchRoute);
+      renderApp("/inbox?state=all");
+      await userEvent.click(await screen.findByRole("button", { name: /v2\.0\.0 published/ }));
+      const holder = screen.getByRole(role, { name: "v2.0.0 published" });
+      await userEvent.click(
+        within(holder).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      // Item 2 was read on opening: only item 4 is left.
+      expect(await screen.findByText("1 item from Go releases marked read")).toBeInTheDocument();
+      expect(
+        srv
+          .items()
+          .filter((i) => !i.read_at)
+          .map((i) => i.id),
+      ).toEqual([3, 1]);
+      expect(screen.getByRole(role, { name: "v2.0.0 published" })).toBeInTheDocument();
+    });
+
+    // 020-AC14: a double click sends one call: the second would toast a contradicting "Nothing unread".
+    it("sends one call on a double click", async () => {
+      let release: () => void = () => {};
+      const read = vi.fn(
+        () =>
+          new Promise<Response>((r) => {
+            release = () => r(Response.json({ updated: 2, unread: 2 }));
+          }),
+      );
+      inboxServer(mixed(), { ...watchRoute, [`/api/v1/inbox/watches/${W2}/read`]: read });
+      renderApp("/inbox?state=all");
+      await screen.findByText("v4.0.0 published");
+      const quick = within(
+        screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+      ).getByRole("button", { name: "Mark all from Go releases read" });
+      await userEvent.dblClick(quick);
+      // aria-disabled, never disabled: a disabled button loses the focus.
+      await waitFor(() => expect(quick).toHaveAttribute("aria-disabled", "true"));
+      expect(quick).not.toBeDisabled();
+      await userEvent.click(quick);
+      act(() => release());
+      expect(await screen.findByText("2 items from Go releases marked read")).toBeInTheDocument();
+      await waitFor(() => expect(quick).toHaveAttribute("aria-disabled", "false"));
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/Nothing unread/)).not.toBeInTheDocument();
+    });
+
+    // 020-AC15: the opened item shows read once its watch is: the panel holds its own copy of it.
+    it("shows the opened item read after marking its watch read", async () => {
+      inboxServer(mixed(), watchRoute);
+      renderApp("/inbox?state=all");
+      await userEvent.click(await screen.findByRole("button", { name: /v4\.0\.0 published/ }));
+      const panel = screen.getByRole("complementary", { name: "v4.0.0 published" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Mark unread" }));
+      expect(await within(panel).findByRole("button", { name: "Mark read" })).toBeInTheDocument();
+      await userEvent.click(
+        within(panel).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      expect(await screen.findByText(/from Go releases marked read/)).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "Mark unread" })).toBeInTheDocument();
+    });
+
+    // 020-AC15: browsers blur a disabled button, jsdom does not: staying enabled is what keeps the focus.
+    it("keeps the panel button enabled while the call is out", async () => {
+      let release: () => void = () => {};
+      inboxServer(mixed(), {
+        ...watchRoute,
+        [`/api/v1/inbox/watches/${W2}/read`]: () =>
+          new Promise<Response>((r) => {
+            release = () => r(Response.json({ updated: 1, unread: 2 }));
+          }),
+      });
+      renderApp("/inbox?state=all");
+      await userEvent.click(await screen.findByRole("button", { name: /v4\.0\.0 published/ }));
+      const panel = screen.getByRole("complementary", { name: "v4.0.0 published" });
+      const button = within(panel).getByRole("button", { name: "Mark all from Go releases read" });
+      act(() => button.focus());
+      await userEvent.keyboard("{Enter}");
+      await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+      expect(button).not.toBeDisabled();
+      act(() => release());
+      expect(await screen.findByText("1 item from Go releases marked read")).toBeInTheDocument();
+      await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "false"));
+    });
+
+    // 020-AC14: the action stays pending until the list shows the reads: a quick second click would
+    // otherwise toast "Nothing unread" next to rows still unread.
+    it("stays pending until the list answers", async () => {
+      let posted = false;
+      let answer: () => void = () => {};
+      const list = () => ({ items: [inboxItem(4, { watch: GO }), inboxItem(3)] });
+      mockApi({
+        ...watchRoute,
+        "/api/v1/inbox": () =>
+          posted
+            ? new Promise<Response>((r) => (answer = () => r(Response.json(list()))))
+            : Response.json(list()),
+        "/api/v1/inbox/count": { unread: 2, read: 0 },
+        [`/api/v1/inbox/watches/${W2}/read`]: () => {
+          posted = true;
+          return Response.json({ updated: 1, unread: 1 });
+        },
+      });
+      renderApp("/inbox?state=all");
+      await screen.findByText("v4.0.0 published");
+      const quick = within(
+        screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+      ).getByRole("button", { name: "Mark all from Go releases read" });
+      await userEvent.click(quick);
+      expect(await screen.findByText("1 item from Go releases marked read")).toBeInTheDocument();
+      await act(async () => {});
+      expect(quick).toHaveAttribute("aria-disabled", "true");
+      act(() => answer());
+      await waitFor(() => expect(quick).toHaveAttribute("aria-disabled", "false"));
+    });
+
+    // 020-AC12: the opened item of another watch, or an archived one of this watch, is left as it was.
+    it("leaves an opened item of another watch unread", async () => {
+      inboxServer(mixed(), watchRoute);
+      renderApp("/inbox?state=all");
+      await userEvent.click(await screen.findByRole("button", { name: /v3\.0\.0 published/ }));
+      const panel = screen.getByRole("complementary", { name: "v3.0.0 published" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Mark unread" }));
+      expect(await within(panel).findByRole("button", { name: "Mark read" })).toBeInTheDocument();
+      await userEvent.click(
+        within(
+          screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+        ).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      expect(await screen.findByText(/from Go releases marked read/)).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "Mark read" })).toBeInTheDocument();
+    });
+
+    it("leaves an opened archived item unread", async () => {
+      inboxServer(mixed(), watchRoute);
+      renderApp("/inbox?state=all");
+      await userEvent.click(await screen.findByRole("button", { name: /v4\.0\.0 published/ }));
+      const panel = screen.getByRole("complementary", { name: "v4.0.0 published" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Mark unread" }));
+      await userEvent.click(await within(panel).findByRole("button", { name: "Archive" }));
+      expect(await within(panel).findByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "Mark read" })).toBeInTheDocument();
+      await userEvent.click(
+        within(panel).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      expect(await screen.findByText(/from Go releases marked read/)).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: "Mark read" })).toBeInTheDocument();
+    });
+
+    // 020-AC16: a failure shows the usual error toast and leaves the screen as it was.
+    it("leaves everything as it was when marking a watch read fails", async () => {
+      const srv = inboxServer(mixed(), {
+        ...watchRoute,
+        [`/api/v1/inbox/watches/${W2}/read`]: () => new Response(null, { status: 500 }),
+      });
+      renderApp("/inbox?state=all");
+      await screen.findByText("v4.0.0 published");
+      expect(await screen.findByTestId("unread-badge")).toHaveTextContent("4");
+      const lists = srv.fn.mock.calls.length;
+      await userEvent.click(
+        within(
+          screen.getByRole("group", { name: "Actions: Go releases: v4.0.0 published" }),
+        ).getByRole("button", { name: "Mark all from Go releases read" }),
+      );
+      expect(await screen.findByText(/Could not update the inbox/)).toBeInTheDocument();
+      expect(screen.queryByText(/marked read|Nothing unread/)).not.toBeInTheDocument();
+      expect(rows().map((r) => r.dataset.unread)).toEqual(["true", "true", "true", "true"]);
+      expect(screen.getByTestId("unread-badge")).toHaveTextContent("4");
+      // Only the POST went out: no refetch on failure.
+      expect(srv.fn.mock.calls.length).toBe(lists + 1);
     });
   });
 });

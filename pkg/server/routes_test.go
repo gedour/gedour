@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1131,6 +1132,97 @@ func TestInboxWatchFilterRefusals(t *testing.T) {
 		if !slices.Contains(p.locations(), "query.watch") {
 			t.Errorf("watch=%s: %+v", bad, p)
 		}
+	}
+}
+
+// 020-AC11: one call reads every unread item of a watch, past one page, and other tabs get the new count.
+// 020-AC12: other watches, archived items and first reads are left as they were.
+func TestInboxWatchRead(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var wa, wb watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &wa)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &wb)
+	// A: 120 unread, one read in 2001, one archived unread; B: 3 unread.
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 'release.published', '{}', 'a'||g FROM generate_series(1, 122) g`, wa.ID)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) SELECT $1, 'release.published', '{}', 'b'||g FROM generate_series(1, 3) g`, wb.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id, read_at, archived_at)
+		SELECT $1, id, CASE WHEN dedup_key = 'a121' THEN timestamptz '2001-01-01Z' END, CASE WHEN dedup_key = 'a122' THEN now() END FROM events`, alice.id)
+	snapshot := func(cond string, args ...any) string {
+		t.Helper()
+		var s string
+		if err := a.pool.QueryRow(context.Background(), `SELECT coalesce(string_agg(concat_ws(',', i.id, i.read_at, i.archived_at), ';' ORDER BY i.id), '')
+			FROM inbox_items i JOIN events e ON e.id = i.event_id WHERE `+cond, args...).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	keep := `e.watch_id = $1 OR e.dedup_key IN ('a121', 'a122')`
+	before := snapshot(keep, wb.ID)
+
+	_, events := openStream(t, a.replica(t, time.Hour, false), alice)
+	if ev := next(t, events, "inbox", 2*time.Second); ev.data != `{"unread":123}` {
+		t.Fatalf("initial count: %+v", ev)
+	}
+	type bulk struct{ Updated, Unread int }
+	var res bulk
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+wa.ID+"/read", nil, http.StatusOK, &res)
+	if res != (bulk{120, 3}) {
+		t.Fatalf("read A: %+v", res)
+	}
+	if ev := next(t, events, "inbox", 2*time.Second); ev.data != `{"unread":3}` {
+		t.Fatalf("other tab: %+v", ev)
+	}
+	if n := a.countRows(t, `SELECT count(*) FROM inbox_items i JOIN events e ON e.id = i.event_id WHERE e.watch_id = $1 AND i.read_at IS NULL AND i.archived_at IS NULL`, wa.ID); n != 0 {
+		t.Fatalf("%d of A's items still unread", n)
+	}
+	if got := snapshot(keep, wb.ID); got != before {
+		t.Fatalf("B, the first read or the archived item changed:\n%s\nwas\n%s", got, before)
+	}
+	all := snapshot("true")
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+wa.ID+"/read", nil, http.StatusOK, &res)
+	if res != (bulk{0, 3}) || snapshot("true") != all {
+		t.Fatalf("second call: %+v", res)
+	}
+	// Every spelling huma's uuid format accepts reaches the same watch, never Postgres as a 500.
+	for i, id := range []string{"urn:uuid:" + wa.ID, strings.ToUpper(wa.ID), "{" + wa.ID + "}"} {
+		a.exec(t, `WITH e AS (INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', $2) RETURNING id)
+			INSERT INTO inbox_items (user_id, event_id) SELECT $3, id FROM e`, wa.ID, "s"+strconv.Itoa(i), alice.id)
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+url.PathEscape(id)+"/read", nil, http.StatusOK, &res)
+		if res != (bulk{1, 3}) {
+			t.Errorf("%s: %+v", id, res)
+		}
+	}
+}
+
+// 020-AC12: another user's watch, a watch transferred away and an unknown one change nothing; a non-UUID is refused.
+func TestInboxWatchReadRefusals(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
+	var mine, bobs watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &mine)
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &bobs)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', 'a'), ($2, 'release.published', '{}', 'b')`, mine.ID, bobs.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT w.owner_id, e.id FROM events e JOIN watches w ON w.id = e.watch_id`)
+	// Alice also holds an item of bob's watch, as after a transfer: only the readable-watch clause guards it.
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events WHERE watch_id = $2`, alice.id, bobs.ID)
+	unread := func() int { return a.countRows(t, `SELECT count(*) FROM inbox_items WHERE read_at IS NULL`) }
+	type bulk struct{ Updated, Unread int }
+	for _, id := range []string{bobs.ID, "00000000-0000-4000-8000-000000000000"} {
+		var res bulk
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+id+"/read", nil, http.StatusOK, &res)
+		if res != (bulk{0, 1}) || unread() != 3 {
+			t.Errorf("%s: %+v, %d unread", id, res, unread())
+		}
+	}
+	for _, bad := range []string{"x", "1234", mine.ID + "0"} {
+		p := a.problemOf(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+bad+"/read", nil, http.StatusBadRequest)
+		if !slices.Contains(p.locations(), "path.id") {
+			t.Errorf("%s: %+v", bad, p)
+		}
+	}
+	if unread() != 3 {
+		t.Fatal("a refused call changed an item")
 	}
 }
 

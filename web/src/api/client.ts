@@ -303,6 +303,11 @@ export async function inboxReadCount(): Promise<number> {
 }
 export const inboxAction = (action: InboxAction, ids: number[]) =>
   sendJSON<{ updated: number; unread: number }>("POST", `/api/v1/inbox/${action}`, { ids });
+export const readWatchInbox = (watchId: string) =>
+  sendJSON<{ updated: number; unread: number }>(
+    "POST",
+    `/api/v1/inbox/watches/${encodeURIComponent(watchId)}/read`,
+  );
 
 const channelPath = (id: string) => `/api/v1/channels/${encodeURIComponent(id)}`;
 

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
@@ -121,15 +120,10 @@ func (s *Service) registerInbox(api huma.API) {
 		Summary:     "Mark every unread item of one watch read in the caller's inbox",
 		Description: "Archived items are left out. A watch the caller cannot read, or an unknown one, changes nothing.", Tags: tags,
 	}, func(ctx context.Context, in *watchReadInput) (*bulkOutput, error) {
-		// Canonical: huma's uuid format also lets urn:uuid: through, which Postgres refuses.
-		id, err := uuid.Parse(in.ID)
-		if err != nil {
-			return nil, huma.Error400BadRequest("invalid watch", &huma.ErrorDetail{Location: "path.id", Message: "not a watch ID", Value: in.ID})
-		}
 		// 020-AC11, 020-AC12.
 		return s.bulk(ctx, "read-watch", `UPDATE inbox_items i SET read_at = now() FROM events e JOIN watches w ON w.id = e.watch_id
 			WHERE i.event_id = e.id AND i.user_id = $1 AND e.watch_id = $2 AND i.read_at IS NULL AND i.archived_at IS NULL AND `+
-			watch.ReadableSQL("w", "$1::uuid"), id.String())
+			watch.ReadableSQL("w", "$1::uuid"), in.ID)
 	})
 }
 
@@ -159,13 +153,8 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 		sql += " AND i.priority = 'normal'"
 	}
 	if in.Watch != "" {
-		// Canonical: huma's uuid format also lets urn:uuid: through, which Postgres refuses.
-		id, err := uuid.Parse(in.Watch)
-		if err != nil {
-			return nil, huma.Error400BadRequest("invalid watch", &huma.ErrorDetail{Location: "query.watch", Message: "not a watch ID", Value: in.Watch})
-		}
 		sql += " AND e.watch_id = @watch"
-		args["watch"] = id.String()
+		args["watch"] = in.Watch
 	}
 	if in.Cursor != "" {
 		before, err := strconv.ParseInt(in.Cursor, 10, 64)

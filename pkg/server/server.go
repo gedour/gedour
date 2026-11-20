@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -68,6 +69,8 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.
 	cfg.CreateHooks = nil
 	cfg.SchemasPath = ""
 	api := humago.New(mux, cfg)
+	// huma's uuid format lets urn:uuid: through, which Postgres refuses, and ids get compared as text; Register captures middlewares.
+	api.UseMiddleware(canonicalUUIDParams)
 	huma.Register(api, huma.Operation{
 		OperationID: "get-version",
 		Method:      http.MethodGet,
@@ -102,6 +105,49 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.
 	// GET only: other methods on non-API paths get the mux's 405 instead of the SPA.
 	mux.Handle("GET /", webui.Handler(ui))
 	return secureHeaders(contentSecurityPolicy(webui.InlineScriptHashes(ui)), requestID(authn.Guard(mux)))
+}
+
+func canonicalUUIDParams(ctx huma.Context, next func(huma.Context)) {
+	if slices.ContainsFunc(ctx.Operation().Parameters, isUUIDParam) {
+		ctx = uuidParamsContext{ctx}
+	}
+	next(ctx)
+}
+
+func isUUIDParam(p *huma.Param) bool {
+	return (p.In == "path" || p.In == "query") && p.Schema != nil && p.Schema.Format == "uuid"
+}
+
+// An alias embeds under another field name: a field named Context would hide huma.Context's Context method.
+type humaContext = huma.Context
+
+type uuidParamsContext struct{ humaContext }
+
+func (c uuidParamsContext) Param(name string) string {
+	return c.canonical("path", name, c.humaContext.Param(name))
+}
+
+func (c uuidParamsContext) Query(name string) string {
+	return c.canonical("query", name, c.humaContext.Query(name))
+}
+
+// Unwrap lets humago.Unwrap reach the request, as huma's own wrappers do.
+func (c uuidParamsContext) Unwrap() huma.Context { return c.humaContext }
+
+// WithContext keeps the wrapper and still moves the request to ctx: huma.WithContext would otherwise wrap it and stop at the request.
+func (c uuidParamsContext) WithContext(ctx context.Context) huma.Context {
+	return uuidParamsContext{huma.WithContext(c.humaContext, ctx)}
+}
+
+func (c uuidParamsContext) canonical(in, name, v string) string {
+	for _, p := range c.Operation().Parameters {
+		if p.In == in && p.Name == name && isUUIDParam(p) {
+			if id, err := uuid.Parse(v); err == nil {
+				return id.String()
+			}
+		}
+	}
+	return v
 }
 
 // requestID tags each request so its audit rows and the client's error report can be matched.

@@ -283,11 +283,15 @@ export const deleteCredential = (id: string) => sendJSON<undefined>("DELETE", cr
 export function listInbox(
   state: InboxState,
   cursor: string,
-  highOnly = false,
-  limit = 50,
+  {
+    highOnly = false,
+    watch = "",
+    limit = 50,
+  }: { highOnly?: boolean; watch?: string; limit?: number } = {},
 ): Promise<InboxPage> {
   const q = new URLSearchParams({ state, limit: String(limit) });
   if (highOnly) q.set("priority", "high");
+  if (watch) q.set("watch", watch);
   if (cursor) q.set("cursor", cursor);
   return getJSON<InboxPage>(`/api/v1/inbox?${q}`);
 }

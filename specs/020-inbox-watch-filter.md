@@ -83,8 +83,9 @@ detail panel. It marks every unread item of that watch read on the server, loade
 
 ### Phase 2 — Inbox UI
 - Work: `listInbox` passes `watch`; the row's watch name becomes a link laid over the row's open button
-  (stretched-button pattern, so the DOM stays valid); filter chip with the name from the loaded items or
-  `getWatch` when none is loaded; empty state; the query key includes the watch.
+  (stretched-button pattern, so the DOM stays valid); filter chip named from the loaded items, else from
+  `getWatch`, always asked so the chip keeps its name once the list empties; empty state; the query key
+  includes the watch.
 - **Covers**: AC5, AC6, AC7, AC8, AC9, AC10
 - **Data model impact**: none
 - **DoD**: `pnpm exec vitest run src/pages/InboxPage.test.tsx` covers AC5-AC10; one Playwright case in

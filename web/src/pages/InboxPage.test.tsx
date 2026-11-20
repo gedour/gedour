@@ -6,7 +6,7 @@ import { mockApi } from "@/test/api";
 import { setMedia } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { FakeEventSource, inboxItem, rule } from "@/test/routing";
-import { lastCall, pending } from "@/test/watches";
+import { lastCall, pending, watch } from "@/test/watches";
 import type { InboxItem } from "@/types/api";
 
 const WIDE = "(min-width: 1024px)";
@@ -34,12 +34,14 @@ function inboxServer(initial: InboxItem[], extra: Parameters<typeof mockApi>[0] 
     "/api/v1/inbox": (url: URL) => {
       const state = url.searchParams.get("state");
       const priority = url.searchParams.get("priority");
+      const watch = url.searchParams.get("watch");
       const list = items.filter(
         (i) =>
           (state === "archived"
             ? i.archived_at
             : !i.archived_at && (state !== "unread" || !i.read_at)) &&
-          (!priority || i.priority === priority),
+          (!priority || i.priority === priority) &&
+          (!watch || i.watch.id === watch),
       );
       return Response.json({ items: list });
     },
@@ -56,6 +58,11 @@ function inboxServer(initial: InboxItem[], extra: Parameters<typeof mockApi>[0] 
   });
   return { fn, items: () => items };
 }
+
+// The page sends only UUIDs as a watch filter.
+const W2 = "22222222-2222-4222-8222-222222222222";
+const GO = { id: W2, name: "Go releases", kind: "github_repo" as const };
+const watchRoute = { [`/api/v1/watches/${W2}`]: watch({ id: W2 }) };
 
 const rows = () => screen.getAllByRole("listitem").filter((li) => li.dataset.unread !== undefined);
 
@@ -722,5 +729,223 @@ describe("InboxPage", () => {
     await userEvent.click(quick("v2.0.0 published", "Archive item"));
     expect(await screen.findByText(/Could not update the inbox/)).toBeInTheDocument();
     expect(rows()).toHaveLength(2);
+  });
+
+  describe("watch filter", () => {
+    // Two watches, newest first: 4 and 2 from Go releases, 3 and 1 from GitHub CLI releases.
+    const mixed = () => [
+      inboxItem(4, { watch: GO, priority: "high" }),
+      inboxItem(3, { priority: "high" }),
+      inboxItem(2, { watch: GO, priority: "high" }),
+      inboxItem(1, { priority: "high" }),
+    ];
+
+    // 020-AC5, 020-AC6, 020-AC7: the watch name filters in the same tab and priority, opens nothing,
+    // the chip removes it, and history steps back into it.
+    it("filters by the watch name and removes the filter with the chip", async () => {
+      const srv = inboxServer(mixed(), watchRoute);
+      const { router } = renderApp("/inbox?state=all&priority=high");
+      await screen.findByText("v3.0.0 published");
+      const reads = srv.fn.mock.calls.length;
+      await userEvent.click(
+        screen.getAllByRole("link", { name: "Show only Go releases" })[0] as HTMLElement,
+      );
+      await waitFor(() => expect(screen.queryByText("v3.0.0 published")).not.toBeInTheDocument());
+      expect(router.state.location.search).toBe(`?state=all&priority=high&watch=${W2}`);
+      const url = lastCall(srv.fn, "/api/v1/inbox")?.url;
+      expect(url?.searchParams.get("watch")).toBe(W2);
+      expect(url?.searchParams.get("priority")).toBe("high");
+      expect(url?.searchParams.get("state")).toBe("all");
+      expect(rows()).toHaveLength(2);
+      expect(screen.getByRole("button", { name: "All", pressed: true })).toBeVisible();
+      expect(screen.getByRole("button", { name: "High priority", pressed: true })).toBeVisible();
+      // Not opened: no panel, no read sent.
+      expect(screen.queryByRole("complementary", { name: /published/ })).not.toBeInTheDocument();
+      expect(
+        srv.fn.mock.calls
+          .slice(reads)
+          .some(([input]) => String(input).includes("/api/v1/inbox/read")),
+      ).toBe(false);
+      expect(srv.items().every((i) => !i.read_at)).toBe(true);
+
+      await userEvent.click(screen.getByRole("button", { name: "Remove filter Go releases" }));
+      expect(await screen.findByText("v3.0.0 published")).toBeInTheDocument();
+      expect(router.state.location.search).toBe("?state=all&priority=high");
+      expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.has("watch")).toBe(false);
+      expect(screen.queryByRole("button", { name: /^Remove filter/ })).not.toBeInTheDocument();
+      expect(rows()).toHaveLength(4);
+
+      await act(() => router.navigate(-1));
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      expect(router.state.location.search).toBe(`?state=all&priority=high&watch=${W2}`);
+      expect(screen.getByRole("button", { name: "Remove filter Go releases" })).toBeVisible();
+    });
+
+    // 020-AC10: a real link, by Tab, named for its watch, never inside the row's open button, whose
+    // name still carries the unread marker, the watch and the summary.
+    it("makes the watch name a link outside the open button", async () => {
+      inboxServer(mixed());
+      renderApp("/inbox?state=all");
+      await screen.findByText("v4.0.0 published");
+      const row = rows()[0] as HTMLElement;
+      const link = within(row).getByRole("link", { name: "Show only Go releases" });
+      expect(link).toHaveAttribute("href", `/inbox?state=all&watch=${W2}`);
+      expect(link).toHaveTextContent(/^Go releases$/);
+      expect(document.querySelectorAll("button a, a button")).toHaveLength(0);
+      const open = within(row).getByRole("button", {
+        name: /^Unread:\s*Go releases\s*v4\.0\.0 published/,
+      });
+      // The time sits outside the button: it comes back as the button's description.
+      expect(open).toHaveAccessibleDescription("just now");
+      within(row).getByRole("checkbox").focus();
+      await userEvent.tab();
+      expect(link).toHaveFocus();
+      await userEvent.tab();
+      expect(document.activeElement?.id).toBe("inbox-item-4");
+    });
+
+    // 020-AC7: a reload lands on the filter; the chip names the watch with no item loaded, from the
+    // watch itself. 020-AC9: the empty state names it and removes the filter.
+    it("names the watch with no item loaded and offers to remove the filter", async () => {
+      const srv = inboxServer([inboxItem(2, { watch: GO, read_at: yesterday() }), inboxItem(1)], {
+        ...watchRoute,
+      });
+      const { router } = renderApp(`/inbox?watch=${W2}`);
+      const empty = await screen.findByRole("region", { name: "Nothing from Go releases here" });
+      expect(screen.getByRole("button", { name: "Remove filter Go releases" })).toBeVisible();
+      expect(lastCall(srv.fn, `/api/v1/watches/${W2}`)).toBeDefined();
+      await userEvent.click(within(empty).getByRole("button", { name: "Show all watches" }));
+      expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+      expect(router.state.location.search).toBe("");
+    });
+
+    // 020-AC6, 020-AC7: a watch that cannot be read gets a neutral name, and the chip still goes.
+    it("keeps an unknown watch removable", async () => {
+      inboxServer([inboxItem(1)]);
+      const { router } = renderApp("/inbox?state=all&watch=99999999-9999-4999-8999-999999999999");
+      expect(
+        await screen.findByRole("region", { name: "Nothing from Unknown watch here" }),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Remove filter Unknown watch" }));
+      expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+      expect(router.state.location.search).toBe("?state=all");
+    });
+
+    // 020-AC8: select all then Mark read sends only the loaded items of the watch, and the refetch
+    // after it keeps the filter.
+    it("marks read only the filtered watch's items", async () => {
+      const srv = inboxServer(mixed(), watchRoute);
+      renderApp(`/inbox?watch=${W2}`);
+      await screen.findByText("v4.0.0 published");
+      await userEvent.click(
+        screen.getByRole("checkbox", { name: "Select: Go releases: v4.0.0 published" }),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Select all 2" }));
+      await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
+      await waitFor(() =>
+        expect(lastCall(srv.fn, "/api/v1/inbox/read", "POST")?.body).toEqual({ ids: [4, 2] }),
+      );
+      expect(
+        srv
+          .items()
+          .filter((i) => i.read_at)
+          .map((i) => i.id),
+      ).toEqual([4, 2]);
+      expect(
+        await screen.findByRole("region", { name: "Nothing from Go releases here" }),
+      ).toBeInTheDocument();
+      expect(lastCall(srv.fn, "/api/v1/inbox")?.url.searchParams.get("watch")).toBe(W2);
+      // Named from the watch once no item is left to name it.
+      expect(screen.getByRole("button", { name: "Remove filter Go releases" })).toBeVisible();
+    });
+
+    // 020-AC5: Load more stays within the watch.
+    it("paginates within the watch", async () => {
+      const fn = mockApi({
+        "/api/v1/inbox": (url: URL) =>
+          Response.json(
+            url.searchParams.get("cursor")
+              ? { items: [inboxItem(2, { watch: GO })] }
+              : { items: [inboxItem(4, { watch: GO })], next_cursor: "4" },
+          ),
+      });
+      renderApp(`/inbox?watch=${W2}`);
+      await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
+      await screen.findByText("v2.0.0 published");
+      const url = lastCall(fn, "/api/v1/inbox")?.url;
+      expect(url?.searchParams.get("cursor")).toBe("4");
+      expect(url?.searchParams.get("watch")).toBe(W2);
+    });
+
+    // 020-AC8: history into a filter drops what the previous view held: an item of another watch opened
+    // there, a selection, the j/k cursor. Nothing the reader did not pick here joins an action.
+    it("starts a view reached by history afresh", async () => {
+      const srv = inboxServer(mixed(), watchRoute);
+      const { router } = renderApp("/inbox?state=all");
+      await screen.findByText("v3.0.0 published");
+      await act(() => router.navigate(`/inbox?state=all&watch=${W2}`));
+      await waitFor(() => expect(rows()).toHaveLength(2));
+      await act(() => router.navigate(-1));
+      const v4 = () =>
+        screen.getByRole("checkbox", { name: "Select: Go releases: v4.0.0 published" });
+      await userEvent.click(await screen.findByRole("button", { name: /v3\.0\.0 published/ }));
+      expect(screen.getByRole("complementary", { name: "v3.0.0 published" })).toBeVisible();
+      // A row the next view also lists, selected; the cursor on its last row.
+      await userEvent.click(v4());
+      await userEvent.keyboard("jj");
+      expect(rows()[3]?.dataset.focused).toBe("true");
+      await act(() => router.navigate(1));
+      await waitFor(() => expect(screen.queryByText("v3.0.0 published")).not.toBeInTheDocument());
+      expect(screen.queryByRole("complementary", { name: /published/ })).not.toBeInTheDocument();
+      expect(v4()).not.toBeChecked();
+      expect(screen.queryByRole("toolbar", { name: "Bulk actions" })).not.toBeInTheDocument();
+      expect(rows().map((r) => r.dataset.focused)).toEqual(["false", "false"]);
+      await userEvent.keyboard("e");
+      await act(async () => {});
+      expect(lastCall(srv.fn, "/api/v1/inbox/archive", "POST")).toBeUndefined();
+      await userEvent.keyboard("j");
+      expect(rows().map((r) => r.dataset.focused)).toEqual(["true", "false"]);
+      await userEvent.click(
+        screen.getByRole("checkbox", { name: "Select: Go releases: v4.0.0 published" }),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Select all 2" }));
+      await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+      await waitFor(() =>
+        expect(lastCall(srv.fn, "/api/v1/inbox/archive", "POST")?.body).toEqual({ ids: [4, 2] }),
+      );
+    });
+
+    // 020-AC7, 020-AC9: while the watch is still being asked for, nothing reads as an empty name.
+    it("names the filter neutrally until the watch answers", async () => {
+      let release: (r: Response) => void = () => {};
+      inboxServer([], {
+        [`/api/v1/watches/${W2}`]: () => new Promise<Response>((r) => (release = r)),
+      });
+      renderApp(`/inbox?watch=${W2}`);
+      expect(
+        await screen.findByRole("region", { name: "Nothing from this watch here" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove watch filter" })).toBeVisible();
+      expect(screen.getByText("Watch filter")).toBeVisible();
+      act(() => release(Response.json(watch({ id: W2 }))));
+      expect(
+        await screen.findByRole("region", { name: "Nothing from Go releases here" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove filter Go releases" })).toBeVisible();
+    });
+
+    // 020-AC6, 020-AC7: a hand-edited id that is not a UUID is an unknown watch, never sent.
+    it("never sends a watch that is not a UUID", async () => {
+      const srv = inboxServer([inboxItem(1)]);
+      const { router } = renderApp("/inbox?state=all&watch=nope");
+      expect(
+        await screen.findByRole("region", { name: "Nothing from Unknown watch here" }),
+      ).toBeInTheDocument();
+      expect(lastCall(srv.fn, "/api/v1/inbox")).toBeUndefined();
+      expect(srv.fn.mock.calls.some(([input]) => String(input).includes("nope"))).toBe(false);
+      await userEvent.click(screen.getByRole("button", { name: "Remove filter Unknown watch" }));
+      expect(await screen.findByText("v1.0.0 published")).toBeInTheDocument();
+      expect(router.state.location.search).toBe("?state=all");
+    });
   });
 });

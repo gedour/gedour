@@ -17,8 +17,10 @@ const retype = (page: Page) => async (text: string, attempt: number) => {
 /** Asserts target has keyboard focus with a visible indicator: its own outline or its card's ring. */
 async function expectFocusVisible(target: Locator) {
   const state = await target.evaluate((el) => {
-    const s = getComputedStyle(el);
-    const outline = s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0;
+    // A stretched button (inbox row) draws its ring on the ::after covering its row.
+    const outline = [getComputedStyle(el), getComputedStyle(el, "::after")].some(
+      (s) => s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0,
+    );
     // A visually hidden radio shows a ring (box-shadow) on the card around it instead.
     const card = el.matches(".sr-only") ? el.closest("label") : null;
     return {

@@ -951,6 +951,37 @@ func TestMCPParity(t *testing.T) {
 	}
 }
 
+// 020-AC4: list_inbox takes watch and returns what the filtered REST call returns.
+func TestMCPInboxWatchFilter(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	key, _ := m.key(t, alice.id, "read", "")
+	var wa, wb watchJSON
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &wa)
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &wb)
+	m.inboxEvent(t, alice.id, wa.ID, "a1", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wb.ID, "b1", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wa.ID, "a2", map[string]any{"title": "t"})
+	var want any
+	m.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?watch="+wa.ID, nil, http.StatusOK, &want)
+	res := m.tool(t, key, "list_inbox", map[string]any{"watch": wa.ID}, nil)
+	if res.IsError || !reflect.DeepEqual(res.data(t), want) {
+		t.Fatalf("got %+v\nwant %v", res, want)
+	}
+	items := want.(map[string]any)["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("REST: %d items", len(items))
+	}
+	for _, it := range items {
+		if id := it.(map[string]any)["watch"].(map[string]any)["id"]; id != wa.ID {
+			t.Fatalf("item of watch %v", id)
+		}
+	}
+	if res := m.tool(t, key, "list_inbox", map[string]any{"watch": "x"}, nil); !res.IsError || !strings.Contains(res.text(), "query.watch") {
+		t.Fatalf("non-UUID: %+v", res)
+	}
+}
+
 // 007-AC25: inputSchema is the operation's in api/openapi.json, and the catalog offers no URL, host or free-form object.
 func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 	m := newMCPApp(t)
@@ -1035,7 +1066,7 @@ func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 	if len(list.Tools) != len(readTools)+len(writeTools)+len(manageTools) {
 		t.Fatalf("%d tools", len(list.Tools))
 	}
-	ops := map[string]string{"mark_inbox_read": "read-inbox", "mark_inbox_unread": "unread-inbox"}
+	ops := map[string]string{"mark_inbox_read": "read-inbox", "mark_inbox_unread": "unread-inbox", "mark_watch_inbox_read": "read-watch-inbox"}
 	for _, tool := range list.Tools {
 		t.Run(tool.Name, func(t *testing.T) {
 			op := strings.ReplaceAll(tool.Name, "_", "-")
@@ -1948,9 +1979,9 @@ func TestMCPForcedFailureRequestID(t *testing.T) {
 	}
 }
 
-var writeTools = []string{"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch"}
+var writeTools = []string{"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "mark_watch_inbox_read", "run_watch"}
 
-// 007-AC23: a write key lists 14 tools in the table's order, and a read key gets -32602 on each write tool, with nothing changed.
+// 007-AC23: a write key lists 15 tools in the table's order, and a read key gets -32602 on each write tool, with nothing changed.
 func TestMCPWriteScope(t *testing.T) {
 	m := newMCPApp(t)
 	alice := m.user(t, "alice")
@@ -1991,7 +2022,7 @@ func TestMCPWriteScope(t *testing.T) {
 	readKey, _ := m.key(t, alice.id, "read", "")
 	for _, name := range writeTools {
 		args := map[string]any{"ids": []int64{item}}
-		if name == "run_watch" {
+		if name == "run_watch" || name == "mark_watch_inbox_read" {
 			args = map[string]any{"id": w.ID}
 		}
 		code, r := m.rpc(t, readKey, "tools/call", map[string]any{"name": name, "arguments": args}, nil)
@@ -2072,6 +2103,47 @@ func TestMCPInboxMarks(t *testing.T) {
 	m.scan(t, `SELECT count(*) FROM audit_log`, nil, &auditedAfter)
 	if auditedAfter != audited {
 		t.Fatalf("%d audit rows added", auditedAfter-audited)
+	}
+}
+
+// 020-AC13: mark_watch_inbox_read answers and changes what the REST call does, write scope, no audit row (like the other marks).
+func TestMCPWatchInboxRead(t *testing.T) {
+	m := newMCPApp(t)
+	alice, bob := m.user(t, "alice"), m.user(t, "bob")
+	var wa, wb watchJSON
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &wa)
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &wb)
+	m.inboxEvent(t, alice.id, wa.ID, "a1", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wa.ID, "a2", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wb.ID, "b1", map[string]any{"title": "t"})
+	m.inboxEvent(t, bob.id, wa.ID, "x", map[string]any{"title": "t"})
+	key, _ := m.key(t, alice.id, "write", "")
+	state := func() string {
+		var s string
+		m.scan(t, `SELECT string_agg(concat_ws(',', id, read_at IS NULL), ';' ORDER BY id) FROM inbox_items`, nil, &s)
+		return s
+	}
+	var audited int
+	m.scan(t, `SELECT count(*) FROM audit_log`, nil, &audited)
+	start := state()
+	res := m.tool(t, key, "mark_watch_inbox_read", map[string]any{"id": wa.ID}, nil)
+	if res.IsError || !reflect.DeepEqual(res.data(t), map[string]any{"updated": 2.0, "unread": 1.0}) {
+		t.Fatalf("tool: %+v", res)
+	}
+	byTool := state()
+	m.exec(t, `UPDATE inbox_items SET read_at = NULL`)
+	var want any
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/watches/"+wa.ID+"/read", nil, http.StatusOK, &want)
+	if !reflect.DeepEqual(res.data(t), want) || state() != byTool || byTool == start {
+		t.Fatalf("REST %v, state %s, tool state %s", want, state(), byTool)
+	}
+	if res := m.tool(t, key, "mark_watch_inbox_read", map[string]any{"id": "x"}, nil); !res.IsError || !strings.Contains(res.text(), "path.id") {
+		t.Fatalf("non-UUID: %+v", res)
+	}
+	var after int
+	m.scan(t, `SELECT count(*) FROM audit_log`, nil, &after)
+	if after != audited {
+		t.Fatalf("%d audit rows added", after-audited)
 	}
 }
 

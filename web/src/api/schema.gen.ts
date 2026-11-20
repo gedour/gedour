@@ -506,6 +506,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/inbox/watches/{id}/read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Mark every unread item of one watch read in the caller's inbox
+     * @description Archived items are left out. A watch the caller cannot read, or an unknown one, changes nothing.
+     */
+    post: operations["read-watch-inbox"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/me": {
     parameters: {
       query?: never;
@@ -2908,6 +2928,8 @@ export interface operations {
         state?: "unread" | "all" | "archived";
         /** @description Only items of this priority; absent: all */
         priority?: "normal" | "high";
+        /** @description Only this watch's items; absent: all */
+        watch?: string;
         /** @description next_cursor of the previous page */
         cursor?: string;
         limit?: number;
@@ -3078,6 +3100,38 @@ export interface operations {
         "application/json": components["schemas"]["BulkInputBody"];
       };
     };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BulkOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "read-watch-inbox": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Watch ID */
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
     responses: {
       /** @description OK */
       200: {

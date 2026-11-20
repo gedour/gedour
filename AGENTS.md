@@ -31,8 +31,9 @@
   the signature against `testupstream.TalkSecret`; tokens `force404*`/`force429*` force that status.
 - The fixture set is global: only `activity.spec.ts` (serial) and `seed.setup.ts` switch it. The `seed` project
   runs before the parallel specs and leaves 3 events in bob's inbox, 2 of them high (005). The a11y, 375 px,
-  keyboard, priority, push, api-keys, mcp and rule-live-test specs run as bob (channels and watches in part).
-  Specs open (mark read) the newest or a high item, only the keyboard spec touches the rc promotion item. Push
+  keyboard, priority, push, api-keys, mcp, rule-live-test and inbox-watch-filter specs run as bob (channels and watches in part).
+  Specs open (mark read) the newest or a high item, only the keyboard spec touches the rc promotion item; a bulk
+  read goes through `page.route` (`inbox-watch-filter.spec.ts`), never bob's real inbox. Push
   devices for bob: a11y adds two and keeps them, 375 px and keyboard remove the one they add, push registers its
   browser. Push also creates, then deletes, a bob rule on the seeded watch targeting its Web Push channel;
   rule-live-test creates, then deletes, its own script, webhook and script channels, and a rule on the seeded

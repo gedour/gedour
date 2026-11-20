@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import {
   Archive,
   ArchiveRestore,
+  CheckCheck,
   ExternalLink,
   Flag,
   Mail,
@@ -13,7 +14,7 @@ import {
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 
-import { inboxAction, listInbox, listRules } from "@/api/client";
+import { getWatch, inboxAction, listInbox, listRules, readWatchInbox } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorState } from "@/components/ErrorState";
 import { SelectionBar, SelectTile } from "@/components/Selection";
@@ -61,6 +62,17 @@ function ignoresShortcuts(target: EventTarget | null): boolean {
 
 const rowId = (id: number) => `inbox-item-${id}`;
 
+// Only the 8-4-4-4-12 form this page writes is sent; other spellings, API-valid or not, are unknown.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The defaults stay out of the URL: the bare /inbox is the Unread tab, every watch, every priority.
+const filterParams = (state: InboxState, highOnly: boolean, watch: string) =>
+  new URLSearchParams({
+    ...(state !== "unread" && { state }),
+    ...(highOnly && { priority: "high" }),
+    ...(watch && { watch }),
+  });
+
 const now = () => new Date().toISOString();
 const PATCH: Record<InboxAction, () => Partial<InboxItem>> = {
   read: () => ({ read_at: now() }),
@@ -104,15 +116,30 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
   const raw = params.get("state") ?? (params.has("event") ? "all" : null);
   const state: InboxState = raw === "all" || raw === "archived" ? raw : "unread";
   const highOnly = params.get("priority") === "high";
+  const watch = params.get("watch") ?? "";
+  const badWatch = watch !== "" && !UUID.test(watch);
   const query = useInfiniteQuery({
-    queryKey: [...LIST_KEY, state, highOnly],
-    queryFn: ({ pageParam }) => listInbox(state, pageParam, highOnly),
+    queryKey: [...LIST_KEY, state, highOnly, watch],
+    queryFn: ({ pageParam }) =>
+      badWatch ? Promise.resolve({ items: [] }) : listInbox(state, pageParam, { highOnly, watch }),
     initialPageParam: "",
     getNextPageParam: (last) => last.next_cursor,
   });
   const unread = useInboxCount().data;
   const read = useInboxReadCount().data;
   const rules = useQuery({ queryKey: ["rules"], queryFn: listRules });
+  const fetched = query.data?.pages.flatMap((p) => p.items) ?? [];
+  // Asked even when a loaded item names the watch: reading them all can empty the list under the chip.
+  const watched = useQuery({
+    queryKey: ["watch", watch],
+    queryFn: () => getWatch(watch),
+    enabled: watch !== "" && !badWatch,
+  });
+  // Null while the watch is still being asked for.
+  const watchName =
+    fetched.find((i) => i.watch.id === watch)?.watch.name ??
+    watched.data?.name ??
+    (badWatch || watched.isError ? "Unknown watch" : null);
   const client = useQueryClient();
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -126,12 +153,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
   // Actions shown before the server confirms them: a row leaves its tab at once, so the next one comes
   // under the pointer and a quick action can be repeated in place.
   const [patches, setPatches] = useState<Map<number, Partial<InboxItem>>>(new Map());
-  const items = visibleItems(
-    query.data?.pages.flatMap((p) => p.items) ?? [],
-    patches,
-    state,
-    opened,
-  );
+  const items = visibleItems(fetched, patches, state, opened);
   const wide = useMediaQuery(WIDE_QUERY);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dialogOpen = Boolean(opened) && !wide;
@@ -140,9 +162,20 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     if (dialogOpen) closeRef.current?.focus();
   }, [dialogOpen]);
 
+  // Any change of view, by a control or by history, starts afresh: a selection or an opened item from
+  // another view must never ride along into a bulk action here.
+  const view = `${state}/${highOnly}/${watch}`;
+  const [shown, setShown] = useState(view);
+  if (shown !== view) {
+    setShown(view);
+    setSelected(new Set());
+    setOpened(null);
+    setFocus(0);
+    setCursor(false);
+  }
+
   // Items new since the last render of this tab play the arrival animation.
   const ids = items.map((i) => i.id).join(",");
-  const view = `${state}/${highOnly}`;
   const [seen, setSeen] = useState<{ view: string; ids: string } | null>(null);
   const [arrived, setArrived] = useState<Set<number>>(new Set());
   if (query.isSuccess && (seen?.view !== view || seen.ids !== ids)) {
@@ -183,6 +216,30 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     inFlight.current++;
     act.mutate({ action, ids, patch });
   };
+  // Server-side, loaded or not: no patch, the refetch shows it. 020-AC14, 020-AC16.
+  const readWatch = useMutation({
+    mutationFn: (w: InboxItem["watch"]) => readWatchInbox(w.id),
+    onError: (err) => toast(`Could not update the inbox: ${problemText(err)}`, "error"),
+    onSuccess: ({ updated }, w) => {
+      // The panel holds its own copy of the opened item.
+      setOpened((o) =>
+        o?.watch.id === w.id && !o.read_at && !o.archived_at ? { ...o, ...PATCH.read() } : o,
+      );
+      toast(
+        updated === 0
+          ? `Nothing unread from ${w.name}`
+          : `${updated} item${updated === 1 ? "" : "s"} from ${w.name} marked read`,
+      );
+      // Returned: pending lasts until the list shows the reads, so a second click cannot beat it.
+      return Promise.all([
+        client.invalidateQueries({ queryKey: COUNT_KEY }),
+        client.invalidateQueries({ queryKey: LIST_KEY }),
+      ]);
+    },
+  });
+  // None while one is out: a second click would toast a contradicting "Nothing unread".
+  const readWatchOf = (w: InboxItem["watch"]) =>
+    readWatch.isPending ? undefined : () => readWatch.mutate(w);
   const actOnOpened = (a: InboxAction) => {
     if (opened) run(a, [opened.id]);
   };
@@ -286,21 +343,21 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const show = (next: InboxState, nextHighOnly: boolean) => {
-    setParams({
-      ...(next !== "unread" && { state: next }),
-      ...(nextHighOnly && { priority: "high" }),
-    });
-    setSelected(new Set());
-    setOpened(null);
-    setFocus(0);
-    setCursor(false);
-  };
+  const show = (next: InboxState, nextHighOnly: boolean, nextWatch = watch) =>
+    setParams(filterParams(next, nextHighOnly, nextWatch));
 
   const chosen = [...selected];
-  const empty = highOnly
-    ? { title: "Nothing high priority here", body: "High priority rules bring their events here." }
-    : (EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody });
+  const empty = watch
+    ? {
+        title: `Nothing from ${watchName ?? "this watch"} here`,
+        body: "Remove the filter to see every watch.",
+      }
+    : highOnly
+      ? {
+          title: "Nothing high priority here",
+          body: "High priority rules bring their events here.",
+        }
+      : (EMPTY[state] ?? { title: nav.emptyTitle, body: nav.emptyBody });
   const tabsId = useId();
 
   return (
@@ -365,6 +422,23 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
             <Flag aria-hidden />
             High priority
           </Button>
+          {watch && (
+            <span className="inline-flex h-9 max-w-64 items-center gap-1 rounded-md border border-line bg-beacon-soft pl-3 text-sm font-medium shadow-xs">
+              <span className="truncate" title={watchName ?? undefined}>
+                {watchName ?? "Watch filter"}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label={watchName ? `Remove filter ${watchName}` : "Remove watch filter"}
+                title="Remove filter"
+                onClick={() => show(state, highOnly, "")}
+              >
+                <X aria-hidden />
+              </Button>
+            </span>
+          )}
         </div>
       </div>
 
@@ -395,7 +469,11 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
           title={empty.title}
           body={empty.body}
           action={
-            state === "archived" ? undefined : rules.data?.length === 0 ? (
+            watch ? (
+              <Button variant="outline" onClick={() => show(state, highOnly, "")}>
+                Show all watches
+              </Button>
+            ) : state === "archived" ? undefined : rules.data?.length === 0 ? (
               <Button variant="outline" asChild>
                 <Link to="/rules">
                   <Telescope aria-hidden />
@@ -449,7 +527,7 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                 </h2>
                 <ul
                   aria-label={`Inbox, ${g.label}`}
-                  className="overflow-hidden rounded-xl border border-line bg-surface"
+                  className="@container/inbox overflow-hidden rounded-xl border border-line bg-surface"
                 >
                   {g.items.map((it) => {
                     const idx = items.indexOf(it);
@@ -469,6 +547,8 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
                           setCursor(true);
                         }}
                         onAction={(a) => run(a, [it.id])}
+                        onReadWatch={readWatchOf(it.watch)}
+                        filterTo={`?${filterParams(state, highOnly, it.watch.id)}`}
                       />
                     );
                   })}
@@ -486,7 +566,14 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
               </Button>
             )}
           </div>
-          {opened && wide && <InboxPanel item={opened} onClose={close} onAction={actOnOpened} />}
+          {opened && wide && (
+            <InboxPanel
+              item={opened}
+              onClose={close}
+              onAction={actOnOpened}
+              onReadWatch={readWatchOf(opened.watch)}
+            />
+          )}
         </div>
       )}
       {/* Narrow screens: a modal dialog, which traps focus and gives it back on close. */}
@@ -498,7 +585,11 @@ export function InboxPage({ item: nav }: { item: NavItem }) {
       >
         {opened && !wide && (
           <>
-            <DetailBody item={opened} onAction={actOnOpened} />
+            <DetailBody
+              item={opened}
+              onAction={actOnOpened}
+              onReadWatch={readWatchOf(opened.watch)}
+            />
             <DialogActions>
               <Button variant="ghost" ref={closeRef} onClick={close}>
                 Close
@@ -539,6 +630,8 @@ function InboxRow({
   onOpen,
   onFocus,
   onAction,
+  onReadWatch,
+  filterTo,
 }: {
   item: InboxItem;
   focused: boolean;
@@ -550,6 +643,8 @@ function InboxRow({
   onOpen: () => void;
   onFocus: () => void;
   onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
+  filterTo: string;
 }) {
   const s = summarizeEvent(item.event);
   // Two watches can publish the same tag: control names carry the watch.
@@ -569,55 +664,68 @@ function InboxRow({
         arrived && "animate-arrive",
       )}
     >
+      {/* Above the open button's hit area, like the watch link. */}
       <SelectTile
         label={label}
         selected={selected}
         selecting={selecting}
         onToggle={onToggle}
-        className="size-9"
+        className="z-10 size-9"
       >
         <KindIcon kind={item.watch.kind} className="size-9" />
       </SelectTile>
-      <button
-        id={rowId(item.id)}
-        type="button"
-        onClick={onOpen}
-        onFocus={onFocus}
-        aria-current={active || undefined}
-        className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-offset-4"
-      >
-        {/* Container, not viewport, breakpoints: the detail panel narrows the list on wide screens. */}
-        <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
-          <span
-            className={cn(
-              "line-clamp-2 break-all @md:line-clamp-1 @md:break-words",
-              unread ? "font-semibold text-ink" : "font-medium text-muted",
-            )}
+      {/* Container, not viewport, breakpoints: the detail panel narrows the list on wide screens. */}
+      <span className="@container flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            "line-clamp-2 break-all @md:line-clamp-1 @md:break-words",
+            unread ? "font-semibold text-ink" : "font-medium text-muted",
+          )}
+        >
+          {/* A link cannot sit in a button: it stacks above the button's row-wide hit area instead. */}
+          <Link
+            to={filterTo}
             title={item.watch.name}
+            aria-label={`Show only ${item.watch.name}`}
+            // The padding takes the hit box to 24 px (WCAG 2.5.8) without growing the line.
+            className="relative z-10 py-[3px] underline-offset-4 hover:underline focus-visible:underline"
           >
-            {unread && <span className="sr-only">Unread: </span>}
             {item.watch.name}
+          </Link>
+        </span>
+        {/* Not positioned: its ::after covers the whole row, so a click anywhere but a control opens it. */}
+        <button
+          id={rowId(item.id)}
+          type="button"
+          onClick={onOpen}
+          onFocus={onFocus}
+          aria-current={active || undefined}
+          aria-describedby={`${rowId(item.id)}-at`}
+          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-left text-sm text-muted outline-none after:absolute after:inset-0 focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-beacon @md:flex-nowrap"
+        >
+          <span className="sr-only">
+            {unread && "Unread: "}
+            {item.watch.name}{" "}
           </span>
           {/* Four lines when narrow: a long file name must not push the status out of sight. */}
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted @md:flex-nowrap">
-            <span className="line-clamp-4 min-w-0 break-words @md:line-clamp-none @md:truncate">
-              {s.text}
-            </span>
-            {item.priority === "high" && <PriorityBadge />}
+          <span className="line-clamp-4 min-w-0 break-words @md:line-clamp-none @md:truncate">
+            {s.text}
           </span>
-        </span>
-        <time
-          dateTime={item.created_at}
-          title={formatAbsolute(at)}
-          className="shrink-0 text-xs text-muted tabular-nums"
-        >
-          {formatRelative(at)}
-        </time>
-        <span
-          aria-hidden
-          className={cn("size-2 shrink-0 rounded-full", unread ? "bg-beacon" : "bg-transparent")}
-        />
-      </button>
+          {item.priority === "high" && <PriorityBadge />}
+        </button>
+      </span>
+      <time
+        id={`${rowId(item.id)}-at`}
+        dateTime={item.created_at}
+        title={formatAbsolute(at)}
+        className="shrink-0 text-xs text-muted tabular-nums"
+      >
+        {formatRelative(at)}
+      </time>
+      <span
+        aria-hidden
+        className={cn("size-2 shrink-0 rounded-full", unread ? "bg-beacon" : "bg-transparent")}
+      />
       {/* Pinned to the row's right edge: the next row lands under the pointer at the same spot. */}
       <div
         role="group"
@@ -641,6 +749,19 @@ function InboxRow({
           onClick={() => onAction(item.archived_at ? "unarchive" : "archive")}
         >
           {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          title={`Mark all from ${item.watch.name} read`}
+          aria-label={`Mark all from ${item.watch.name} read`}
+          // Under 28rem the panel or dialog carries the action: the row keeps its text.
+          // Not disabled: that would drop the focus to <body>.
+          className="@max-md/inbox:hidden aria-disabled:opacity-50"
+          aria-disabled={!onReadWatch}
+          onClick={onReadWatch}
+        >
+          <CheckCheck aria-hidden />
         </Button>
       </div>
     </li>
@@ -669,10 +790,12 @@ function InboxPanel({
   item,
   onClose,
   onAction,
+  onReadWatch,
 }: {
   item: InboxItem;
   onClose: () => void;
   onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
 }) {
   const titleId = useId();
   return (
@@ -691,7 +814,7 @@ function InboxPanel({
           <X aria-hidden />
         </Button>
       </div>
-      <DetailBody item={item} onAction={onAction} />
+      <DetailBody item={item} onAction={onAction} onReadWatch={onReadWatch} />
     </aside>
   );
 }
@@ -715,7 +838,15 @@ function DetailHeader({ item }: { item: InboxItem }) {
   );
 }
 
-function DetailBody({ item, onAction }: { item: InboxItem; onAction: (a: InboxAction) => void }) {
+function DetailBody({
+  item,
+  onAction,
+  onReadWatch,
+}: {
+  item: InboxItem;
+  onAction: (a: InboxAction) => void;
+  onReadWatch?: () => void;
+}) {
   const s = summarizeEvent(item.event);
   const rows = payloadRows(item.event.payload);
   const notes = item.event.payload.body;
@@ -784,6 +915,16 @@ function DetailBody({ item, onAction }: { item: InboxItem; onAction: (a: InboxAc
         >
           {item.archived_at ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
           {item.archived_at ? "Unarchive" : "Archive"}
+        </Button>
+        <Button
+          variant="outline"
+          className="max-w-full aria-disabled:opacity-50"
+          title={`Mark all from ${item.watch.name} read`}
+          aria-disabled={!onReadWatch}
+          onClick={onReadWatch}
+        >
+          <CheckCheck aria-hidden />
+          <span className="min-w-0 truncate">Mark all from {item.watch.name} read</span>
         </Button>
       </div>
     </div>

@@ -96,7 +96,7 @@ func TestBuildToolsRefuses(t *testing.T) {
 // The real table builds against nothing but its own operations: a typo in it fails here too.
 func TestCatalogOrder(t *testing.T) {
 	want := []string{"count_inbox", "list_inbox", "list_watches", "get_watch", "list_watch_events", "list_watch_states", "list_rules", "get_rule", "list_deliveries",
-		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "run_watch",
+		"mark_inbox_read", "mark_inbox_unread", "archive_inbox", "unarchive_inbox", "mark_watch_inbox_read", "run_watch",
 		"get_filter_reference", "list_channels", "list_credentials", "create_watch", "update_watch", "create_rule", "update_rule"}
 	if len(rows) != len(want) {
 		t.Fatalf("%d rows", len(rows))

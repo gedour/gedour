@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
@@ -34,6 +35,7 @@ type InboxItem struct {
 type listInboxInput struct {
 	State    string `query:"state" enum:"unread,all,archived" default:"all" doc:"unread: not read, not archived; all: not archived"`
 	Priority string `query:"priority" enum:"normal,high" doc:"Only items of this priority; absent: all"`
+	Watch    string `query:"watch" format:"uuid" doc:"Only this watch's items; absent: all"`
 	Cursor   string `query:"cursor" doc:"next_cursor of the previous page"`
 	Limit    int    `query:"limit" minimum:"1" maximum:"200" default:"50"`
 }
@@ -56,6 +58,10 @@ type bulkInput struct {
 	Body struct {
 		IDs []int64 `json:"ids" nullable:"false" minItems:"1" maxItems:"500" doc:"Inbox item IDs; others' items are ignored"`
 	}
+}
+
+type watchReadInput struct {
+	ID string `path:"id" format:"uuid" doc:"Watch ID"`
 }
 
 type bulkOutput struct {
@@ -107,9 +113,24 @@ func (s *Service) registerInbox(api huma.API) {
 			OperationID: op.name + "-inbox", Method: http.MethodPost, Path: "/api/v1/inbox/" + op.name,
 			Summary: "Mark the caller's items " + op.name, Description: op.desc, Tags: tags,
 		}, func(ctx context.Context, in *bulkInput) (*bulkOutput, error) {
-			return s.bulk(ctx, op.name, op.set, cond, in.Body.IDs)
+			return s.bulk(ctx, op.name, `UPDATE inbox_items SET `+op.set+` WHERE user_id = $1 AND id = ANY($2) AND `+cond, in.Body.IDs)
 		})
 	}
+	huma.Register(api, huma.Operation{
+		OperationID: "read-watch-inbox", Method: http.MethodPost, Path: "/api/v1/inbox/watches/{id}/read",
+		Summary:     "Mark every unread item of one watch read in the caller's inbox",
+		Description: "Archived items are left out. A watch the caller cannot read, or an unknown one, changes nothing.", Tags: tags,
+	}, func(ctx context.Context, in *watchReadInput) (*bulkOutput, error) {
+		// Canonical: huma's uuid format also lets urn:uuid: through, which Postgres refuses.
+		id, err := uuid.Parse(in.ID)
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid watch", &huma.ErrorDetail{Location: "path.id", Message: "not a watch ID", Value: in.ID})
+		}
+		// 020-AC11, 020-AC12.
+		return s.bulk(ctx, "read-watch", `UPDATE inbox_items i SET read_at = now() FROM events e JOIN watches w ON w.id = e.watch_id
+			WHERE i.event_id = e.id AND i.user_id = $1 AND e.watch_id = $2 AND i.read_at IS NULL AND i.archived_at IS NULL AND `+
+			watch.ReadableSQL("w", "$1::uuid"), id.String())
+	})
 }
 
 func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInboxOutput, error) {
@@ -136,6 +157,15 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 		sql += " AND i.priority = 'high'"
 	case priorityNormal:
 		sql += " AND i.priority = 'normal'"
+	}
+	if in.Watch != "" {
+		// Canonical: huma's uuid format also lets urn:uuid: through, which Postgres refuses.
+		id, err := uuid.Parse(in.Watch)
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid watch", &huma.ErrorDetail{Location: "query.watch", Message: "not a watch ID", Value: in.Watch})
+		}
+		sql += " AND e.watch_id = @watch"
+		args["watch"] = id.String()
 	}
 	if in.Cursor != "" {
 		before, err := strconv.ParseInt(in.Cursor, 10, 64)
@@ -171,15 +201,15 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 	return out, nil
 }
 
-// bulk changes the caller's items among ids and tells their other open tabs the new count. 001-AC20.
-func (s *Service) bulk(ctx context.Context, op, set, cond string, ids []int64) (*bulkOutput, error) {
+// bulk runs update ($1 the caller, $2 arg) on the caller's items and tells their other open tabs the new count. 001-AC20.
+func (s *Service) bulk(ctx context.Context, op, update string, arg any) (*bulkOutput, error) {
 	me, err := s.me(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := &bulkOutput{}
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE inbox_items SET `+set+` WHERE user_id = $1 AND id = ANY($2) AND `+cond, me, ids)
+		tag, err := tx.Exec(ctx, update, me, arg)
 		if err != nil {
 			return err
 		}

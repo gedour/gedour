@@ -75,6 +75,15 @@ describe("InboxPage", () => {
     );
     expect(rows().map((r) => r.dataset.unread)).toEqual(["true", "false", "true"]);
     expect(within(today).getAllByText(/^Unread:/)).toHaveLength(1);
+    // The watch leads the row, the event follows.
+    expect(
+      within(today).getByRole("button", {
+        name: /^Unread:\s*GitHub CLI releases\s*v3\.0\.0 published/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(today).getByRole("button", { name: /^GitHub CLI releases\s*v2\.0\.0 published/ }),
+    ).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "Inbox, 2 unread" })).toBeInTheDocument();
     expect(screen.getByTestId("unread-badge")).toHaveTextContent("2");
   });
@@ -151,7 +160,9 @@ describe("InboxPage", () => {
     await waitFor(() => expect(srv.items().find((i) => i.id === 2)?.read_at).toBeNull());
 
     await userEvent.keyboard("x");
-    expect(screen.getByRole("checkbox", { name: "Select: v2.0.0 published" })).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v2.0.0 published" }),
+    ).toBeChecked();
     expect(screen.getByRole("toolbar", { name: "Bulk actions" })).toHaveTextContent("1 selected");
 
     await userEvent.keyboard("e");
@@ -175,11 +186,15 @@ describe("InboxPage", () => {
     const srv = inboxServer([inboxItem(3), inboxItem(2), inboxItem(1)]);
     renderApp("/inbox?state=all");
     await screen.findByText("v3.0.0 published");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select: v3.0.0 published" }));
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v3.0.0 published" }),
+    );
     const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
     await userEvent.click(within(bar).getByRole("button", { name: "Select all 3" }));
     expect(bar).toHaveTextContent("3 selected");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select: v1.0.0 published" }));
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v1.0.0 published" }),
+    );
     expect(within(bar).getByRole("button", { name: "Select all 3" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
     await waitFor(() =>
@@ -200,7 +215,9 @@ describe("InboxPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Archived" }));
     await screen.findByText("v3.0.0 published");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Select: v3.0.0 published" }));
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Select: GitHub CLI releases: v3.0.0 published" }),
+    );
     await userEvent.click(screen.getByRole("button", { name: /^Select all/ }));
     await userEvent.click(screen.getByRole("button", { name: "Unarchive" }));
     await waitFor(() => expect(srv.items().every((i) => !i.archived_at)).toBe(true));
@@ -645,7 +662,9 @@ describe("InboxPage", () => {
     const srv = inboxServer([inboxItem(2), inboxItem(1)]);
     renderApp("/inbox");
     await userEvent.click(
-      await screen.findByRole("checkbox", { name: "Select: v2.0.0 published" }),
+      await screen.findByRole("checkbox", {
+        name: "Select: GitHub CLI releases: v2.0.0 published",
+      }),
     );
     await userEvent.keyboard("jj");
     expect(rows()[1]?.dataset.focused).toBe("true");
@@ -674,7 +693,9 @@ describe("InboxPage", () => {
     });
     renderApp("/inbox");
     const quick = (text: string, name: string) =>
-      within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });
+      within(
+        screen.getByRole("group", { name: `Actions: GitHub CLI releases: ${text}` }),
+      ).getByRole("button", { name });
     await screen.findByText("v3.0.0 published");
     await userEvent.click(quick("v3.0.0 published", "Mark as read"));
     await userEvent.click(quick("v2.0.0 published", "Mark as read"));
@@ -694,7 +715,9 @@ describe("InboxPage", () => {
     renderApp("/inbox?state=all");
     await screen.findByText("v2.0.0 published");
     const quick = (text: string, name: string) =>
-      within(screen.getByRole("group", { name: `Actions: ${text}` })).getByRole("button", { name });
+      within(
+        screen.getByRole("group", { name: `Actions: GitHub CLI releases: ${text}` }),
+      ).getByRole("button", { name });
     await userEvent.click(quick("v1.0.0 published", "Mark as read"));
     await userEvent.click(quick("v2.0.0 published", "Archive item"));
     expect(await screen.findByText(/Could not update the inbox/)).toBeInTheDocument();

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
@@ -34,6 +35,7 @@ type InboxItem struct {
 type listInboxInput struct {
 	State    string `query:"state" enum:"unread,all,archived" default:"all" doc:"unread: not read, not archived; all: not archived"`
 	Priority string `query:"priority" enum:"normal,high" doc:"Only items of this priority; absent: all"`
+	Watch    string `query:"watch" format:"uuid" doc:"Only this watch's items; absent: all"`
 	Cursor   string `query:"cursor" doc:"next_cursor of the previous page"`
 	Limit    int    `query:"limit" minimum:"1" maximum:"200" default:"50"`
 }
@@ -136,6 +138,15 @@ func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInbox
 		sql += " AND i.priority = 'high'"
 	case priorityNormal:
 		sql += " AND i.priority = 'normal'"
+	}
+	if in.Watch != "" {
+		// Canonical: huma's uuid format also lets urn:uuid: through, which Postgres refuses.
+		id, err := uuid.Parse(in.Watch)
+		if err != nil {
+			return nil, huma.Error400BadRequest("invalid watch", &huma.ErrorDetail{Location: "query.watch", Message: "not a watch ID", Value: in.Watch})
+		}
+		sql += " AND e.watch_id = @watch"
+		args["watch"] = id.String()
 	}
 	if in.Cursor != "" {
 		before, err := strconv.ParseInt(in.Cursor, 10, 64)

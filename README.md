@@ -229,7 +229,7 @@ Or per project, in `.mcp.json`, with the key in an environment variable:
 | Tool | Returns | Limit |
 |---|---|---|
 | `count_inbox` | Unread and read inbox items, archive excluded | |
-| `list_inbox` | Inbox items with their event; a body over 8 KiB is cut and says so | default 20, max 50 |
+| `list_inbox` | Inbox items with their event, optionally of one `watch`; a body over 8 KiB is cut and says so | default 20, max 50 |
 | `list_watches` | Your watches, with config; `truncated: true` when it returns as many as the limit | default 50, max 200 |
 | `get_watch` | One watch | |
 | `list_watch_events` | A watch's events | max 50 |
@@ -867,7 +867,7 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   `POST /api/v1/scripts/{id}/dry-run` and `POST /api/v1/scripts/dry-run {source}`, each with
   `{event_id}` (an event of one of your watches) or `{sample: {type, payload, occurred_at, watch}}`: answers
   `{ok, outcome, error, logs, result, fetches, duration_ms}`.
-- `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&cursor=`, `GET /api/v1/inbox/count`,
+- `GET /api/v1/inbox?state=unread|all|archived&priority=normal|high&watch=<id>&cursor=`, `GET /api/v1/inbox/count`,
   `POST /api/v1/inbox/read|unread|archive|unarchive {ids}` (the caller's items only; `unread` also unarchives), `GET /api/v1/inbox/stream`.
 - Channels, rules, scripts and deliveries are private to their owner (404 for others); their changes, channel
   and rule tests and delivery retries are audited. Inbox items and deliveries of a watch the user no longer

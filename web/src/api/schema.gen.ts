@@ -2908,6 +2908,8 @@ export interface operations {
         state?: "unread" | "all" | "archived";
         /** @description Only items of this priority; absent: all */
         priority?: "normal" | "high";
+        /** @description Only this watch's items; absent: all */
+        watch?: string;
         /** @description next_cursor of the previous page */
         cursor?: string;
         limit?: number;

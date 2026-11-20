@@ -951,6 +951,37 @@ func TestMCPParity(t *testing.T) {
 	}
 }
 
+// 020-AC4: list_inbox takes watch and returns what the filtered REST call returns.
+func TestMCPInboxWatchFilter(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	key, _ := m.key(t, alice.id, "read", "")
+	var wa, wb watchJSON
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &wa)
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &wb)
+	m.inboxEvent(t, alice.id, wa.ID, "a1", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wb.ID, "b1", map[string]any{"title": "t"})
+	m.inboxEvent(t, alice.id, wa.ID, "a2", map[string]any{"title": "t"})
+	var want any
+	m.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?watch="+wa.ID, nil, http.StatusOK, &want)
+	res := m.tool(t, key, "list_inbox", map[string]any{"watch": wa.ID}, nil)
+	if res.IsError || !reflect.DeepEqual(res.data(t), want) {
+		t.Fatalf("got %+v\nwant %v", res, want)
+	}
+	items := want.(map[string]any)["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("REST: %d items", len(items))
+	}
+	for _, it := range items {
+		if id := it.(map[string]any)["watch"].(map[string]any)["id"]; id != wa.ID {
+			t.Fatalf("item of watch %v", id)
+		}
+	}
+	if res := m.tool(t, key, "list_inbox", map[string]any{"watch": "x"}, nil); !res.IsError || !strings.Contains(res.text(), "query.watch") {
+		t.Fatalf("non-UUID: %+v", res)
+	}
+}
+
 // 007-AC25: inputSchema is the operation's in api/openapi.json, and the catalog offers no URL, host or free-form object.
 func TestMCPSchemasMatchOpenAPI(t *testing.T) {
 	m := newMCPApp(t)

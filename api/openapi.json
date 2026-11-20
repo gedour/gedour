@@ -4344,6 +4344,17 @@
             }
           },
           {
+            "description": "Only this watch's items; absent: all",
+            "explode": false,
+            "in": "query",
+            "name": "watch",
+            "schema": {
+              "description": "Only this watch's items; absent: all",
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
             "description": "next_cursor of the previous page",
             "explode": false,
             "in": "query",

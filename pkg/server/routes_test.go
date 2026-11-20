@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/mail"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -1029,6 +1030,108 @@ func TestInboxPriorityFilter(t *testing.T) {
 		t.Fatalf("unread high, first page: %v", got)
 	}
 	a.problemOf(t, alice, http.MethodGet, "/api/v1/inbox?priority=urgent", nil, http.StatusBadRequest)
+}
+
+// 020-AC1: the watch filter lists one watch's items, newest first, with state, priority and the cursor applied.
+func TestInboxWatchFilter(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var wa, wb watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &wa)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &wb)
+	// Events 1 to 8 alternate A (odd) and B (even); only event 3 is normal.
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key)
+		SELECT CASE WHEN g % 2 = 1 THEN $1::uuid ELSE $2::uuid END, 'release.published', '{}', g::text FROM generate_series(1, 8) g`, wa.ID, wb.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id, priority)
+		SELECT $1, id, CASE WHEN row_number() OVER (ORDER BY id) = 3 THEN 'normal' ELSE 'high' END FROM events ORDER BY id`, alice.id)
+	all := a.inboxIDs(t, alice, "all")
+	if len(all) != 8 {
+		t.Fatalf("all: %v", all)
+	}
+	ev := func(gs ...int) []int64 {
+		out := []int64{}
+		for _, g := range gs {
+			out = append(out, all[8-g])
+		}
+		return out
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/read", map[string]any{"ids": ev(1)}, http.StatusOK, nil)
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/inbox/archive", map[string]any{"ids": ev(3, 4)}, http.StatusOK, nil)
+	get := func(q string) inboxJSON {
+		t.Helper()
+		var page inboxJSON
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?"+q, nil, http.StatusOK, &page)
+		return page
+	}
+	ids := func(page inboxJSON) []int64 {
+		out := []int64{}
+		for _, it := range page.Items {
+			out = append(out, it.ID)
+		}
+		return out
+	}
+	for _, tt := range []struct {
+		q    string
+		want []int64
+		next bool
+	}{
+		{"watch=" + wa.ID, ev(7, 5, 1), false},
+		{"watch=" + wb.ID, ev(8, 6, 2), false},
+		{"watch=" + wa.ID + "&state=unread", ev(7, 5), false},
+		{"watch=" + wa.ID + "&state=archived", ev(3), false},
+		{"watch=" + wb.ID + "&state=archived", ev(4), false},
+		{"watch=" + wa.ID + "&state=archived&priority=high", ev(), false},
+		{"watch=" + wa.ID + "&priority=high", ev(7, 5, 1), false},
+		{"watch=" + wa.ID + "&state=unread&priority=high", ev(7, 5), false},
+		{"watch=" + wa.ID + "&state=unread&priority=high&limit=1", ev(7), true},
+		// Every spelling huma's uuid format accepts names the same watch.
+		{"watch=" + strings.ToUpper(wa.ID), ev(7, 5, 1), false},
+		{"watch=" + url.QueryEscape("{"+wa.ID+"}"), ev(7, 5, 1), false},
+		{"watch=" + strings.ReplaceAll(wa.ID, "-", ""), ev(7, 5, 1), false},
+		{"watch=urn:uuid:" + wa.ID, ev(7, 5, 1), false},
+	} {
+		page := get(tt.q)
+		if got := ids(page); !slices.Equal(got, tt.want) || (page.NextCursor != "") != tt.next {
+			t.Errorf("%s: %v next %q, want %v next %v", tt.q, got, page.NextCursor, tt.want, tt.next)
+		}
+	}
+	// The second page stays within the filter: B's items between A's do not make a third.
+	first := get("watch=" + wa.ID + "&state=unread&priority=high&limit=1")
+	second := get("watch=" + wa.ID + "&state=unread&priority=high&limit=1&cursor=" + first.NextCursor)
+	if got := ids(second); !slices.Equal(got, ev(5)) || second.NextCursor != "" {
+		t.Fatalf("page 2: %v next %q", got, second.NextCursor)
+	}
+}
+
+// 020-AC2: another user's watch, or an unknown one, gives an empty list. 020-AC3: a non-UUID is refused on query.watch.
+func TestInboxWatchFilterRefusals(t *testing.T) {
+	a := newDevApp(t)
+	alice, bob := a.signIn(t, "alice"), a.signIn(t, "bob")
+	var mine, bobs watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", sampleWatches[0], http.StatusCreated, &mine)
+	a.mustCall(t, bob, http.MethodPost, "/api/v1/watches", sampleWatches[1], http.StatusCreated, &bobs)
+	a.exec(t, `INSERT INTO events (watch_id, type, payload, dedup_key) VALUES ($1, 'release.published', '{}', 'a'), ($2, 'release.published', '{}', 'b')`, mine.ID, bobs.ID)
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT w.owner_id, e.id FROM events e JOIN watches w ON w.id = e.watch_id`)
+	// Alice also holds an item of bob's watch, as after a transfer: only the readable-watch clause hides it.
+	a.exec(t, `INSERT INTO inbox_items (user_id, event_id) SELECT $1, id FROM events WHERE watch_id = $2`, alice.id, bobs.ID)
+	var page struct{ Items []any }
+	a.mustCall(t, bob, http.MethodGet, "/api/v1/inbox?watch="+bobs.ID, nil, http.StatusOK, &page)
+	if len(page.Items) != 1 {
+		t.Fatalf("bob's own filter: %v", page.Items)
+	}
+	for _, id := range []string{bobs.ID, "00000000-0000-4000-8000-000000000000"} {
+		page.Items = nil
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/inbox?watch="+id, nil, http.StatusOK, &page)
+		if page.Items == nil || len(page.Items) != 0 {
+			t.Errorf("watch=%s: %v, want []", id, page.Items)
+		}
+	}
+	for _, bad := range []string{"x", "1234", mine.ID + "0"} {
+		p := a.problemOf(t, alice, http.MethodGet, "/api/v1/inbox?watch="+bad, nil, http.StatusBadRequest)
+		if !slices.Contains(p.locations(), "query.watch") {
+			t.Errorf("watch=%s: %+v", bad, p)
+		}
+	}
 }
 
 type deliveriesJSON struct {

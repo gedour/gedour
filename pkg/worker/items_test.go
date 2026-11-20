@@ -394,6 +394,8 @@ func TestDiscussionWatchFixtures(t *testing.T) {
 func TestSchedulesWatchFirstRun(t *testing.T) {
 	e := newEnv(t)
 	up := testupstream.New()
+	// A fixed upstream clock: on the wall clock, a tick crossing a second boundary dates the runs anew and stores a state.
+	up.SetNow(func() time.Time { return t0 })
 	srv := httptest.NewServer(up)
 	defer srv.Close()
 	id := e.addWatch(t, "github_schedules", fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":0,"auto_enable":false}`, srv.URL), "1m")
@@ -418,6 +420,9 @@ func TestSchedulesWatchFirstRun(t *testing.T) {
 	}
 	e.clock.set(t0.Add(time.Hour))
 	tick(t, w)
+	if n := e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id); n != 1 {
+		t.Fatalf("unchanged run stored a state: %d states", n)
+	}
 	up.SetFixture("b")
 	e.clock.set(t0.Add(2 * time.Hour))
 	tick(t, w)

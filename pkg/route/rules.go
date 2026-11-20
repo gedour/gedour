@@ -358,13 +358,19 @@ func setChannels(ctx context.Context, tx pgx.Tx, owner, ruleID string, ids []str
 	var errs []error
 	seen := map[string]bool{}
 	var keep []string
-	for i, id := range ids {
+	for i, raw := range ids {
+		id := raw
+		u, err := uuid.Parse(raw)
+		if err == nil {
+			// Canonical: Postgres refuses the urn:uuid: spelling, and two spellings of one channel are one row.
+			id = u.String()
+		}
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
-		bad := &huma.ErrorDetail{Location: "body.channel_ids[" + strconv.Itoa(i) + "]", Message: "no such channel among yours", Value: id}
-		if uuid.Validate(id) != nil {
+		bad := &huma.ErrorDetail{Location: "body.channel_ids[" + strconv.Itoa(i) + "]", Message: "no such channel among yours", Value: raw}
+		if err != nil {
 			errs = append(errs, bad)
 			continue
 		}

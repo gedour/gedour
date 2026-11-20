@@ -3,11 +3,13 @@ package app
 import (
 	"context"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,8 +35,34 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// handedOut keeps freeAddr from giving one port twice before Run binds it (HTTPAddr and MetricsAddr).
+var handedOut = struct {
+	sync.Mutex
+	ports map[string]bool
+}{ports: map[string]bool{}}
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
+	// Below the ephemeral range: no outbound connection or :0 bind takes the port before Run binds it.
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
+		if f := strings.Fields(string(b)); len(f) == 2 {
+			if floor, err := strconv.Atoi(f[0]); err == nil && floor > 11024 {
+				for range 100 {
+					addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(floor-10000+rand.IntN(10000))) //nolint:gosec // a test port, not a secret
+					if ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", addr); err == nil {
+						_ = ln.Close()
+						handedOut.Lock()
+						taken := handedOut.ports[addr]
+						handedOut.ports[addr] = true
+						handedOut.Unlock()
+						if !taken {
+							return addr
+						}
+					}
+				}
+			}
+		}
+	}
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +92,8 @@ func cfgFor(t *testing.T, role, dbURL string) config.Config {
 
 func getStatus(url string) (int, string) {
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	resp, err := http.DefaultClient.Do(req)
+	// Bounded: a port another process took after freeAddr may accept and never answer.
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		return 0, ""
 	}
@@ -73,14 +102,19 @@ func getStatus(url string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-func waitFor(t *testing.T, url string, code int) {
+// waitServing fails at once with Run's error when Run returns first (done receives it).
+func waitServing(t *testing.T, done <-chan error, url string, code int) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if c, _ := getStatus(url); c == code {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case err := <-done:
+			t.Fatalf("Run returned before %s answered %d: %v", url, code, err)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	t.Fatalf("%s never answered %d", url, code)
 }
@@ -95,7 +129,7 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		done <- Run(ctx, cfg, zap.New(core), server.BuildInfo{Version: "v9.9.9", CommitHash: "c0ffee0"}, fstest.MapFS{"index.html": {Data: []byte("SPA")}})
 	}()
 
-	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
+	waitServing(t, done, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
 	if code, body := getStatus("http://" + cfg.MetricsAddr + "/metrics"); code != http.StatusOK || !strings.Contains(body, `gedour_build_info{commit="c0ffee0",version="v9.9.9"} 1`) ||
 		!strings.Contains(body, "gedour_watches_due 0") || !strings.Contains(body, "gedour_sse_subscribers 0") ||
 		!strings.Contains(body, "gedour_events_routed_total 0") {
@@ -146,7 +180,7 @@ func TestRunWithUnreadableVAPIDKey(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg, zap.New(core), server.BuildInfo{}, fstest.MapFS{}) }()
-	waitFor(t, "http://"+cfg.MetricsAddr+"/healthz", http.StatusOK)
+	waitServing(t, done, "http://"+cfg.MetricsAddr+"/healthz", http.StatusOK)
 	if l := logs.FilterMessage("vapid_key_unreadable").All(); len(l) != 1 || l[0].Level != zap.ErrorLevel {
 		t.Errorf("vapid_key_unreadable: %+v", l)
 	}
@@ -162,7 +196,7 @@ func TestRunWorkerOnly(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg, zap.NewNop(), server.BuildInfo{}, fstest.MapFS{}) }()
 
-	waitFor(t, "http://"+cfg.MetricsAddr+"/healthz", http.StatusOK)
+	waitServing(t, done, "http://"+cfg.MetricsAddr+"/healthz", http.StatusOK)
 	if code, _ := getStatus("http://" + cfg.HTTPAddr + "/healthz"); code != 0 {
 		t.Fatal("worker role must not open the main listener")
 	}
@@ -344,11 +378,11 @@ func TestRunWaitsForDatabase(t *testing.T) {
 		}
 	}
 	proxy.open(t)
-	waitFor(t, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
-	waitFor(t, "http://"+cfg.MetricsAddr+"/livez", http.StatusOK)
+	waitServing(t, done, "http://"+cfg.HTTPAddr+"/healthz", http.StatusOK)
+	waitServing(t, done, "http://"+cfg.MetricsAddr+"/livez", http.StatusOK)
 
 	proxy.close()
-	waitFor(t, "http://"+cfg.MetricsAddr+"/healthz", http.StatusServiceUnavailable)
+	waitServing(t, done, "http://"+cfg.MetricsAddr+"/healthz", http.StatusServiceUnavailable)
 	if code, _ := getStatus("http://" + cfg.MetricsAddr + "/livez"); code != http.StatusOK {
 		t.Fatalf("livez with the database down: %d", code)
 	}

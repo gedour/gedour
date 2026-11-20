@@ -169,27 +169,30 @@ func (s *Service) listWatches(ctx context.Context, in *listWatchesInput) (*listW
 	return out, nil
 }
 
-// checkCredential verifies that id names a credential of owner that fits kind.
-func checkCredential(ctx context.Context, tx pgx.Tx, owner, kind, id string) error {
+// checkCredential verifies that raw names a credential of owner that fits kind and returns its canonical ID.
+func checkCredential(ctx context.Context, tx pgx.Tx, owner, kind, raw string) (string, error) {
 	detail := func(msg string) error {
-		return huma.Error400BadRequest("invalid credential", &huma.ErrorDetail{Location: "body.credential_id", Message: msg, Value: id})
+		return huma.Error400BadRequest("invalid credential", &huma.ErrorDetail{Location: "body.credential_id", Message: msg, Value: raw})
 	}
-	if uuid.Validate(id) != nil {
-		return detail("expected a credential ID")
+	u, err := uuid.Parse(raw)
+	if err != nil {
+		return "", detail("expected a credential ID")
 	}
+	// Postgres refuses the urn:uuid: spelling uuid.Parse accepts; compared as text with credential_id::text too.
+	id := u.String()
 	var credKind string
 	// KEY SHARE holds the row until commit: a concurrent delete waits, then sees this watch and answers 409.
-	err := tx.QueryRow(ctx, `SELECT kind FROM credentials WHERE id = $1 AND owner_id = $2 FOR KEY SHARE`, id, owner).Scan(&credKind)
+	err = tx.QueryRow(ctx, `SELECT kind FROM credentials WHERE id = $1 AND owner_id = $2 FOR KEY SHARE`, id, owner).Scan(&credKind)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return detail("no such credential among the watch owner's")
+		return "", detail("no such credential among the watch owner's")
 	}
 	if err != nil {
-		return fmt.Errorf("credential kind: %w", err)
+		return "", fmt.Errorf("credential kind: %w", err)
 	}
 	if want := CredentialKindFor(kind); credKind != want {
-		return detail("a " + kind + " watch needs a " + want + " credential")
+		return "", detail("a " + kind + " watch needs a " + want + " credential")
 	}
-	return nil
+	return id, nil
 }
 
 // maxKeyWatches bounds what a key can add to the worker's fetches; REST has no cap.
@@ -326,15 +329,16 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 		}
 		var cred *string
 		if b.CredentialID != "" {
-			if err := checkCredential(ctx, tx, me, b.Kind, b.CredentialID); err != nil {
+			credID, err := checkCredential(ctx, tx, me, b.Kind, b.CredentialID)
+			if err != nil {
 				return err
 			}
 			if viaKey {
-				if err := checkCredentialTarget(ctx, tx, me, b.Kind, b.CredentialID, "", cfg); err != nil {
+				if err := checkCredentialTarget(ctx, tx, me, b.Kind, credID, "", cfg); err != nil {
 					return err
 				}
 			}
-			cred = &b.CredentialID
+			cred = &credID
 		}
 		var id string
 		if err := tx.QueryRow(ctx, `INSERT INTO watches (owner_id, name, kind, config, credential_id, schedule, paused)
@@ -401,10 +405,11 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		if b.CredentialID != nil {
 			next.CredentialID = nil
 			if *b.CredentialID != "" {
-				if err := checkCredential(ctx, tx, me, before.Kind, *b.CredentialID); err != nil {
+				credID, err := checkCredential(ctx, tx, me, before.Kind, *b.CredentialID)
+				if err != nil {
 					return err
 				}
-				next.CredentialID = b.CredentialID
+				next.CredentialID = &credID
 			}
 		}
 		if err := autoEnableError(next.Config, next.CredentialID != nil); err != nil {

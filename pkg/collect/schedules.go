@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	workflowsDir   = ".github/workflows"
-	workflowActive = "active"
+	workflowsDir     = ".github/workflows"
+	workflowActive   = "active"
+	workflowInactive = "disabled_inactivity"
 	// maxWorkflowPages bounds the workflows list at 1000 entries.
 	maxWorkflowPages = 10
 	// staleGrace: GitHub delays scheduled runs under load, so an expected time only counts as missed an hour later.
@@ -69,6 +70,13 @@ type ScheduledWorkflow struct {
 	// Set only while stale: between two expected times the state stays the same.
 	Missed     int        `json:"missed,omitempty"`
 	ExpectedAt *time.Time `json:"expected_at,omitempty"`
+	// ReenabledAt is gedour's last re-enable: GitHub's listed updated_at may not move with it.
+	ReenabledAt *time.Time `json:"reenabled_at,omitempty"`
+	// ReenableError is this run's failed re-enable, for the schedule.disabled payload.
+	ReenableError string `json:"reenable_error,omitempty"`
+	// ActiveSince is when gedour first saw a stored non-active workflow listed active: a re-enable it did not see succeed
+	// may leave updated_at old.
+	ActiveSince *time.Time `json:"active_since,omitempty"`
 }
 
 type listedWorkflow struct {
@@ -103,7 +111,7 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 	if cfg.WarnDays > 0 {
 		extra = 2
 	}
-	if err := checkBudget(listed, shas, prev, old, extra, dirURL, dirHeader, f.now(), cred); err != nil {
+	if err := checkBudget(listed, shas, prev, old, extra, cfg.AutoEnable, dirURL, dirHeader, f.now(), cred); err != nil {
 		return SchedulesState{}, err
 	}
 	raw := h.Clone()
@@ -114,7 +122,7 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 		if !ok {
 			continue
 		}
-		o := old[lw.Path]
+		o, known := old[lw.Path]
 		crons, cached := cachedCrons(prev, old, lw.Path, sha)
 		if !cached {
 			r, err := f.get(ctx, base+"/contents/"+(&url.URL{Path: lw.Path}).EscapedPath(), raw, false)
@@ -128,9 +136,19 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 			continue
 		}
 		w := ScheduledWorkflow{ID: lw.ID, Name: lw.Name, Path: lw.Path, FileSHA: sha, Crons: crons, State: lw.State, URL: lw.HTMLURL,
-			LastAliveAt: o.LastAliveAt}
+			LastAliveAt: o.LastAliveAt, ReenabledAt: o.ReenabledAt, ActiveSince: o.ActiveSince}
+		if known && o.State != workflowActive && w.State == workflowActive {
+			now := f.now().UTC()
+			w.ActiveSince = &now
+		}
 		if w.State == workflowActive {
-			if err := checkAlive(ctx, f, base, h, cfg, &w, o, lw.UpdatedAt); err != nil {
+			ref := lw.UpdatedAt
+			for _, t := range []*time.Time{w.ReenabledAt, w.ActiveSince} {
+				if t != nil && t.After(ref) {
+					ref = *t
+				}
+			}
+			if err := checkAlive(ctx, f, base, h, cfg, &w, o, ref); err != nil {
 				return SchedulesState{}, err
 			}
 		}
@@ -141,11 +159,80 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 			return SchedulesState{}, err
 		}
 	}
+	// Writes come after every read: a read failing after a PUT would drop the run that did it.
+	if cfg.AutoEnable {
+		if err := reenableAll(ctx, f, base, h, cfg.Repo, s.Workflows, old); err != nil {
+			return SchedulesState{}, err
+		}
+	}
+	if s.DisableAt != nil {
+		warnFrom := s.DisableAt.Add(-time.Duration(cfg.WarnDays) * 24 * time.Hour)
+		s.DisableSoon = !f.now().Before(warnFrom) && len(activePaths(s.Workflows)) > 0
+	}
 	return s, nil
 }
 
-// checkActivity reads the repository's visibility and last default-branch commit, and flags a public repository whose
-// active scheduled workflows GitHub turns off within warn_days.
+// reenableAll re-enables each workflow GitHub disabled for inactivity. A rate limit or a cancelled run before any success
+// fails the run like any call; after one, the run keeps what worked and sends no more PUTs, the rest left to the next run.
+// A workflow left without a PUT keeps its stored reason: it neither opens nor ends a failure streak.
+func reenableAll(ctx context.Context, f *Fetcher, base string, h http.Header, repo string, ws []ScheduledWorkflow, old map[string]ScheduledWorkflow) error {
+	stopped, done := false, false
+	for i := range ws {
+		w := &ws[i]
+		if w.State != workflowInactive {
+			continue
+		}
+		if stopped {
+			w.ReenableError = old[w.Path].ReenableError
+			continue
+		}
+		err := reenable(ctx, f, base, h, repo, w)
+		if done && err != nil {
+			// A rate limit or a cut run says nothing of the token's rights: the log keeps it, the streak does not.
+			w.ReenableError = old[w.Path].ReenableError
+			stopped = true
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		done = done || w.State == workflowActive
+	}
+	return nil
+}
+
+// reenable turns on a workflow GitHub disabled for inactivity. A refused or failed PUT keeps it disabled with the reason and
+// the run goes on: a token without Actions write must not hide schedule.disabled. Its reference is now: no runs call, never stale.
+func reenable(ctx context.Context, f *Fetcher, base string, h http.Header, repo string, w *ScheduledWorkflow) error {
+	r, err := f.do(ctx, http.MethodPut, fmt.Sprintf("%s/actions/workflows/%d/enable", base, w.ID), h, false)
+	out := Reenable{Repo: repo, Path: w.Path}
+	var he *HTTPError
+	switch {
+	// GitHub answers 204; a redirect replayed as a GET can end on another 2xx that enabled nothing.
+	case err == nil && r.status == http.StatusNoContent:
+		now := f.now().UTC()
+		out.Status, w.State, w.ReenabledAt = r.status, workflowActive, &now
+	case err == nil:
+		out.Status, w.ReenableError = r.status, fmt.Sprintf("HTTP %d, expected 204", r.status)
+	case errors.As(err, &he):
+		out.Status, w.ReenableError = he.Status, fmt.Sprintf("HTTP %d", he.Status)
+		if he.Body != "" {
+			w.ReenableError += ": " + he.Body
+		}
+	default:
+		w.ReenableError = snippet([]byte(err.Error()))
+	}
+	out.Err = w.ReenableError
+	f.Reenables = append(f.Reenables, out)
+	// A rate limit says nothing of the token's rights: the run waits for the reset, like on any other call.
+	if rl := (*RateLimitError)(nil); errors.As(err, &rl) || ctx.Err() != nil {
+		return err
+	}
+	return nil
+}
+
+// checkActivity reads the repository's visibility and last default-branch commit, and sets when GitHub turns a public
+// repository's scheduled workflows off.
 func checkActivity(ctx context.Context, f *Fetcher, base string, h http.Header, cfg watch.GitHubSchedulesConfig, s *SchedulesState) error {
 	var repo struct {
 		Private bool `json:"private"`
@@ -180,8 +267,6 @@ func checkActivity(ctx context.Context, f *Fetcher, base string, h http.Header, 
 	}
 	at := last.Add(inactivityCutoff)
 	s.DisableAt = &at
-	warnFrom := at.Add(-time.Duration(cfg.WarnDays) * 24 * time.Hour)
-	s.DisableSoon = !f.now().Before(warnFrom) && len(activePaths(s.Workflows)) > 0
 	return nil
 }
 
@@ -209,8 +294,8 @@ func cachedCrons(prev SchedulesState, old map[string]ScheduledWorkflow, p, sha s
 // checkBudget stops the run before the per-file calls when the rate limit left cannot cover them: a run cut short
 // saves no state, so the next one would fetch every file again and never get through. It waits for the reset like
 // any rate limit, or fails when even a full budget is too small.
-func checkBudget(listed []listedWorkflow, shas map[string]string, prev SchedulesState, old map[string]ScheduledWorkflow, extra int, dirURL string,
-	hdr http.Header, now time.Time, cred *Credential) error {
+func checkBudget(listed []listedWorkflow, shas map[string]string, prev SchedulesState, old map[string]ScheduledWorkflow, extra int, autoEnable bool,
+	dirURL string, hdr http.Header, now time.Time, cred *Credential) error {
 	left, err := strconv.Atoi(hdr.Get("X-RateLimit-Remaining"))
 	if err != nil {
 		return nil
@@ -226,8 +311,13 @@ func checkBudget(listed []listedWorkflow, shas map[string]string, prev Schedules
 			need++
 		}
 		// Upper bound: a fetched file may turn out unscheduled.
-		if lw.State == workflowActive && (!cached || len(crons) > 0) {
-			need++
+		if !cached || len(crons) > 0 {
+			switch {
+			case lw.State == workflowActive:
+				need++
+			case autoEnable && lw.State == workflowInactive:
+				need++
+			}
 		}
 	}
 	if need <= left {
@@ -353,10 +443,11 @@ func cronSchedule(c WorkflowCron) (cron.Schedule, error) {
 	return s, nil
 }
 
-// checkAlive reads the last proof-of-life run and marks w stale when missed_runs expected times passed since the later of it and updatedAt.
+// checkAlive reads the last proof-of-life run and marks w stale when missed_runs expected times passed since the later of it and
+// notBefore, the workflow's last update or re-enable.
 // While o, the stored entry, is already stale with no newer run since, its count is kept so the state does not change run to run.
 func checkAlive(ctx context.Context, f *Fetcher, base string, h http.Header, cfg watch.GitHubSchedulesConfig, w *ScheduledWorkflow, o ScheduledWorkflow,
-	updatedAt time.Time) error {
+	notBefore time.Time) error {
 	u := fmt.Sprintf("%s/actions/workflows/%d/runs?event=schedule&status=%s&per_page=1", base, w.ID, url.QueryEscape(cfg.AliveOn))
 	var runs struct {
 		WorkflowRuns []struct {
@@ -367,7 +458,7 @@ func checkAlive(ctx context.Context, f *Fetcher, base string, h http.Header, cfg
 		return err
 	}
 	w.LastAliveAt = nil
-	ref := updatedAt
+	ref := notBefore
 	if len(runs.WorkflowRuns) > 0 {
 		t := runs.WorkflowRuns[0].CreatedAt.UTC()
 		w.LastAliveAt = &t
@@ -421,7 +512,7 @@ func missedRuns(scheds []cron.Schedule, ref, until time.Time, limit int) (int, t
 	return n, first
 }
 
-// diffSchedules emits per workflow, by path: schedule.disabled or schedule.enabled, then schedule.stale or schedule.recovered;
+// diffSchedules emits per workflow, by path: schedule.reenabled, schedule.disabled or schedule.enabled, then schedule.stale or schedule.recovered;
 // then schedule.disable_soon for the repository. A workflow new to the state reads as healthy before, and an old state
 // without disable_soon reads as false, so the first run reports what is already broken; a workflow that left emits nothing.
 func diffSchedules(old, cur SchedulesState) []Event {
@@ -441,10 +532,20 @@ func diffSchedules(old, cur SchedulesState) []Event {
 			events = append(events, Event{Type: typ, Subject: w.Path, Payload: p})
 		}
 		switch {
+		// Re-enabled this run, from whatever state was stored: never also disabled or enabled.
+		case w.ReenabledAt != nil && !sameTime(o.ReenabledAt, w.ReenabledAt):
+			add("schedule.reenabled", map[string]any{"from": workflowInactive})
 		case o.State == workflowActive && w.State != workflowActive:
-			add("schedule.disabled", nil)
+			var extra map[string]any
+			if w.ReenableError != "" {
+				extra = map[string]any{"reenable_error": w.ReenableError}
+			}
+			add("schedule.disabled", extra)
 		case o.State != workflowActive && w.State == workflowActive:
 			add("schedule.enabled", nil)
+		// A workflow already stored disabled whose re-enable starts failing: once per failure streak, whatever its reason.
+		case w.State != workflowActive && w.ReenableError != "" && o.ReenableError == "":
+			add("schedule.disabled", map[string]any{"reenable_error": w.ReenableError})
 		}
 		fresh := newProof(old.AliveOn, cur.AliveOn, o, w)
 		switch {

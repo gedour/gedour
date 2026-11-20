@@ -1,6 +1,6 @@
 # 019 — GitHub scheduled workflows deadman
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-19
 
@@ -48,17 +48,18 @@ Two opt-ins are added on top:
   5. With `warn_days > 0`: `GET /repos/{repo}` (visibility) and `GET /repos/{repo}/commits?per_page=1`
      (last commit on the default branch).
   6. With `auto_enable`: `PUT /repos/{repo}/actions/workflows/{id}/enable` for each workflow in
-     `disabled_inactivity`.
+     `disabled_inactivity`, after every read. A workflow re-enabled this run gets no request 4.
 - Workflow discovery: a workflow listed by (1) whose path is a file in (2) and whose YAML has at least one
   `on.schedule[].cron`. Other workflows, including dynamic ones (CodeQL, Dependabot), are ignored. `on` as
   a string or a list never holds a schedule.
 - Expected run times: union of the workflow's cron lines, parsed with `robfig/cron` (already a dependency).
   A `timezone` field becomes a `CRON_TZ=` prefix. Without one, the times are UTC.
-- Staleness: the reference time is the later of the last proof-of-life run's `created_at` and the
-  workflow's `updated_at`. A workflow is stale when at least `missed_runs` expected times fall after that
+- Staleness: the reference time is the latest of the last proof-of-life run's `created_at`, the
+  workflow's `updated_at`, `reenabled_at` and `active_since`. A workflow is stale when at least `missed_runs` expected times fall after that
   reference and more than 1 h before now. Only `active` workflows can be stale.
 - State, per scheduled workflow: `id`, `name`, `path`, `file_sha`, `crons` (cron and timezone), `state`,
-  `url`, `last_alive_at`, `stale`, `reenabled_at`. Repository level: `repo`, `alive_on`, `private`,
+  `url`, `last_alive_at`, `stale`, `missed` and `expected_at` (while stale), `reenabled_at`, `reenable_error` (while
+  a re-enable fails), `active_since` (when a workflow stored non-active was first listed `active` again). Repository level: `repo`, `alive_on`, `private`,
   `last_activity_at`, `disable_at`, `disable_soon`.
 - Events (subject: the workflow path, or the repository for `schedule.disable_soon`):
   - `schedule.disabled`: `active` to any other state. Payload: `workflow`, `path`, `state` (to),
@@ -79,11 +80,12 @@ Two opt-ins are added on top:
   is `active`. A newer commit moves `disable_at` and resets the flag.
 - Auto-enable (`auto_enable`): only `disabled_inactivity` gets re-enabled. `disabled_manually`
   and `disabled_fork` are human or fork decisions, and they get `schedule.disabled`. A successful
-  PUT stores `state: active` and `reenabled_at`. A failed PUT (403, 404, 5xx) does not fail the run: it
-  stores the disabled state, sends `schedule.disabled` with `reenable_error`, and the next run tries again.
+  PUT (204) stores `state: active` and `reenabled_at`. A failed PUT (403, 404, 5xx, any other status) does not fail
+  the run: it stores the disabled state, sends `schedule.disabled` with `reenable_error` once per failure streak
+  (also when the workflow was already disabled), and the next run tries again.
   Each PUT is logged as `workflow_reenabled` or `workflow_reenable_failed`.
-- `auto_enable` needs a credential. The API refuses `auto_enable: true` without one (400), and refuses
-  turning it on through an API key (403).
+- `auto_enable` needs a credential. The API refuses `auto_enable: true` without one (400). Through an API key it
+  refuses turning it on, and changing the `repo`, `api_url` or credential of a watch that has it on (403).
 - Message summaries in `pkg/notify/message.go` and `web/src/lib/events.ts` for the six event types.
 - UI: kind picker entry "GitHub scheduled workflows". Form fields: repo, a select for `alive_on` ("Last
   successful run" or "Last run, any result"), `missed_runs`, `warn_days`, `auto_enable` with a hint that the
@@ -106,41 +108,42 @@ Two opt-ins are added on top:
 
 ## Acceptance criteria
 
-- [ ] **AC1** The API refuses a `github_schedules` config with a bad `repo`, `missed_runs` outside 1 to 10,
+- [x] **AC1** The API refuses a `github_schedules` config with a bad `repo`, `missed_runs` outside 1 to 10,
   `warn_days` outside 0 to 30, an `alive_on` other than `success`/`completed`, or `auto_enable: true` with
   no credential. Each gets a field error and a 400.
-- [ ] **AC2** In fixture a, a repository holds a scheduled workflow, a push-only workflow, a workflow with
+- [x] **AC2** In fixture a, a repository holds a scheduled workflow, a push-only workflow, a workflow with
   `on: [push]`, and a dynamic CodeQL workflow. Only the scheduled one is in the state.
-- [ ] **AC3** A second run with unchanged workflow files makes no contents request for a workflow file.
+- [x] **AC3** A second run with unchanged workflow files makes no contents request for a workflow file.
   Changing one file's `sha` fetches that file only.
-- [ ] **AC4** Going from `active` to `disabled_inactivity` emits one `schedule.disabled` with the payload
+- [x] **AC4** Going from `active` to `disabled_inactivity` emits one `schedule.disabled` with the payload
   above. The next unchanged run emits nothing. Back to `active` emits one `schedule.enabled`.
-- [ ] **AC5** Hourly cron `0 * * * *`, `missed_runs: 3`, last success at 08:05 UTC: a run at 11:59 emits
+- [x] **AC5** Hourly cron `0 * * * *`, `missed_runs: 3`, last success at 08:05 UTC: a run at 11:59 emits
   nothing, a run at 12:01 emits `schedule.stale` with `missed: 3` and `expected_at` 09:00.
-- [ ] **AC6** With `alive_on: success`, a failed run after the last success does not count. With
+- [x] **AC6** With `alive_on: success`, a failed run after the last success does not count. With
   `alive_on: completed`, it does and the workflow is not stale.
-- [ ] **AC7** `cron: '30 5 * * 1-5'` with `timezone: "America/New_York"` expects 09:30 or 10:30 UTC
+- [x] **AC7** `cron: '30 5 * * 1-5'` with `timezone: "America/New_York"` expects 09:30 or 10:30 UTC
   depending on DST, and two cron lines on one workflow count as one union of times.
-- [ ] **AC8** A stale workflow whose next run lands emits `schedule.recovered`.
-- [ ] **AC9** The first run of a watch on a repository with one disabled and one stale workflow emits one
+- [x] **AC8** A stale workflow whose next run lands emits `schedule.recovered`.
+- [x] **AC9** The first run of a watch on a repository with one disabled and one stale workflow emits one
   `schedule.disabled` and one `schedule.stale`. On a healthy repository it emits nothing.
-- [ ] **AC10** A failing call (any of 1 to 5) fails the run like any collector: no state saved, no events.
-- [ ] **AC11** Telegram, email, Talk and the UI show one readable line for each event type (e.g.
+- [x] **AC10** A failing call (any of 1 to 5) fails the run like any collector: no state saved, no events.
+- [x] **AC11** Telegram, email, Talk and the UI show one readable line for each event type (e.g.
   "Scheduled workflow nightly.yml disabled (inactivity)", "nightly.yml missed 3 runs since 2026-11-04 09:00 UTC", from the
   oldest missed time).
-- [ ] **AC12** The form shows the fields and the hints above. Pasting `https://github.com/o/r/actions` picks
+- [x] **AC12** The form shows the fields and the hints above. Pasting `https://github.com/o/r/actions` picks
   `github_schedules` with repo `o/r`. The a11y, 375 px and CSP e2e checks pass on the form.
-- [ ] **AC13** On a public repository whose last commit is 54 days old, with `warn_days: 7`, one
+- [x] **AC13** On a public repository whose last commit is 54 days old, with `warn_days: 7`, one
   `schedule.disable_soon` goes out with `disable_at` = commit + 60 d. The next run emits nothing. A new commit
   clears the flag. A private repository never gets it. With `warn_days: 0`, neither `/repos` nor
   `/commits` is called.
-- [ ] **AC14** With `auto_enable`, a `disabled_inactivity` workflow gets one PUT and one
+- [x] **AC14** With `auto_enable`, a `disabled_inactivity` workflow gets one PUT and one
   `schedule.reenabled`, and no `schedule.disabled`. A `disabled_manually` one gets no PUT and a
   `schedule.disabled`.
-- [ ] **AC15** A PUT answering 403 emits `schedule.disabled` with `reenable_error`, the run succeeds, and
+- [x] **AC15** A PUT answering 403 emits `schedule.disabled` with `reenable_error`, the run succeeds, and
   the next run tries the PUT again.
-- [ ] **AC16** Turning `auto_enable` on through an API key (REST or MCP) is refused with a 403. From a
-  session, the owner can turn it on.
+- [x] **AC16** Turning `auto_enable` on through an API key (REST or MCP) is refused with a 403, and so is changing
+  the `repo`, `api_url` or credential of a watch that has it on. A key may edit its other fields and turn it off.
+  From a session, the owner can do all of it.
 
 ## Phases
 
@@ -187,7 +190,11 @@ entry per scheduled workflow.
 - The proof-of-life rule is a form choice (`alive_on`), asked by babs. The default is `success`, so a job
   that fires but always fails also raises `schedule.stale`.
 - The workflow's `updated_at` counts as a reference time. A workflow just re-enabled or edited is not stale
-  for the misses before that.
+  for the misses before that. GitHub may not move `updated_at` on a re-enable, so gedour's own re-enable
+  (`reenabled_at`) and the time it first sees a stored non-active workflow listed `active` (`active_since`: a lost PUT
+  answer, a re-enable by hand) count too; the latter sends `schedule.enabled`, not `schedule.reenabled`.
+- On shutdown, a run that finished every read is stored like any run: it may hold a re-enable already done upstream.
+  A run cut short with an error releases its claim.
 - The first run reports problems, a break from 001-AC8: a deadman created on an already disabled workflow
   must say so. The opt-in is per kind.
 - A deleted workflow file leaves the directory listing, so the workflow leaves the state with no event: deleting
@@ -221,5 +228,15 @@ entry per scheduled workflow.
   missed time where it was, and sends nothing.
 - Messages read "missed N runs since <expected_at>": the oldest missed time, since the count starts at the
   workflow's last edit when that is later than its last run.
+- The PUTs go out after every read: a read failing after a PUT would drop the run that re-enabled the workflow. A
+  workflow re-enabled this run is not read for runs (its reference is now). Only a 204 counts: a redirect replayed
+  as a GET can end on another 2xx that enabled nothing.
+- A rate-limited PUT waits for the reset like any call, unless a PUT of the same run worked: then, like a run
+  cancelled after one, the run keeps what worked and leaves the rest disabled for the next run. The PUT cut short
+  and the workflows left without a PUT keep their stored `reenable_error` (the log has the cause): a rate limit or a
+  cut run says nothing of the token's rights, so it neither opens nor ends a failure streak.
+- A failed re-enable on a workflow already disabled sends `schedule.disabled` once per failure streak: turning
+  `auto_enable` on with a token lacking Actions write must show. A changed reason within the streak sends nothing.
+- `auto_enable` binds the repository and the credential a session approved: a key may not move either while it is on.
 - PUT results go to logs, not to `audit`. The audit table records user mutations made through the API.
   The event and its `reenable_error` already record the outcome.

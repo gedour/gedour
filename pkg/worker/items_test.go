@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/gedour/gedour/internal/testupstream"
 	"github.com/gedour/gedour/pkg/collect"
@@ -496,5 +498,184 @@ func TestBaselineQuietBesideDeadman(t *testing.T) {
 	tick(t, e.worker(t, e.pool, collect.Collectors()))
 	if r := e.row(t, id); *r.status != "ok" || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 1 || len(e.events(t, id)) != 0 {
 		t.Fatalf("baseline: %s, events %v", *r.status, e.events(t, id))
+	}
+}
+
+// schedulesAutoWatch adds a github_schedules watch with auto_enable on base, its github_token credential holding secret.
+func (e *env) schedulesAutoWatch(t *testing.T, base, credID, secret string) string {
+	t.Helper()
+	id := e.addWatch(t, "github_schedules", fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":0,"auto_enable":true}`, base), "1m")
+	ct, nonce := e.box.Seal([]byte(secret), []byte(credID))
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO credentials (id, owner_id, name, kind, secret_ciphertext, secret_nonce, key_version)
+		VALUES ($1, $2, 'gh', 'github_token', $3, $4, 1)`, credID, e.user, ct, nonce); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE watches SET credential_id = $2 WHERE id = $1`, id, credID); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// enables lists the fake's received re-enable PUTs.
+func enables(up *testupstream.Server) []testupstream.Received {
+	var out []testupstream.Received
+	for _, r := range up.Received() {
+		if strings.HasPrefix(r.Endpoint, "enable-") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// 019-AC14, the phase 3 DoD guard: an auto_enable watch with a credential, on fixture a with yearly.yml disabled by hand,
+// sends one PUT, for the disabled_inactivity mirror.yml, with the credential, and none for yearly.yml. mirror.yml is stored
+// active with reenabled_at; it gets schedule.reenabled, yearly.yml schedule.disabled. The PUT is logged, not audited.
+// The next run lists mirror.yml active: no PUT, no event.
+func TestSchedulesWatchAutoEnable(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	up.SetNow(e.clock.now)
+	up.SetWorkflowState("1002", "disabled_manually")
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.schedulesAutoWatch(t, srv.URL, "6f1c1d4e-0000-4000-8000-000000000019", "ghp_auto")
+	w := e.worker(t, e.pool, collect.Collectors())
+	core, logs := observer.New(zap.InfoLevel)
+	w.log = zap.New(core)
+	events := func() string {
+		rows, _ := e.pool.Query(context.Background(), `SELECT type || ' ' || (payload->>'path') || ' ' || coalesce(payload->>'from', payload->>'state')
+			FROM events WHERE watch_id = $1 ORDER BY id`, id)
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(got, ",")
+	}
+	const want = "schedule.reenabled .github/workflows/mirror.yml disabled_inactivity,schedule.disabled .github/workflows/yearly.yml disabled_manually"
+	tick(t, w)
+	if r := e.row(t, id); *r.status != "ok" {
+		t.Fatalf("run: %s %v", *r.status, r.lastErr)
+	}
+	if put := enables(up); len(put) != 1 || put[0].Endpoint != "enable-1001" || put[0].Header["Authorization"] != "Bearer ghp_auto" {
+		t.Fatalf("PUTs %+v", put)
+	}
+	if got := events(); got != want {
+		t.Fatalf("events %s", got)
+	}
+	var mirror struct {
+		State       string    `json:"state"`
+		ReenabledAt time.Time `json:"reenabled_at"`
+	}
+	if err := e.pool.QueryRow(context.Background(), `SELECT w FROM watch_states, jsonb_array_elements(state->'workflows') w
+		WHERE watch_id = $1 AND w->>'path' = '.github/workflows/mirror.yml'`, id).Scan(&mirror); err != nil || mirror.State != "active" || !mirror.ReenabledAt.Equal(t0) {
+		t.Fatalf("mirror %+v, err %v", mirror, err)
+	}
+	ok := logs.FilterMessage("workflow_reenabled").AllUntimed()
+	if len(ok) != 1 || logs.FilterMessage("workflow_reenable_failed").Len() != 0 {
+		t.Fatalf("logs %+v", logs.All())
+	}
+	if f := ok[0].ContextMap(); f["watch_id"] != id || f["repo"] != "acme/widgets" || f["workflow_path"] != ".github/workflows/mirror.yml" || f["status"] != int64(http.StatusNoContent) {
+		t.Fatalf("log fields %v", f)
+	}
+	if n := e.count(t, `SELECT count(*) FROM audit_log`); n != 0 {
+		t.Fatalf("%d audit rows", n)
+	}
+
+	e.clock.set(t0.Add(time.Hour))
+	tick(t, w)
+	if got := events(); got != want || len(enables(up)) != 1 || logs.FilterMessage("workflow_reenabled").Len() != 1 {
+		t.Fatalf("next run: events %s, PUTs %d", got, len(enables(up)))
+	}
+}
+
+// 019-AC15: a PUT answering 403 does not fail the run: mirror.yml stays disabled, its schedule.disabled carries the
+// reason, the failure is logged, and the next run tries again with no second event.
+func TestSchedulesWatchAutoEnableRefused(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	up.SetNow(e.clock.now)
+	var puts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+			http.Error(w, `{"message":"Resource not accessible by personal access token"}`, http.StatusForbidden)
+			return
+		}
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	id := e.schedulesAutoWatch(t, srv.URL, "6f1c1d4e-0000-4000-8000-000000000020", "ghp_auto")
+	w := e.worker(t, e.pool, collect.Collectors())
+	core, logs := observer.New(zap.InfoLevel)
+	w.log = zap.New(core)
+	tick(t, w)
+	if r := e.row(t, id); *r.status != "ok" || puts.Load() != 1 {
+		t.Fatalf("run: %s %v, PUTs %d", *r.status, r.lastErr, puts.Load())
+	}
+	var typ, reason string
+	if err := e.pool.QueryRow(context.Background(), `SELECT string_agg(type, ','), string_agg(payload->>'reenable_error', ',') FROM events WHERE watch_id = $1`, id).Scan(&typ, &reason); err != nil ||
+		typ != "schedule.disabled" || reason != "HTTP 403: Resource not accessible by personal access token" {
+		t.Fatalf("events %s %q, err %v", typ, reason, err)
+	}
+	failed := logs.FilterMessage("workflow_reenable_failed").AllUntimed()
+	if len(failed) != 1 || failed[0].ContextMap()["error"] != reason || failed[0].ContextMap()["status"] != int64(http.StatusForbidden) || logs.FilterMessage("workflow_reenabled").Len() != 0 {
+		t.Fatalf("logs %+v", logs.All())
+	}
+	e.clock.set(t0.Add(time.Hour))
+	tick(t, w)
+	if r := e.row(t, id); *r.status != "ok" || puts.Load() != 2 || e.count(t, `SELECT count(*) FROM events WHERE watch_id = $1`, id) != 1 {
+		t.Fatalf("next run: %s, PUTs %d", *r.status, puts.Load())
+	}
+}
+
+// 019-AC14: a shutdown past the drain timeout during the second PUT, the first one done: the collector returns a whole
+// state, which the worker stores instead of releasing, so GitHub's re-enable is recorded (reenabled_at, one
+// schedule.reenabled). A run cut short with an error is still released (TestRunDrainsAndReleases).
+func TestSchedulesWatchShutdownAfterReenable(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	up.SetNow(e.clock.now)
+	up.SetWorkflowState("1002", "disabled_inactivity")
+	second := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/1002/") {
+			close(second)
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+			}
+			return
+		}
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	id := e.schedulesAutoWatch(t, srv.URL, "6f1c1d4e-0000-4000-8000-000000000021", "ghp_auto")
+	w := e.worker(t, e.pool, collect.Collectors())
+	w.opts.DrainTimeout = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	select {
+	case <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no second PUT")
+	}
+	cancel()
+	<-done
+	if r := e.row(t, id); r.status == nil || *r.status != "ok" {
+		t.Fatalf("run not stored: %+v", r)
+	}
+	var reenabledAt time.Time
+	var reason string
+	if err := e.pool.QueryRow(context.Background(), `SELECT (m->>'reenabled_at')::timestamptz, COALESCE(y->>'reenable_error', '') FROM watch_states,
+		jsonb_array_elements(state->'workflows') m, jsonb_array_elements(state->'workflows') y
+		WHERE watch_id = $1 AND m->>'path' = '.github/workflows/mirror.yml' AND y->>'path' = '.github/workflows/yearly.yml'`, id).Scan(&reenabledAt, &reason); err != nil ||
+		!reenabledAt.Equal(t0) || reason != "" {
+		t.Fatalf("state: reenabled_at %v, yearly %q, err %v", reenabledAt, reason, err)
+	}
+	var got string
+	if err := e.pool.QueryRow(context.Background(), `SELECT string_agg(type || ' ' || (payload->>'path'), ',' ORDER BY id) FROM events WHERE watch_id = $1`, id).Scan(&got); err != nil ||
+		got != "schedule.reenabled .github/workflows/mirror.yml,schedule.disabled .github/workflows/yearly.yml" {
+		t.Fatalf("events %s, err %v", got, err)
 	}
 }

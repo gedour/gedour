@@ -91,7 +91,7 @@ type job struct {
 
 // Run claims due watches until ctx ends, sleeping in between until the next is due or a change wakes it,
 // then stops claiming and lets in-flight runs finish within DrainTimeout; runs still going after that are
-// cancelled and their claims released.
+// cancelled: one cut short releases its claim, one that had read everything stores its state.
 func (w *Worker) Run(ctx context.Context) {
 	hard, stopHard := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopHard()
@@ -208,7 +208,9 @@ func (w *Worker) run(hard context.Context, j job) {
 	state, f, err := w.collect(ctx, j)
 	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	cancel()
-	if hard.Err() != nil {
+	logReenables(log, f.Reenables)
+	// On shutdown, a run that read everything holds a whole state, perhaps after an upstream write: store it; a cut one goes back.
+	if hard.Err() != nil && err != nil {
 		w.release(log, j)
 		return
 	}
@@ -242,6 +244,18 @@ func (w *Worker) run(hard context.Context, j job) {
 		return
 	}
 	log.Debug("watch_run_done", zap.Int("events", len(events)), hosts, zap.Duration("took", time.Since(start)))
+}
+
+// logReenables logs each upstream write of the run, whatever the run's outcome: it happened. Not audited, as no user made it.
+func logReenables(log *zap.Logger, rs []collect.Reenable) {
+	for _, r := range rs {
+		fields := []zap.Field{zap.String("repo", r.Repo), zap.String("workflow_path", r.Path), zap.Int("status", r.Status)}
+		if r.Err != "" {
+			log.Warn("workflow_reenable_failed", append(fields, zap.String("error", r.Err))...)
+			continue
+		}
+		log.Info("workflow_reenabled", fields...)
+	}
 }
 
 // release hands an unfinished claim back; next_run_at is still due, so the next pass, on any replica, runs it.

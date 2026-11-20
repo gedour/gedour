@@ -291,7 +291,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Watches of a disabled owner are not claimed, and `gedour_watches_due` leaves them out.
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
-  `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
+  `GEDOUR_SHUTDOWN_TIMEOUT` to finish. Past it, a run cut short goes back to the queue; one that had read
+  everything is stored. A run-now, resume or edit during a run never starts a second one:
   the watch reads `running: true`, and the request is kept for when the run ends, unless that run ends on the upstream's rate limit, which sets the next run; a changed target still runs at once.
 - Default schedule: `1h` for GitHub watches (unauthenticated GitHub allows 60 requests an hour per
   address), `15m` for the others; any schedule can be set explicitly.
@@ -366,8 +367,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
     `schedule.disable_soon`, subject the repository, payload `repo`, `last_activity_at`, `disable_at`,
     `workflows` (paths of the active scheduled workflows).
   - Staleness: the expected times come from the workflow's cron lines, in UTC or in its `timezone`. A workflow
-    is stale when `missed_runs` of them fall after its last proof-of-life run (or its last update, when later)
-    and more than 1 h before now: GitHub delays scheduled runs under load. Only an `active` workflow is stale.
+    is stale when `missed_runs` of them fall after its last proof-of-life run (or, when later, its last update,
+    its re-enable by gedour, or when gedour first saw it active again) and more than 1 h before now: GitHub delays scheduled runs under load. Only an `active` workflow is stale.
     A job that runs again, then stalls again before the next check, gets a new `schedule.stale`.
   - Unlike other kinds, the first run reports what is already broken: `schedule.disabled`, `schedule.stale` and
     `schedule.disable_soon`. A healthy repository emits nothing.
@@ -379,11 +380,17 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
     a public repository after 60 days without activity: `schedule.disable_soon` goes out `warn_days` days before
     the last default-branch commit + 60 days, while a scheduled workflow is active. A newer commit resets it. A
     private repository never gets it.
-  - `auto_enable` re-enables a `disabled_inactivity` workflow (`PUT .../enable`), with `schedule.reenabled`
-    instead of `schedule.disabled`. `disabled_manually` and `disabled_fork` are left alone. A failed
-    PUT does not fail the run: `schedule.disabled` carries `reenable_error`, and the next run tries again.
-    `auto_enable` needs a credential (400 without one), and only a signed-in session turns it on: an API key
-    gets a 403.
+  - `auto_enable` re-enables a `disabled_inactivity` workflow (`PUT .../enable`: 1 request, sent once every read
+    of the run is done; the workflow's runs call waits for the next run), with `schedule.reenabled` instead of
+    `schedule.disabled`. `disabled_manually` and `disabled_fork` are left alone. Only a 204 counts: a failed PUT
+    (403, 404, 5xx, another status, network) does not fail the run: `schedule.disabled` carries `reenable_error`,
+    once per failure streak, also on a workflow already disabled, and each next run tries again, with
+    `schedule.reenabled` once it works. A rate-limited PUT waits for the reset like any call, unless a PUT of the
+    same run worked: the run then keeps it and leaves the rest, with their stored reason, for the next run, as it
+    does when it times out.
+    Each PUT is logged (`workflow_reenabled`, `workflow_reenable_failed`), not audited. `auto_enable` needs a
+    credential (400 without one), and only a signed-in session turns it on or changes the repository, `api_url` or
+    credential of a watch that has it on: an API key gets a 403 there, yet may edit the other fields.
   - Token permissions (fine-grained): Actions read, Metadata read, Contents read on a private repository, and
     Actions write for `auto_enable`. Example: a watch on `acme/widgets` with `missed_runs: 3` reports a nightly
     job that has not succeeded for three nights.

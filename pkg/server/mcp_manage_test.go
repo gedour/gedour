@@ -369,6 +369,111 @@ func TestKeyCredentialTarget(t *testing.T) {
 	})
 }
 
+// 019-AC16: turning auto_enable on through an API key is a 403, on create and on update, through the tool and the handler
+// alone, and so is moving it to another repository, API URL or credential. A key may edit a watch's other fields while
+// it is on, and turn it off; a session turns it on.
+func TestKeyAutoEnable(t *testing.T) {
+	m := newMCPApp(t)
+	alice := m.user(t, "alice")
+	c := m.credential(t, alice, "github_token")
+	cfg := func(on bool, missed int) map[string]any {
+		return map[string]any{"repo": "acme/widgets", "auto_enable": on, "missed_runs": missed}
+	}
+	watch := func(on bool) map[string]any {
+		return map[string]any{"name": "deadman", "kind": "github_schedules", "config": cfg(on, 3), "credential_id": c}
+	}
+	const msg = "an API key cannot turn auto_enable on, nor change the repository or credential"
+	toolRefused := func(t *testing.T, res toolResult) {
+		t.Helper()
+		if !res.IsError || !strings.Contains(res.text(), msg) || !strings.Contains(res.text(), "body.config.auto_enable") {
+			t.Fatalf("want the auto_enable refusal: %+v", res)
+		}
+	}
+	keyRefused := func(t *testing.T, code int, body string) {
+		t.Helper()
+		if code != http.StatusForbidden || !strings.Contains(body, msg) || !strings.Contains(body, "body.config.auto_enable") {
+			t.Fatalf("want a 403 at body.config.auto_enable: %d %s", code, body)
+		}
+	}
+	owned := func() int { return m.count(t, `SELECT count(*) FROM watches WHERE owner_id = $1`, alice.id) }
+	autoOn := func(id string) bool { return m.watchConfig(t, id)["auto_enable"] == true }
+
+	t.Run("create", func(t *testing.T) {
+		n := owned()
+		toolRefused(t, m.manage(t, alice, "create_watch", watch(true)))
+		code, body := m.asKey(t, alice, http.MethodPost, "/api/v1/watches", watch(true))
+		keyRefused(t, code, body)
+		if owned() != n {
+			t.Fatal("created anyway")
+		}
+	})
+	res := m.manage(t, alice, "create_watch", watch(false))
+	if res.IsError {
+		t.Fatalf("off: %+v", res)
+	}
+	id, _ := res.data(t).(map[string]any)["id"].(string)
+	t.Run("update", func(t *testing.T) {
+		toolRefused(t, m.manage(t, alice, "update_watch", map[string]any{"id": id, "config": cfg(true, 3)}))
+		code, body := m.asKey(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"config": cfg(true, 4)})
+		keyRefused(t, code, body)
+		if autoOn(id) {
+			t.Fatal("turned on anyway")
+		}
+	})
+	m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"config": cfg(true, 3)}, http.StatusOK, nil)
+	t.Run("moved", func(t *testing.T) {
+		// A host and a credential the key could otherwise use: only the auto_enable check stands in the way.
+		const ghe = "https://ghe.alice.example/api/v3"
+		m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "ghe", "kind": "github_schedules",
+			"config": map[string]any{"repo": "acme/widgets", "api_url": ghe}, "credential_id": c}, http.StatusCreated, nil)
+		other := m.credential(t, alice, "github_token")
+		repo := cfg(true, 3)
+		repo["repo"] = "acme/gadgets"
+		host := cfg(true, 3)
+		host["api_url"] = ghe
+		stored := m.watchConfig(t, id)
+		for name, edit := range map[string]map[string]any{
+			"repo":                          {"id": id, "config": repo},
+			"api_url":                       {"id": id, "config": host},
+			"credential_id":                 {"id": id, "credential_id": other},
+			"credential_id with the config": {"id": id, "config": cfg(true, 3), "credential_id": other},
+		} {
+			toolRefused(t, m.manage(t, alice, "update_watch", edit))
+			patch := maps.Clone(edit)
+			delete(patch, "id")
+			code, body := m.asKey(t, alice, http.MethodPatch, "/api/v1/watches/"+id, patch)
+			keyRefused(t, code, body)
+			var cred string
+			m.scan(t, `SELECT credential_id::text FROM watches WHERE id = $1`, []any{id}, &cred)
+			if got := m.watchConfig(t, id); !reflect.DeepEqual(got, stored) || cred != c {
+				t.Fatalf("%s: changed anyway: %v %s", name, got, cred)
+			}
+		}
+		// A session moves it.
+		m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"config": repo, "credential_id": other}, http.StatusOK, nil)
+		m.mustCall(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"config": cfg(true, 3), "credential_id": c}, http.StatusOK, nil)
+	})
+	t.Run("already on", func(t *testing.T) {
+		if res := m.manage(t, alice, "update_watch", map[string]any{"id": id, "config": cfg(true, 5)}); res.IsError {
+			t.Fatalf("other field: %+v", res)
+		}
+		if code, body := m.asKey(t, alice, http.MethodPatch, "/api/v1/watches/"+id, map[string]any{"name": "renamed"}); code != http.StatusOK {
+			t.Fatalf("rename: %d %s", code, body)
+		}
+		if !autoOn(id) || m.watchConfig(t, id)["missed_runs"] != 5.0 {
+			t.Fatalf("config %v", m.watchConfig(t, id))
+		}
+		// Off, it may move too.
+		moved := cfg(false, 5)
+		moved["repo"] = "acme/gadgets"
+		if res := m.manage(t, alice, "update_watch", map[string]any{"id": id, "config": moved}); res.IsError || autoOn(id) {
+			t.Fatalf("off: %+v", res)
+		}
+		toolRefused(t, m.manage(t, alice, "update_watch", map[string]any{"id": id, "config": cfg(true, 5)}))
+	})
+	m.mustCall(t, alice, http.MethodPost, "/api/v1/watches", watch(true), http.StatusCreated, nil)
+}
+
 // credential_id travels through the tools to the handler's target check.
 func TestMCPManageCredentialID(t *testing.T) {
 	m := newMCPApp(t)

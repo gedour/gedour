@@ -2,9 +2,11 @@ package collect
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -204,6 +206,10 @@ type hourlyUpstream struct {
 	commit    string // committer date of the last default-branch commit, none when empty
 	queries   []string
 	paths     []string
+	// The re-enable PUT answers putStatus, 204 when 0 (then the workflow is listed active), a dropped connection when -1.
+	putStatus int
+	putHeader http.Header
+	puts      int
 }
 
 func (u *hourlyUpstream) set(fn func(u *hourlyUpstream)) {
@@ -212,11 +218,32 @@ func (u *hourlyUpstream) set(fn func(u *hourlyUpstream)) {
 	fn(u)
 }
 
+// putCount reads under the lock: a dropped connection's handler may still be running when the client returns.
+func (u *hourlyUpstream) putCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.puts
+}
+
 func (u *hourlyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.paths = append(u.paths, r.URL.Path)
 	switch {
+	case r.Method == http.MethodPut && r.URL.Path == "/repos/acme/widgets/actions/workflows/7/enable":
+		u.puts++
+		maps.Copy(w.Header(), u.putHeader)
+		switch u.putStatus {
+		case 0:
+			u.state = ""
+			w.WriteHeader(http.StatusNoContent)
+		case -1:
+			panic(http.ErrAbortHandler)
+		default:
+			http.Error(w, `{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com"}`, u.putStatus)
+		}
+	case r.Method != http.MethodGet:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
 	case r.URL.Path == "/repos/acme/widgets":
 		_, _ = fmt.Fprintf(w, `{"full_name":"acme/widgets","private":%t,"pushed_at":"2030-01-01T00:00:00Z"}`, u.private)
 	case r.URL.Path == "/repos/acme/widgets/commits" && r.URL.RawQuery == "per_page=1":
@@ -865,5 +892,586 @@ func TestGitHubSchedulesEmptyRepository(t *testing.T) {
 				t.Fatalf("state %s, err %v", raw, err)
 			}
 		})
+	}
+}
+
+func autoCfg(apiURL string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":0,"auto_enable":true}`, apiURL))
+}
+
+// autoCollect collects once with the github_token credential, and returns the run's re-enable outcomes.
+func autoCollect(t *testing.T, cfg, prev json.RawMessage, now time.Time) (json.RawMessage, []Reenable, error) {
+	t.Helper()
+	f := fetcher(t)
+	f.Now = func() time.Time { return now }
+	f.Prev = prev
+	raw, err := Collectors()["github_schedules"].Collect(t.Context(), f, cfg, &Credential{Kind: "github_token", Secret: "ghp_x"})
+	return raw, f.Reenables, err
+}
+
+func schedulesState(t *testing.T, raw json.RawMessage) map[string]ScheduledWorkflow {
+	t.Helper()
+	var s SchedulesState
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]ScheduledWorkflow{}
+	for _, w := range s.Workflows {
+		out[w.Path] = w
+	}
+	return out
+}
+
+// 019-AC14: with auto_enable, fixture a's disabled_inactivity mirror.yml gets one PUT with the credential and one
+// schedule.reenabled, no schedule.disabled; yearly.yml, disabled by hand, gets no PUT and a schedule.disabled. The
+// next run lists it active: no PUT, no schedule.enabled. Disabled again later, it is re-enabled again.
+func TestGitHubSchedulesAutoEnable(t *testing.T) {
+	now := at("2026-11-04T12:00:00Z")
+	up := testupstream.New()
+	up.SetNow(func() time.Time { return now })
+	up.SetWorkflowState("1002", "disabled_manually")
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	cfg := autoCfg(srv.URL)
+	put := func(id string) int { return up.Hits("/repos/acme/widgets/actions/workflows/" + id + "/enable") }
+
+	first, re, err := autoCollect(t, cfg, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := up.Received()
+	if len(got) != 1 || got[0].Endpoint != "enable-1001" || got[0].Header["Authorization"] != "Bearer ghp_x" || put("1002") != 0 {
+		t.Fatalf("PUTs %+v, yearly %d", got, put("1002"))
+	}
+	if want := []Reenable{{Repo: "acme/widgets", Path: mirrorPath, Status: http.StatusNoContent}}; !slices.Equal(re, want) {
+		t.Fatalf("outcomes %+v", re)
+	}
+	ws := schedulesState(t, first)
+	m := ws[mirrorPath]
+	// Re-enabled now, it cannot be stale: no runs call this run, last_alive_at stays the stored one.
+	runs := func() int { return up.Hits("/repos/acme/widgets/actions/workflows/1001/runs") }
+	if m.State != "active" || m.ReenabledAt == nil || !m.ReenabledAt.Equal(now) || m.Stale || m.LastAliveAt != nil || runs() != 0 ||
+		m.ReenableError != "" || ws[".github/workflows/yearly.yml"].State != "disabled_manually" {
+		t.Fatalf("state %s, runs calls %d", first, runs())
+	}
+	check(t, schedulesDiff(t, json.RawMessage("null"), first), []string{
+		`schedule.reenabled .github/workflows/mirror.yml {"from":"disabled_inactivity","last_alive_at":null,"path":".github/workflows/mirror.yml","state":"active","url":"` + mirrorURL + `","workflow":"Mirror"}`,
+		`schedule.disabled .github/workflows/yearly.yml {"last_alive_at":null,"path":".github/workflows/yearly.yml","state":"disabled_manually","url":"https://github.com/acme/widgets/blob/main/.github/workflows/yearly.yml","workflow":"Yearly report"}`,
+	})
+
+	next, re, err := autoCollect(t, cfg, first, now.Add(time.Hour))
+	if err != nil || len(re) != 0 || put("1001") != 1 || runs() != 1 {
+		t.Fatalf("next run: err %v, outcomes %+v, PUTs %d, runs calls %d", err, re, put("1001"), runs())
+	}
+	check(t, schedulesDiff(t, first, next), []string{})
+
+	up.SetWorkflowState("1001", "disabled_inactivity")
+	again, _, err := autoCollect(t, cfg, next, now.Add(2*time.Hour))
+	if err != nil || put("1001") != 2 {
+		t.Fatalf("again: err %v, PUTs %d", err, put("1001"))
+	}
+	if got := schedulesDiff(t, next, again); len(got) != 1 || !strings.HasPrefix(got[0], "schedule.reenabled "+mirrorPath) {
+		t.Fatalf("events %q", got)
+	}
+
+	// Off, nothing is written upstream.
+	up.SetWorkflowState("1001", "disabled_inactivity")
+	if _, re, err := autoCollect(t, schedulesCfg(srv.URL, "success", 3), next, now.Add(3*time.Hour)); err != nil || len(re) != 0 || put("1001") != 2 {
+		t.Fatalf("off: err %v, outcomes %+v, PUTs %d", err, re, put("1001"))
+	}
+}
+
+// 019-AC14: a re-enabled workflow is not stale for the runs it missed before: GitHub's listed updated_at may stay old,
+// so the re-enable time is the reference, and the count starts after it.
+func TestGitHubSchedulesReenabledStaleness(t *testing.T) {
+	// Last success four days ago, updated_at in January: without the re-enable time it would be stale at once.
+	up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-10-31T08:05:00Z"}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	cfg := autoCfg(srv.URL)
+	run := func(prev json.RawMessage, now string) json.RawMessage {
+		t.Helper()
+		raw, _, err := autoCollect(t, cfg, prev, at(now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	on := run(nil, "2026-11-04T12:00:00Z")
+	if up.putCount() != 1 {
+		t.Fatalf("PUTs %d", up.putCount())
+	}
+	// 13:00 is missed at 14:30, 14:00 not yet: one of three.
+	quiet := run(on, "2026-11-04T14:30:00Z")
+	check(t, schedulesDiff(t, on, quiet), []string{})
+	stale := run(quiet, "2026-11-04T16:01:00Z")
+	check(t, schedulesDiff(t, quiet, stale), []string{
+		`schedule.stale .github/workflows/nightly.yml {"expected_at":"2026-11-04T13:00:00Z","last_alive_at":"2026-10-31T08:05:00Z","missed":3,"path":".github/workflows/nightly.yml","state":"active","url":"https://github.com/acme/widgets/blob/main/.github/workflows/nightly.yml","workflow":"Nightly"}`,
+	})
+	if up.putCount() != 1 || !schedulesState(t, stale)[".github/workflows/nightly.yml"].ReenabledAt.Equal(at("2026-11-04T12:00:00Z")) {
+		t.Fatalf("PUTs %d, state %s", up.putCount(), stale)
+	}
+}
+
+// 019-AC15: a refused or failed PUT keeps the workflow disabled with a short reason, the run succeeds, and the next
+// run tries again without a second schedule.disabled; a later PUT that works sends schedule.reenabled.
+func TestGitHubSchedulesReenableFails(t *testing.T) {
+	const reason = "Resource not accessible by personal access token"
+	for _, tt := range []struct {
+		name   string
+		status int
+		header http.Header
+		want   string // reenable_error prefix
+		code   int    // the status logged
+	}{
+		{"403", http.StatusForbidden, nil, "HTTP 403: " + reason, http.StatusForbidden},
+		{"404", http.StatusNotFound, nil, "HTTP 404: " + reason, http.StatusNotFound},
+		{"500", http.StatusInternalServerError, nil, "HTTP 500: " + reason, http.StatusInternalServerError},
+		{"503 without Retry-After", http.StatusServiceUnavailable, nil, "HTTP 503: " + reason, http.StatusServiceUnavailable},
+		{"connection dropped", -1, nil, "PUT http://127.0.0.1:", 0},
+		// Only 204 enables: a 2xx from elsewhere, or a redirect the client replays as a GET, did not.
+		{"200", http.StatusOK, nil, "HTTP 200, expected 204", http.StatusOK},
+		{"202", http.StatusAccepted, nil, "HTTP 202, expected 204", http.StatusAccepted},
+		{"302 replayed as GET", http.StatusFound, http.Header{"Location": {"/repos/acme/widgets"}}, "HTTP 200, expected 204", http.StatusOK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-11-04T11:05:00Z", putStatus: tt.status, putHeader: tt.header}
+			srv := httptest.NewServer(up)
+			defer srv.Close()
+			cfg := autoCfg(srv.URL)
+			first, re, err := autoCollect(t, cfg, nil, at("2026-11-04T12:00:00Z"))
+			if err != nil {
+				t.Fatalf("the run failed: %v", err)
+			}
+			w := schedulesState(t, first)[".github/workflows/nightly.yml"]
+			if w.State != "disabled_inactivity" || w.ReenabledAt != nil || !strings.HasPrefix(w.ReenableError, tt.want) || len([]rune(w.ReenableError)) > 220 ||
+				strings.Contains(w.ReenableError, "ghp_x") || strings.Contains(w.ReenableError, "\n") {
+				t.Fatalf("state %s", first)
+			}
+			if len(re) != 1 || re[0].Err != w.ReenableError || re[0].Status != tt.code || re[0].Path != ".github/workflows/nightly.yml" {
+				t.Fatalf("outcomes %+v", re)
+			}
+			b, _ := json.Marshal(w.ReenableError)
+			check(t, schedulesDiff(t, json.RawMessage("null"), first), []string{
+				`schedule.disabled .github/workflows/nightly.yml {"last_alive_at":null,"path":".github/workflows/nightly.yml","reenable_error":` + string(b) +
+					`,"state":"disabled_inactivity","url":"https://github.com/acme/widgets/blob/main/.github/workflows/nightly.yml","workflow":"Nightly"}`,
+			})
+			// The next run tries again, still failing: nothing new.
+			next, _, err := autoCollect(t, cfg, first, at("2026-11-04T13:00:00Z"))
+			if err != nil || up.putCount() != 2 {
+				t.Fatalf("next run: err %v, PUTs %d", err, up.putCount())
+			}
+			check(t, schedulesDiff(t, first, next), []string{})
+			// It works at last: re-enabled, not enabled.
+			up.set(func(u *hourlyUpstream) { u.putStatus = 0 })
+			back, _, err := autoCollect(t, cfg, next, at("2026-11-04T14:00:00Z"))
+			if err != nil || up.putCount() != 3 {
+				t.Fatalf("back: err %v, PUTs %d", err, up.putCount())
+			}
+			if got := schedulesDiff(t, next, back); len(got) != 1 || !strings.HasPrefix(got[0], `schedule.reenabled .github/workflows/nightly.yml {"from":"disabled_inactivity"`) {
+				t.Fatalf("events %q", got)
+			}
+		})
+	}
+}
+
+// 019-AC15, 001-AC11: a rate-limited PUT is no refusal: the run waits for the reset like on any other call, with no
+// state, and the next run tries again.
+func TestGitHubSchedulesReenableRateLimited(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		header http.Header
+		until  time.Time
+	}{
+		{"403 limit spent", http.StatusForbidden, http.Header{"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {"1793797200"}}, time.Unix(1793797200, 0)},
+		{"secondary limit", http.StatusForbidden, http.Header{"Retry-After": {"60"}}, at("2026-11-04T12:01:00Z")},
+		{"429", http.StatusTooManyRequests, nil, at("2026-11-04T12:00:00Z").Add(defaultRateLimitWait)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-11-04T11:05:00Z", putStatus: tt.status, putHeader: tt.header}
+			srv := httptest.NewServer(up)
+			defer srv.Close()
+			raw, re, err := autoCollect(t, autoCfg(srv.URL), nil, at("2026-11-04T12:00:00Z"))
+			var rl *RateLimitError
+			if raw != nil || !errors.As(err, &rl) || !rl.Until.Equal(tt.until) || len(re) != 1 || re[0].Err == "" {
+				t.Fatalf("state %s, err %v, outcomes %+v", raw, err, re)
+			}
+			up.set(func(u *hourlyUpstream) { u.putStatus, u.putHeader = 0, nil })
+			if _, _, err := autoCollect(t, autoCfg(srv.URL), nil, at("2026-11-04T13:00:00Z")); err != nil || up.putCount() != 2 {
+				t.Fatalf("next run: err %v, PUTs %d", err, up.putCount())
+			}
+		})
+	}
+}
+
+// 001-AC11: auto_enable adds the PUT of each disabled_inactivity workflow to the rate budget, and no runs call, as a
+// workflow re-enabled this run cannot be stale; a disabled_manually one, or auto_enable off, adds nothing.
+func TestGitHubSchedulesReenableBudget(t *testing.T) {
+	up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-11-04T11:05:00Z", putStatus: http.StatusForbidden}
+	var remaining string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/contents/.github/workflows") {
+			w.Header().Set("X-RateLimit-Remaining", remaining)
+			w.Header().Set("X-RateLimit-Reset", "1793797200")
+		}
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	now := at("2026-11-04T12:00:00Z")
+	// Known file: only the PUT is left.
+	remaining = "9"
+	known, _, err := autoCollect(t, autoCfg(srv.URL), nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining = "0"
+	if _, _, err := autoCollect(t, autoCfg(srv.URL), known, now); err == nil || !strings.HasPrefix(err.Error(), "rate limit: 0 left, this run needs 1 request:") || up.putCount() != 1 {
+		t.Fatalf("known file: %v, PUTs %d", err, up.putCount())
+	}
+	// First run: the file too.
+	remaining = "1"
+	if _, _, err := autoCollect(t, autoCfg(srv.URL), nil, now); err == nil || !strings.HasPrefix(err.Error(), "rate limit: 1 left, this run needs 2 requests") {
+		t.Fatalf("first run: %v", err)
+	}
+	if _, _, err := autoCollect(t, autoCfg(srv.URL), known, now); err != nil || up.putCount() != 2 {
+		t.Fatalf("enough: %v, PUTs %d", err, up.putCount())
+	}
+	remaining = "0"
+	schedulesRun(t, schedulesCfg(srv.URL, "success", 3), known, now)
+	up.set(func(u *hourlyUpstream) { u.state = "disabled_manually" })
+	if _, _, err := autoCollect(t, autoCfg(srv.URL), known, now); err != nil || up.putCount() != 2 {
+		t.Fatalf("disabled by hand: %v, PUTs %d", err, up.putCount())
+	}
+}
+
+// 019-AC14: the PUTs go out after every read. A read failing anywhere in the run fails it before any PUT, so no
+// re-enable is lost with the run; the next run finds the workflow still disabled and sends it.
+func TestGitHubSchedulesReenableAfterReads(t *testing.T) {
+	for _, tt := range []struct {
+		name, path string
+		warnDays   int
+	}{
+		{"file fetch", "/repos/acme/widgets/contents/.github/workflows/yearly.yml", 0},
+		{"runs call", "/repos/acme/widgets/actions/workflows/1002/runs", 0},
+		{"last commit", "/repos/acme/widgets/commits", 7},
+		{"repository", "/repos/acme/widgets", 7},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := at("2026-11-04T12:00:00Z")
+			up := testupstream.New()
+			up.SetNow(func() time.Time { return now })
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == tt.path {
+					http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
+					return
+				}
+				up.ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+			cfg := json.RawMessage(fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":%d,"auto_enable":true}`, srv.URL, tt.warnDays))
+			raw, re, err := autoCollect(t, cfg, nil, now)
+			if err == nil || raw != nil || len(re) != 0 || len(up.Received()) != 0 {
+				t.Fatalf("state %s, err %v, outcomes %+v, PUTs %+v", raw, err, re, up.Received())
+			}
+		})
+	}
+}
+
+// 019-AC13, 019-AC14: a workflow re-enabled this run is active for the 60-day warning, computed after the PUTs.
+func TestGitHubSchedulesReenableThenWarn(t *testing.T) {
+	up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-11-04T11:05:00Z", commit: "2026-09-11T12:00:00Z"}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	cfg := json.RawMessage(fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":7,"auto_enable":true}`, srv.URL))
+	raw, _, err := autoCollect(t, cfg, nil, at("2026-11-04T12:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := schedulesDiff(t, json.RawMessage("null"), raw)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "schedule.reenabled ") || got[1] != soonEvent("2026-09-11T12:00:00Z") {
+		t.Fatalf("events %q", got)
+	}
+}
+
+// eventFor returns the one event line about path, "" when none.
+func eventFor(t *testing.T, events []string, path string) string {
+	t.Helper()
+	var out []string
+	for _, e := range events {
+		if strings.Contains(e, " "+path+" ") {
+			out = append(out, e)
+		}
+	}
+	if len(out) > 1 {
+		t.Fatalf("several events for %s: %q", path, out)
+	}
+	return strings.Join(out, "")
+}
+
+// reenableTrio lists three disabled_inactivity workflows, a, b and c (ids 1 to 3); each PUT answers status[id], 204 by default.
+type reenableTrio struct {
+	mu     sync.Mutex
+	status map[string]int
+	puts   []string
+	// onPut runs before a PUT is answered.
+	onPut func(id string, r *http.Request)
+}
+
+// putList reads under the lock: a PUT the client gave up on may still be in its handler.
+func (u *reenableTrio) putList() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return strings.Join(u.puts, ",")
+}
+
+func (u *reenableTrio) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	switch {
+	case r.Method == http.MethodPut:
+		id := strings.Split(strings.TrimPrefix(r.URL.Path, "/repos/acme/widgets/actions/workflows/"), "/")[0]
+		u.puts = append(u.puts, id)
+		if u.onPut != nil {
+			u.onPut(id, r)
+		}
+		if st := u.status[id]; st != 0 {
+			http.Error(w, `{"message":"You have exceeded a secondary rate limit"}`, st)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case strings.HasSuffix(r.URL.Path, "/actions/workflows"):
+		var ws []string
+		for i, n := range []string{"a", "b", "c"} {
+			ws = append(ws, fmt.Sprintf(`{"id":%d,"name":%q,"path":".github/workflows/%s.yml","state":"disabled_inactivity","updated_at":"2026-01-01T00:00:00Z"}`, i+1, n, n))
+		}
+		_, _ = fmt.Fprintf(w, `{"workflows":[%s]}`, strings.Join(ws, ","))
+	case strings.HasSuffix(r.URL.Path, "/contents/.github/workflows"):
+		_, _ = w.Write([]byte(`[{"path":".github/workflows/a.yml","sha":"a","type":"file"},{"path":".github/workflows/b.yml","sha":"b","type":"file"},
+			{"path":".github/workflows/c.yml","sha":"c","type":"file"}]`))
+	case strings.HasPrefix(r.URL.Path, "/repos/acme/widgets/contents/"):
+		_, _ = w.Write([]byte("on:\n  schedule:\n    - cron: '0 0 * * *'\n"))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// 019-AC15: a PUT rate-limited after another worked keeps that success: the run stores it and sends no more PUTs. The
+// one limited and one left without a PUT keep their stored reason (the log has the limit), so neither opens a failure streak
+// (no reenable_error event, a real error next run sends one) nor ends one. Before any success, the run waits for the
+// reset (TestGitHubSchedulesReenableRateLimited).
+func TestGitHubSchedulesReenableLimitAfterSuccess(t *testing.T) {
+	up := &reenableTrio{status: map[string]int{"2": http.StatusTooManyRequests}}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	raw, re, err := autoCollect(t, autoCfg(srv.URL), nil, at("2026-11-04T12:00:00Z"))
+	if err != nil || up.putList() != "1,2" || len(re) != 2 || re[0].Err != "" || re[1].Err == "" {
+		t.Fatalf("err %v, PUTs %q, outcomes %+v", err, up.putList(), re)
+	}
+	ws := schedulesState(t, raw)
+	a, b, c := ws[".github/workflows/a.yml"], ws[".github/workflows/b.yml"], ws[".github/workflows/c.yml"]
+	if a.State != "active" || b.State != "disabled_inactivity" || c.State != "disabled_inactivity" ||
+		b.ReenableError != "" || !strings.HasPrefix(re[1].Err, "rate limited by ") || c.ReenableError != "" {
+		t.Fatalf("state %s", raw)
+	}
+	got := schedulesDiff(t, json.RawMessage("null"), raw)
+	if len(got) != 3 || !strings.HasPrefix(got[0], "schedule.reenabled .github/workflows/a.yml") ||
+		strings.Contains(got[1], "reenable_error") || strings.Contains(got[2], "reenable_error") {
+		t.Fatalf("events %q", got)
+	}
+	// The next run sends the rest: c fails for real, which opens its streak.
+	up.mu.Lock()
+	up.status = map[string]int{"3": http.StatusForbidden}
+	up.mu.Unlock()
+	next, _, err := autoCollect(t, autoCfg(srv.URL), raw, at("2026-11-04T13:00:00Z"))
+	if err != nil || up.putList() != "1,2,1,2,3" {
+		t.Fatalf("next run: err %v, PUTs %q", err, up.putList())
+	}
+	if e := eventFor(t, schedulesDiff(t, raw, next), ".github/workflows/c.yml"); !strings.HasPrefix(e, "schedule.disabled ") ||
+		!strings.Contains(e, `"reenable_error":"HTTP 403: `) {
+		t.Fatalf("c next run: %q", e)
+	}
+	// Stopped again before c: it keeps its stored reason, so its streak goes on with no event and no end.
+	up.mu.Lock()
+	up.status = map[string]int{"2": http.StatusTooManyRequests}
+	up.mu.Unlock()
+	third, _, err := autoCollect(t, autoCfg(srv.URL), next, at("2026-11-04T14:00:00Z"))
+	if err != nil || up.putList() != "1,2,1,2,3,1,2" {
+		t.Fatalf("third run: err %v, PUTs %q", err, up.putList())
+	}
+	if c3 := schedulesState(t, third)[".github/workflows/c.yml"]; c3.ReenableError != schedulesState(t, next)[".github/workflows/c.yml"].ReenableError {
+		t.Fatalf("c third run: %+v", c3)
+	}
+	if e := eventFor(t, schedulesDiff(t, next, third), ".github/workflows/c.yml"); e != "" {
+		t.Fatalf("c third run: %q", e)
+	}
+}
+
+// 019-AC14: a run cancelled or timed out during a PUT after another one worked keeps that success: the run returns its
+// state, the rest left disabled with their stored reason for the next run, so the re-enable is not lost (the worker
+// stores it on a timeout or a shutdown).
+func TestGitHubSchedulesReenableCancelAfterSuccess(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		timeout time.Duration // 0: cancelled from the second PUT instead
+		want    string
+	}{
+		{"cancelled", 0, "context canceled"},
+		// Long enough for the reads, then the second PUT hangs past it.
+		{"timed out", 2 * time.Second, "context deadline exceeded"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			if tt.timeout > 0 {
+				ctx, cancel = context.WithTimeout(t.Context(), tt.timeout)
+			}
+			defer cancel()
+			up := &reenableTrio{}
+			up.onPut = func(id string, r *http.Request) {
+				if id != "2" {
+					return
+				}
+				if tt.timeout == 0 {
+					cancel()
+				}
+				select {
+				case <-r.Context().Done():
+				case <-time.After(10 * time.Second):
+				}
+			}
+			srv := httptest.NewServer(up)
+			defer srv.Close()
+			f := fetcher(t)
+			f.Now = func() time.Time { return at("2026-11-04T12:00:00Z") }
+			raw, err := Collectors()["github_schedules"].Collect(ctx, f, autoCfg(srv.URL), &Credential{Kind: "github_token", Secret: "ghp_x"})
+			if err != nil || up.putList() != "1,2" || len(f.Reenables) != 2 || f.Reenables[0].Err != "" || !strings.Contains(f.Reenables[1].Err, tt.want) {
+				t.Fatalf("err %v, PUTs %q, outcomes %+v", err, up.putList(), f.Reenables)
+			}
+			ws := schedulesState(t, raw)
+			a, b, c := ws[".github/workflows/a.yml"], ws[".github/workflows/b.yml"], ws[".github/workflows/c.yml"]
+			if a.State != "active" || a.ReenabledAt == nil || b.State != "disabled_inactivity" || b.ReenableError != "" ||
+				c.ReenableError != "" {
+				t.Fatalf("state %s", raw)
+			}
+			// c got no PUT: no reenable_error event; a real error on it next run sends one.
+			if e := eventFor(t, schedulesDiff(t, json.RawMessage("null"), raw), ".github/workflows/c.yml"); !strings.HasPrefix(e, "schedule.disabled ") ||
+				strings.Contains(e, "reenable_error") {
+				t.Fatalf("c: %q", e)
+			}
+			up.mu.Lock()
+			up.onPut, up.status = nil, map[string]int{"3": http.StatusForbidden}
+			up.mu.Unlock()
+			next, _, err := autoCollect(t, autoCfg(srv.URL), raw, at("2026-11-04T13:00:00Z"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e := eventFor(t, schedulesDiff(t, raw, next), ".github/workflows/c.yml"); !strings.Contains(e, `"reenable_error":"HTTP 403: `) {
+				t.Fatalf("c next run: %q", e)
+			}
+		})
+	}
+}
+
+// 019-AC15: a workflow already stored disabled whose re-enable fails (auto_enable turned on after schedule.disabled, a
+// token without Actions write) sends one schedule.disabled with reenable_error per failure streak: none while it keeps
+// failing, whatever the reason, and schedule.reenabled once it works; turned off then on, a new streak sends again.
+func TestGitHubSchedulesReenableFailsWhileDisabled(t *testing.T) {
+	up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-11-04T11:05:00Z", putStatus: http.StatusForbidden}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	const disabled = `schedule.disabled .github/workflows/nightly.yml {"last_alive_at":null,"path":".github/workflows/nightly.yml",`
+	off := schedulesRun(t, schedulesCfg(srv.URL, "success", 3), nil, at("2026-11-04T12:00:00Z"))
+	run := func(prev json.RawMessage, now string) json.RawMessage {
+		t.Helper()
+		raw, _, err := autoCollect(t, autoCfg(srv.URL), prev, at(now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	failing := run(off, "2026-11-04T13:00:00Z")
+	check(t, schedulesDiff(t, off, failing), []string{
+		disabled + `"reenable_error":"HTTP 403: Resource not accessible by personal access token","state":"disabled_inactivity","url":"https://github.com/acme/widgets/blob/main/.github/workflows/nightly.yml","workflow":"Nightly"}`,
+	})
+	still := run(failing, "2026-11-04T14:00:00Z")
+	check(t, schedulesDiff(t, failing, still), []string{})
+	// Another reason within the streak: nothing.
+	up.set(func(u *hourlyUpstream) { u.putStatus = http.StatusInternalServerError })
+	other := run(still, "2026-11-04T15:00:00Z")
+	if !strings.Contains(string(other), "HTTP 500") {
+		t.Fatalf("state %s", other)
+	}
+	check(t, schedulesDiff(t, still, other), []string{})
+	// auto_enable off ends the streak quietly; on again and failing, a new one.
+	quiet := schedulesRun(t, schedulesCfg(srv.URL, "success", 3), other, at("2026-11-04T16:00:00Z"))
+	check(t, schedulesDiff(t, other, quiet), []string{})
+	again := run(quiet, "2026-11-04T17:00:00Z")
+	if got := schedulesDiff(t, quiet, again); len(got) != 1 || !strings.HasPrefix(got[0], disabled+`"reenable_error":"HTTP 500: `) {
+		t.Fatalf("events %q", got)
+	}
+	up.set(func(u *hourlyUpstream) { u.putStatus = 0 })
+	back := run(again, "2026-11-04T18:00:00Z")
+	if got := schedulesDiff(t, again, back); len(got) != 1 || !strings.HasPrefix(got[0], `schedule.reenabled .github/workflows/nightly.yml {"from":"disabled_inactivity"`) {
+		t.Fatalf("events %q", got)
+	}
+}
+
+// 019-AC15: diffSchedules on stored states alone: a new failure on a workflow already disabled is reported once.
+func TestDiffSchedulesReenableStreak(t *testing.T) {
+	wf := func(state, reenableErr string) SchedulesState {
+		return SchedulesState{Workflows: []ScheduledWorkflow{{Path: "n.yml", State: state, ReenableError: reenableErr}}}
+	}
+	for _, tt := range []struct {
+		name     string
+		old, cur SchedulesState
+		want     string
+	}{
+		{"streak starts", wf("disabled_inactivity", ""), wf("disabled_inactivity", "HTTP 403: no"), "schedule.disabled"},
+		{"streak goes on", wf("disabled_inactivity", "HTTP 403: no"), wf("disabled_inactivity", "HTTP 403: no"), ""},
+		{"reason changes", wf("disabled_inactivity", "HTTP 403: no"), wf("disabled_inactivity", "HTTP 502: down"), ""},
+		{"from active, one event", wf("active", ""), wf("disabled_inactivity", "HTTP 403: no"), "schedule.disabled"},
+		{"stays disabled, no PUT", wf("disabled_inactivity", ""), wf("disabled_inactivity", ""), ""},
+		{"by hand, no PUT", wf("disabled_manually", ""), wf("disabled_manually", ""), ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			for _, e := range diffSchedules(tt.old, tt.cur) {
+				got = append(got, e.Type)
+			}
+			if strings.Join(got, ",") != tt.want {
+				t.Fatalf("events %q", got)
+			}
+		})
+	}
+}
+
+// 019-AC4: a workflow stored disabled and listed active again with an old updated_at (a re-enable gedour did not see
+// succeed: a lost PUT answer, or by hand) sends schedule.enabled only: the time gedour saw it active is a staleness
+// reference too, and the count starts after it.
+func TestGitHubSchedulesActiveSince(t *testing.T) {
+	up := &hourlyUpstream{state: "disabled_inactivity", success: "2026-10-31T08:05:00Z"}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	cfg := schedulesCfg(srv.URL, "success", 3)
+	off := schedulesRun(t, cfg, nil, at("2026-11-04T12:00:00Z"))
+	up.set(func(u *hourlyUpstream) { u.state = "" })
+	on := schedulesRun(t, cfg, off, at("2026-11-04T13:00:00Z"))
+	check(t, schedulesDiff(t, off, on), []string{
+		`schedule.enabled .github/workflows/nightly.yml {"last_alive_at":"2026-10-31T08:05:00Z","path":".github/workflows/nightly.yml","state":"active","url":"https://github.com/acme/widgets/blob/main/.github/workflows/nightly.yml","workflow":"Nightly"}`,
+	})
+	w := schedulesState(t, on)[".github/workflows/nightly.yml"]
+	if w.ActiveSince == nil || !w.ActiveSince.Equal(at("2026-11-04T13:00:00Z")) || w.ReenabledAt != nil {
+		t.Fatalf("state %s", on)
+	}
+	// 14:00 and 15:00 are past the grace at 16:01, two of three; 16:00 joins them at 17:01.
+	quiet := schedulesRun(t, cfg, on, at("2026-11-04T16:01:00Z"))
+	check(t, schedulesDiff(t, on, quiet), []string{})
+	stale := schedulesRun(t, cfg, quiet, at("2026-11-04T17:01:00Z"))
+	check(t, schedulesDiff(t, quiet, stale), []string{
+		`schedule.stale .github/workflows/nightly.yml {"expected_at":"2026-11-04T14:00:00Z","last_alive_at":"2026-10-31T08:05:00Z","missed":3,"path":".github/workflows/nightly.yml","state":"active","url":"https://github.com/acme/widgets/blob/main/.github/workflows/nightly.yml","workflow":"Nightly"}`,
+	})
+	// A workflow first seen active is no return: no active_since, its first run reports it stale (019-AC9).
+	if first := schedulesRun(t, cfg, nil, at("2026-11-04T17:01:00Z")); strings.Contains(string(first), "active_since") {
+		t.Fatalf("first run %s", first)
 	}
 }

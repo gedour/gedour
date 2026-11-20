@@ -490,14 +490,16 @@ describe("StatePanel", () => {
     else expect(line).not.toHaveTextContent("soon");
   });
 
-  // A cutoff already behind now reads as past, not as a coming turn-off.
+  // A cutoff already behind now reads as past, not as a coming turn-off. Now, not the state's observed_at
+  // (2026-11-03T10:05:00Z): a state observed before the cutoff, viewed after it, reads as past.
   it.each([
-    ["three days before", "2026-10-31T10:05:00Z"],
-    ["right when", "2026-11-03T10:05:00Z"],
-  ])("says the cutoff passed %s now", async (_, disableAt) => {
+    ["three days before", "2026-10-31T10:05:00Z", "2026-11-03T10:05:00Z"],
+    ["right when", "2026-11-03T10:05:00Z", "2026-11-03T10:05:00Z"],
+    ["after the observed state", "2026-11-04T10:05:00Z", "2026-11-05T10:05:00Z"],
+  ])("says the cutoff passed %s now", async (_, disableAt, now) => {
     // Pinned so the past/future wording and the relative date read the same clock.
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-11-03T10:05:00Z"));
+    vi.setSystemTime(new Date(now));
     onTestFinished(() => {
       vi.useRealTimers();
     });

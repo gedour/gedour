@@ -429,6 +429,16 @@ func autoEnableError(cfg map[string]any, credentialed bool) error {
 	return &huma.ErrorDetail{Location: "body.config.auto_enable", Message: "needs a credential: attach a github_token with Actions write", Value: true}
 }
 
+// autoEnableKeyError refuses an API key an auto_enable a session did not approve: upstream writes with the owner's token go
+// only to the repository and with the credential a session turned it on for.
+func autoEnableKeyError(cfg map[string]any, approved bool) error {
+	if cfg["auto_enable"] != true || approved {
+		return nil
+	}
+	return huma.Error403Forbidden("an API key cannot turn auto_enable on, nor change the repository or credential it writes with: do it in the UI",
+		&huma.ErrorDetail{Location: "body.config.auto_enable", Message: "re-enables workflows with your token: only a signed-in session sets where", Value: true})
+}
+
 func ociTags(c *OCITagsConfig, fe *fieldErrors) {
 	c.Registry = strings.ToLower(strings.TrimSpace(c.Registry))
 	// With :443 left on, registryBase reaches the web host docker.io, not registry-1.docker.io.

@@ -76,13 +76,15 @@ type Server struct {
 	hits     map[string]int
 	mux      *http.ServeMux
 	received []Received
+	// states overrides the listed state of a github_schedules workflow, by id, until the next SetFixture.
+	states map[string]string
 }
 
 // Received is one request a fake channel endpoint got.
 type Received struct {
 	// Endpoint is "telegram", the webhook's name (POST /_hooks/{name}), "talk-<token>" for a Talk message
 	// accepted, "talk-<token>-rejected" for one refused, "push-<id>" for a Web Push message accepted (Body
-	// is the decrypted payload), "push-<id>-rejected" for one refused.
+	// is the decrypted payload), "push-<id>-rejected" for one refused, "enable-<id>" for a workflow re-enable (PUT).
 	Endpoint string            `json:"endpoint"`
 	Header   map[string]string `json:"header"`
 	Body     string            `json:"body"`
@@ -93,7 +95,7 @@ const maxReceived = 200
 
 // New returns a server on fixture set "a".
 func New() *Server {
-	s := &Server{set: "a", now: time.Now, hits: map[string]int{}, mux: http.NewServeMux()}
+	s := &Server{set: "a", now: time.Now, hits: map[string]int{}, mux: http.NewServeMux(), states: map[string]string{}}
 	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
@@ -101,8 +103,14 @@ func New() *Server {
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}/comments", s.static("github_discussion", "comments"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}", s.static("github_schedules", "repo"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/commits", s.lastCommit)
-	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows", s.static("github_schedules", "workflows"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows", s.workflows)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows/{id}/runs", s.workflowRuns)
+	// Like GitHub: 204, and the workflow is listed active from then on.
+	s.mux.HandleFunc("PUT /repos/{o}/{r}/actions/workflows/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		s.record("enable-"+r.PathValue("id"), r, nil)
+		s.SetWorkflowState(r.PathValue("id"), "active")
+		w.WriteHeader(http.StatusNoContent)
+	})
 	s.mux.HandleFunc("GET /repos/{o}/{r}/contents/{path...}", s.contents)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
@@ -233,6 +241,14 @@ func (s *Server) SetFixture(set string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.set = set
+	clear(s.states)
+}
+
+// SetWorkflowState lists the github_schedules workflow id in state, over the fixture's, until the next SetFixture.
+func (s *Server) SetWorkflowState(id, state string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states[id] = state
 }
 
 // SetNow sets the clock the workflow runs are dated from.
@@ -299,6 +315,26 @@ func (s *Server) discussions(w http.ResponseWriter, r *http.Request) {
 	lo := min((page-1)*per, len(all))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(append([]json.RawMessage{}, all[lo:min(lo+per, len(all))]...))
+}
+
+// workflows serves the github_schedules workflow list, with the states set by SetWorkflowState.
+func (s *Server) workflows(w http.ResponseWriter, _ *http.Request) {
+	var body map[string]any
+	if err := json.Unmarshal(Part("github_schedules", s.current(), "workflows"), &body); err != nil {
+		panic(err)
+	}
+	list, _ := body["workflows"].([]any)
+	s.mu.Lock()
+	for _, wf := range list {
+		if m, ok := wf.(map[string]any); ok {
+			if st, ok := s.states[fmt.Sprint(m["id"])]; ok {
+				m["state"] = st
+			}
+		}
+	}
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // workflowRuns serves a workflow's last scheduled run from the github_schedules fixture, whatever the status filter.

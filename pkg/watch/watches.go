@@ -314,6 +314,9 @@ func (s *Service) createWatch(ctx context.Context, in *createWatchInput) (*watch
 	var w Watch
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if viaKey {
+			if err := autoEnableKeyError(cfg, false); err != nil {
+				return err
+			}
 			if err := underKeyCap(ctx, tx, me); err != nil {
 				return err
 			}
@@ -406,6 +409,12 @@ func (s *Service) updateWatch(ctx context.Context, in *updateWatchInput) (*watch
 		}
 		if err := autoEnableError(next.Config, next.CredentialID != nil); err != nil {
 			return huma.Error400BadRequest("invalid watch", err)
+		}
+		if viaKey {
+			approved := before.Config["auto_enable"] == true && !retargeted && reflect.DeepEqual(before.CredentialID, next.CredentialID)
+			if err := autoEnableKeyError(next.Config, approved); err != nil {
+				return err
+			}
 		}
 		// The target decides where the credential is sent; a detach sends nothing, so it needs no check.
 		if viaKey && next.CredentialID != nil {

@@ -280,6 +280,12 @@ func (w *Worker) collect(ctx context.Context, j job) (json.RawMessage, *collect.
 	}); err != nil {
 		return nil, f, fmt.Errorf("load http cache: %w", err)
 	}
+	if _, ok := c.(collect.Deadman); ok {
+		err := w.pool.QueryRow(ctx, `SELECT state FROM watch_states WHERE watch_id = $1 ORDER BY id DESC LIMIT 1`, j.id).Scan(&f.Prev)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, f, fmt.Errorf("load last state: %w", err)
+		}
+	}
 	state, err := c.Collect(ctx, f, json.RawMessage(j.config), cred)
 	return state, f, err
 }
@@ -417,7 +423,7 @@ const scheduleNext = `next_run_at = CASE WHEN next_run_at <> $4 THEN LEAST(next_
 	claim_token = NULL, leased_until = NULL`
 
 // store saves a changed state and the events of the change. The first state of a watch is its
-// baseline and emits nothing (001-AC8).
+// baseline and emits nothing (001-AC8), except for a Deadman kind, which diffs it against an empty one.
 func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMessage, f *collect.Fetcher, now time.Time) ([]string, error) {
 	state, err := collect.StripNUL(state)
 	if err != nil {
@@ -438,16 +444,26 @@ func (w *Worker) store(ctx context.Context, tx pgx.Tx, j job, state json.RawMess
 		return nil, nil
 	}
 	var events []collect.Event
-	if !baseline {
-		if events, err = w.collectors[j.kind].Diff(prev, state); err != nil {
+	c := w.collectors[j.kind]
+	_, deadman := c.(collect.Deadman)
+	if !baseline || deadman {
+		if baseline {
+			prev = []byte("null")
+		}
+		if events, err = c.Diff(prev, state); err != nil {
 			return nil, err
 		}
 		events = collect.WithItems(events, f.Items)
 		collect.WithNotes(events, f.Notes)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO watch_states (watch_id, observed_at, state, state_hash) VALUES ($1, $2, $3, $4)`,
-		j.id, now, state, hash); err != nil {
+	var stateID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO watch_states (watch_id, observed_at, state, state_hash) VALUES ($1, $2, $3, $4) RETURNING id`,
+		j.id, now, state, hash).Scan(&stateID); err != nil {
 		return nil, err
+	}
+	if baseline {
+		// Keyed on its own state, negated: a 0 would dedup the first run after a retarget against the one before it.
+		prevID = -stateID
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM watch_states WHERE watch_id = $1 AND id NOT IN
 		(SELECT id FROM watch_states WHERE watch_id = $1 ORDER BY id DESC LIMIT $2)`, j.id, keepStates); err != nil {

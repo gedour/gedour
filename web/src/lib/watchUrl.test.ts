@@ -34,6 +34,13 @@ describe("recognize", () => {
     ],
     ["https://github.com/o/r/discussions", "github_repo", { repo: "o/r" }],
     ["https://github.com/o/r/discussions/categories", "github_repo", { repo: "o/r" }],
+    // 019-AC12: the Actions tab picks github_schedules; a run or workflow page stays a repository watch.
+    ["https://github.com/o/r/actions", "github_schedules", { repo: "o/r" }],
+    ["https://github.com/o/r/actions/", "github_schedules", { repo: "o/r" }],
+    ["https://github.com/o/r/actions?query=event%3Aschedule", "github_schedules", { repo: "o/r" }],
+    ["github.com/acme/widgets/actions#top", "github_schedules", { repo: "acme/widgets" }],
+    ["https://github.com/o/r/actions/runs/123", "github_repo", { repo: "o/r" }],
+    ["https://github.com/o/r/actions/workflows/nightly.yml", "github_repo", { repo: "o/r" }],
     [
       "https://github.com/orgs/acme/packages/container/package/Api",
       "oci_tags",

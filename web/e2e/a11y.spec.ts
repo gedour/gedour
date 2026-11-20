@@ -116,11 +116,20 @@ for (const theme of ["light", "dark"] as const) {
             .click();
           await expect(page.getByLabel("Discussion number")).toBeVisible();
           found[`${path} github_discussion`] = await violations(page);
+          // 019-AC12: the github_schedules form, its select and its hints.
+          await page
+            .getByRole("radio", { name: /GitHub scheduled workflows/ })
+            .locator("..")
+            .click();
+          await expect(page.getByLabel("Proof of life")).toBeVisible();
+          await expect(page.getByText(/Actions write/)).toBeVisible();
+          found[`${path} github_schedules`] = await violations(page);
         }
       }
       expect(found).toEqual({
         ...Object.fromEntries(views.map(([p]) => [p, []])),
         "/watches/new github_discussion": [],
+        "/watches/new github_schedules": [],
         "/rules/new picker": [],
       });
     });

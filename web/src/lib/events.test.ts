@@ -12,6 +12,11 @@ const ev = (type: string, payload: Record<string, unknown>): WatchEvent => ({
 });
 
 const pr = { number: 12, title: "t", url: "https://github.com/a/b/pull/12" };
+const wf = {
+  workflow: "Mirror",
+  path: ".github/workflows/nightly.yml",
+  url: "https://github.com/o/r/blob/main/.github/workflows/nightly.yml",
+};
 const mr = { iid: 7, title: "t", url: "https://gitlab.com/a/b/-/merge_requests/7" };
 
 describe("summarizeEvent", () => {
@@ -325,6 +330,120 @@ describe("summarizeEvent", () => {
       "release",
     ],
     [ev("tag.removed", { tag: "10" }), "Removed", "tag 10 removed", "neutral"],
+    // 019-AC11: the github_schedules events, mirrored in pkg/notify/message.go.
+    [
+      ev("schedule.disabled", { ...wf, state: "disabled_inactivity", last_alive_at: null }),
+      "Disabled",
+      "Scheduled workflow nightly.yml disabled (inactivity)",
+      "bad",
+    ],
+    [
+      ev("schedule.disabled", { ...wf, state: "disabled_manually" }),
+      "Disabled",
+      "Scheduled workflow nightly.yml disabled (manually)",
+      "bad",
+    ],
+    [
+      ev("schedule.enabled", { ...wf, state: "active" }),
+      "Enabled",
+      "Scheduled workflow nightly.yml enabled",
+      "good",
+    ],
+    [
+      ev("schedule.stale", {
+        ...wf,
+        missed: 3,
+        last_alive_at: "2026-11-04T08:05:00Z",
+        expected_at: "2026-11-04T09:00:00Z",
+      }),
+      "Stale",
+      "nightly.yml missed 3 runs since 2026-11-04 09:00 UTC",
+      "bad",
+    ],
+    // Edited at 12:00 after its 08:05 success: the count starts at 13:00, and so does "since".
+    [
+      ev("schedule.stale", {
+        ...wf,
+        missed: 3,
+        last_alive_at: "2026-11-04T08:05:00Z",
+        expected_at: "2026-11-04T13:00:00Z",
+      }),
+      "Stale",
+      "nightly.yml missed 3 runs since 2026-11-04 13:00 UTC",
+      "bad",
+    ],
+    [
+      ev("schedule.stale", { ...wf, missed: 3, last_alive_at: "2026-11-04T08:05:00Z" }),
+      "Stale",
+      "nightly.yml missed 3 runs",
+      "bad",
+    ],
+    [
+      ev("schedule.stale", { ...wf, missed: 1, last_alive_at: null }),
+      "Stale",
+      "nightly.yml missed 1 run",
+      "bad",
+    ],
+    // Go's path.Base and a missing count read the same as in pkg/notify/message.go.
+    [
+      ev("schedule.stale", {
+        ...wf,
+        missed: 336,
+        last_alive_at: "2026-10-21T08:05:00Z",
+        expected_at: "2026-10-21T09:00:00Z",
+      }),
+      "Stale",
+      "nightly.yml missed 336 runs since 2026-10-21 09:00 UTC",
+      "bad",
+    ],
+    [
+      ev("schedule.stale", { ...wf, missed: 1000, last_alive_at: null }),
+      "Stale",
+      "nightly.yml missed 1000+ runs",
+      "bad",
+    ],
+    [
+      ev("schedule.stale", {
+        ...wf,
+        missed: 1000,
+        last_alive_at: null,
+        expected_at: "2026-01-01T00:01:00Z",
+      }),
+      "Stale",
+      "nightly.yml missed 1000+ runs since 2026-01-01 00:01 UTC",
+      "bad",
+    ],
+    [ev("schedule.stale", { path: "" }), "Stale", ". missed 0 runs", "bad"],
+    [ev("schedule.enabled", { path: "/" }), "Enabled", "Scheduled workflow / enabled", "good"],
+    [
+      ev("schedule.recovered", wf),
+      "Recovered",
+      "Scheduled workflow nightly.yml runs again",
+      "good",
+    ],
+    [
+      ev("schedule.reenabled", { ...wf, from: "disabled_inactivity" }),
+      "Re-enabled",
+      "Scheduled workflow nightly.yml re-enabled after inactivity",
+      "good",
+    ],
+    [
+      ev("schedule.disable_soon", {
+        repo: "o/r",
+        last_activity_at: "2026-09-25T10:00:00Z",
+        disable_at: "2026-11-24T10:00:00+01:00",
+        workflows: [".github/workflows/nightly.yml"],
+      }),
+      "Turning off",
+      "Scheduled workflows of o/r turn off on 2026-11-24 09:00 UTC without a commit",
+      "bad",
+    ],
+    [
+      ev("schedule.disable_soon", { repo: "o/r", disable_at: "soon" }),
+      "Turning off",
+      "Scheduled workflows of o/r turn off on soon without a commit",
+      "bad",
+    ],
     [ev("future.thing", { x: 1 }), "future.thing", "future.thing", "neutral"],
   ])("%#: %s", (e, badge, text, tone) => {
     const s = summarizeEvent(e);

@@ -72,6 +72,7 @@ type Server struct {
 
 	mu       sync.Mutex
 	set      string
+	now      func() time.Time
 	hits     map[string]int
 	mux      *http.ServeMux
 	received []Received
@@ -92,12 +93,15 @@ const maxReceived = 200
 
 // New returns a server on fixture set "a".
 func New() *Server {
-	s := &Server{set: "a", hits: map[string]int{}, mux: http.NewServeMux()}
+	s := &Server{set: "a", now: time.Now, hits: map[string]int{}, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /repos/{o}/{r}/releases", s.static("github_repo", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/issues", s.static("github_issues", ""))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}", s.static("github_discussion", "discussion"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}/comments", s.static("github_discussion", "comments"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows", s.static("github_schedules", "workflows"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows/{id}/runs", s.workflowRuns)
+	s.mux.HandleFunc("GET /repos/{o}/{r}/contents/{path...}", s.contents)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}", s.static("github_pr", "pull"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/reviews", s.static("github_pr", "reviews"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/pulls/{n}/comments", s.static("github_pr", "review_comments"))
@@ -229,6 +233,13 @@ func (s *Server) SetFixture(set string) {
 	s.set = set
 }
 
+// SetNow sets the clock the workflow runs are dated from.
+func (s *Server) SetNow(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.now = now
+}
+
 // Hits counts requests by escaped path.
 func (s *Server) Hits(path string) int {
 	s.mu.Lock()
@@ -286,6 +297,50 @@ func (s *Server) discussions(w http.ResponseWriter, r *http.Request) {
 	lo := min((page-1)*per, len(all))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(append([]json.RawMessage{}, all[lo:min(lo+per, len(all))]...))
+}
+
+// workflowRuns serves a workflow's last scheduled run from the github_schedules fixture, whatever the status filter.
+// The run is dated an hour before the server's clock: a fixed date would make the healthy workflows stale years on.
+func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
+	var runs map[string]struct {
+		TotalCount   int              `json:"total_count"`
+		WorkflowRuns []map[string]any `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(Part("github_schedules", s.current(), "runs"), &runs); err != nil {
+		panic(err)
+	}
+	s.mu.Lock()
+	at := s.now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	s.mu.Unlock()
+	body := runs[r.PathValue("id")]
+	if body.WorkflowRuns == nil {
+		body.WorkflowRuns = []map[string]any{}
+	}
+	for _, run := range body.WorkflowRuns {
+		run["created_at"], run["updated_at"], run["run_started_at"] = at, at, at
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// contents serves the workflows directory listing, and each workflow file raw.
+func (s *Server) contents(w http.ResponseWriter, r *http.Request) {
+	p := r.PathValue("path")
+	if p == ".github/workflows" {
+		s.static("github_schedules", "contents")(w, r)
+		return
+	}
+	var files map[string]string
+	if err := json.Unmarshal(Part("github_schedules", s.current(), "files"), &files); err != nil {
+		panic(err)
+	}
+	body, ok := files[p]
+	if !ok {
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.github.raw+json")
+	_, _ = w.Write([]byte(body))
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {

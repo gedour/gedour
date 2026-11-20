@@ -217,6 +217,13 @@ func TestWatchValidation(t *testing.T) {
 		{"discussion bad repo", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b/c", "number": 1}), []string{"body.config.repo"}},
 		{"discussion zero number", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b", "number": 0}), []string{"body.config.number"}},
 		{"discussion negative number", http.MethodPost, "/api/v1/watches", newWatch("x", "github_discussion", map[string]any{"repo": "a/b", "number": -1}), []string{"body.config.number"}},
+		// 019-AC1: github_schedules refuses each bad field, and auto_enable without a credential.
+		{"schedules bad fields", http.MethodPost, "/api/v1/watches", newWatch("x", "github_schedules", map[string]any{"repo": "a", "alive_on": "failure", "missed_runs": 11, "warn_days": 31}),
+			[]string{"body.config.repo", "body.config.alive_on", "body.config.missed_runs", "body.config.warn_days"}},
+		{"schedules missed 0 warn -1", http.MethodPost, "/api/v1/watches", newWatch("x", "github_schedules", map[string]any{"repo": "a/b", "missed_runs": 0, "warn_days": -1}),
+			[]string{"body.config.missed_runs", "body.config.warn_days"}},
+		{"schedules auto_enable without credential", http.MethodPost, "/api/v1/watches", newWatch("x", "github_schedules", map[string]any{"repo": "a/b", "auto_enable": true}),
+			[]string{"body.config.auto_enable"}},
 		{"bad cron", http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "61 * * * *"}, []string{"body.schedule"}},
 		{"blank name and short interval", http.MethodPost, "/api/v1/watches", map[string]any{"name": "  ", "kind": "github_repo", "config": map[string]any{"repo": "a/b"}, "schedule": "10s"}, []string{"body.schedule", "body.name"}},
 		{"unknown kind", http.MethodPost, "/api/v1/watches", newWatch("x", "rss", map[string]any{}), []string{"body.kind"}},
@@ -236,6 +243,33 @@ func TestWatchValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 019-AC1: auto_enable needs a credential on update too: turning it on bare, or detaching the credential under it, is a 400.
+func TestScheduleAutoEnableCredential(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var cred credJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/credentials", map[string]any{"name": "gh", "kind": "github_token", "secret": "ghp_0123456789abcdef"}, http.StatusCreated, &cred)
+	var w watchJSON
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", newWatch("deadman", "github_schedules", map[string]any{"repo": "acme/widgets"}), http.StatusCreated, &w)
+	if w.Schedule != "1h" || w.Config["missed_runs"] != 3.0 || w.Config["alive_on"] != "success" {
+		t.Fatalf("defaults: %s %v", w.Schedule, w.Config)
+	}
+	base := "/api/v1/watches/" + w.ID
+	var p problem
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "acme/widgets", "auto_enable": true}}, http.StatusBadRequest, &p)
+	if strings.Join(p.locations(), ",") != "body.config.auto_enable" {
+		t.Fatalf("bare: %+v", p)
+	}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "acme/widgets", "auto_enable": true}, "credential_id": cred.ID}, http.StatusOK, &w)
+	p = problem{}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"credential_id": ""}, http.StatusBadRequest, &p)
+	if strings.Join(p.locations(), ",") != "body.config.auto_enable" {
+		t.Fatalf("detach: %+v", p)
+	}
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "x", "kind": "github_schedules", "config": map[string]any{"repo": "a/b", "auto_enable": true},
+		"credential_id": cred.ID}, http.StatusCreated, nil)
 }
 
 // 008-AC3: the old kind name has no alias; the refusal lists the valid kinds (400: the API's status for every

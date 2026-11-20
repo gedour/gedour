@@ -62,6 +62,10 @@ func TestCollectorsAgainstUpstream(t *testing.T) {
 			[]string{`discussion.state_changed "open">"closed"`,
 				`discussion.answer_changed "">"https://github.com/cli/cli/discussions/9507#discussioncomment-4100001"`,
 				"discussion.commented https://github.com/cli/cli/discussions/9507#discussioncomment-4100003"}},
+		// 019-AC4: fixture b re-enables the workflow disabled for inactivity. The fake dates the last runs an hour before
+		// the request, so the healthy workflows never go stale on the wall clock.
+		{"github_schedules", map[string]any{"repo": "acme/widgets", "api_url": srv.URL, "alive_on": "success", "missed_runs": 3, "warn_days": 0, "auto_enable": false},
+			[]string{"schedule.enabled .github/workflows/mirror.yml"}},
 		{"gitlab_release", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner"},
 			[]string{"release.published v19.3.5", "release.published v19.3.6", "release.published v19.3.7", "release.published v19.3.8", "release.published v19.4.0"}},
 		{"gitlab_mr", map[string]any{"base_url": srv.URL, "project": "gitlab-org/gitlab-runner", "iid": 7764},

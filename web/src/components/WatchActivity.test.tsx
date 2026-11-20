@@ -366,6 +366,89 @@ describe("StatePanel", () => {
     expect(panel).toHaveTextContent("bugwontfix");
   });
 
+  // 019-AC11: each scheduled workflow with its state, staleness and last proof of life.
+  it("renders the scheduled workflows of a repository", async () => {
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Mirror",
+                  path: ".github/workflows/mirror.yml",
+                  state: "disabled_inactivity",
+                  url: "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+                  last_alive_at: "2026-01-01T03:00:31Z",
+                  stale: false,
+                },
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state: "active",
+                  url: "javascript:alert(1)",
+                  last_alive_at: null,
+                  stale: true,
+                  missed: 3,
+                },
+                // The collector stops counting at 1000.
+                {
+                  name: "Minutely",
+                  path: ".github/workflows/minutely.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: true,
+                  missed: 1000,
+                },
+                // A stale entry stored without its count still reads stale.
+                {
+                  name: "Weekly",
+                  path: ".github/workflows/weekly.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: true,
+                },
+              ],
+              unscheduled: {},
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(await screen.findByRole("link", { name: "Mirror" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+    );
+    expect(screen.queryByRole("link", { name: "Nightly" })).not.toBeInTheDocument();
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveTextContent("disabled inactivity");
+    expect(panel).toHaveTextContent("stale, 3 missed");
+    expect(screen.getByText(".github/workflows/minutely.yml").closest("tr")).toHaveTextContent(
+      "stale, 1000+ missed",
+    );
+    expect(panel).toHaveTextContent(".github/workflows/nightly.yml");
+    const weekly = screen.getByText(".github/workflows/weekly.yml").closest("tr");
+    expect(weekly).toHaveTextContent("stale");
+    expect(weekly).not.toHaveTextContent("missed");
+  });
+
+  it("says when a repository has no scheduled workflow", async () => {
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": { items: [snapshot(1, { workflows: null, unscheduled: {} })] },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(
+      await screen.findByText("No scheduled workflow in this repository."),
+    ).toBeInTheDocument();
+  });
+
   it("renders a discussion summary with its category and answer", async () => {
     mockApi(
       routes(watch({ kind: "github_discussion" }), {

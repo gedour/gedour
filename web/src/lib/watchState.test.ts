@@ -48,6 +48,24 @@ describe("stateLine", () => {
       { state: "opened", draft: true, approvals: { approved: false, count: 0 }, pipeline: "none" },
       "opened (draft) · not approved · pipeline none",
     ],
+    // 019-AC11: the scheduled workflows and what is wrong with them.
+    [
+      "github_schedules",
+      {
+        workflows: [
+          { path: "a.yml", state: "disabled_inactivity", stale: false },
+          { path: "b.yml", state: "active", stale: true },
+          { path: "c.yml", state: "active", stale: false },
+        ],
+      },
+      "3 scheduled workflows · 1 disabled · 1 stale",
+    ],
+    [
+      "github_schedules",
+      { workflows: [{ path: "a.yml", state: "active", stale: false }] },
+      "1 scheduled workflow · all healthy",
+    ],
+    ["github_schedules", { workflows: null }, "0 scheduled workflows · all healthy"],
     ["oci_tags", { tags: ["1"], count: 1, highest: "1" }, "1 tag, highest 1"],
     ["oci_tags", { tags: [], count: 0, highest: "" }, "0 tags"],
     ["github_pr", null, "empty"],

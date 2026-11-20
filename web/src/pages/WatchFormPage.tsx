@@ -212,7 +212,7 @@ export function WatchForm({ initial }: { initial?: Watch }) {
                 ) : recognized === null ? (
                   "Not recognized: pick a kind and fill the fields below."
                 ) : (
-                  "A GitHub or GitLab repository, release, issue, discussion, PR or MR page, a Docker Hub page or an image like ghcr.io/org/app"
+                  "A GitHub or GitLab repository, release, issue, discussion, PR, MR or Actions page, a Docker Hub page or an image like ghcr.io/org/app"
                 )
               }
             >
@@ -320,18 +320,33 @@ export function WatchForm({ initial }: { initial?: Watch }) {
                 hint={f.hint}
                 error={errors[f.key]}
               >
-                {(p) => (
-                  <input
-                    {...p}
-                    type={f.type === "number" ? "number" : "text"}
-                    min={f.type === "number" ? 1 : undefined}
-                    spellCheck={false}
-                    value={typeof values[f.key] === "string" ? (values[f.key] as string) : ""}
-                    placeholder={f.placeholder}
-                    onChange={(e) => setValue(f.key, e.target.value)}
-                    className={cn(inputClass, f.type === "text" && "font-mono")}
-                  />
-                )}
+                {(p) =>
+                  f.type === "select" ? (
+                    <select
+                      {...p}
+                      value={(values[f.key] as string | undefined) || f.options?.[0]?.value}
+                      onChange={(e) => setValue(f.key, e.target.value)}
+                      className={cn(inputClass, "sm:max-w-80")}
+                    >
+                      {f.options?.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      {...p}
+                      type={f.type === "number" ? "number" : "text"}
+                      min={f.type === "number" ? (f.min ?? 1) : undefined}
+                      spellCheck={false}
+                      value={typeof values[f.key] === "string" ? (values[f.key] as string) : ""}
+                      placeholder={f.placeholder}
+                      onChange={(e) => setValue(f.key, e.target.value)}
+                      className={cn(inputClass, f.type === "text" && "font-mono")}
+                    />
+                  )
+                }
               </Field>
             );
           })}

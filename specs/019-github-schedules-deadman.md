@@ -17,7 +17,7 @@ A new watch kind, `github_schedules`, follows every scheduled workflow of one re
 itself: each workflow whose file on the default branch has an `on.schedule` entry. It sends an event when
 one of them:
 
-- leaves the `active` state (disabled for inactivity, by hand, in a fork, or deleted),
+- leaves the `active` state (disabled for inactivity, by hand, or in a fork),
 - misses N expected runs in a row, with the expected times computed from its own cron lines,
 - comes back.
 
@@ -58,8 +58,8 @@ Two opt-ins are added on top:
   workflow's `updated_at`. A workflow is stale when at least `missed_runs` expected times fall after that
   reference and more than 1 h before now. Only `active` workflows can be stale.
 - State, per scheduled workflow: `id`, `name`, `path`, `file_sha`, `crons` (cron and timezone), `state`,
-  `url`, `last_alive_at`, `stale`, `reenabled_at`. Repository level: `private`, `last_activity_at`,
-  `disable_at`, `disable_soon`.
+  `url`, `last_alive_at`, `stale`, `reenabled_at`. Repository level: `alive_on`, `private`,
+  `last_activity_at`, `disable_at`, `disable_soon`.
 - Events (subject: the workflow path, or the repository for `schedule.disable_soon`):
   - `schedule.disabled`: `active` to any other state. Payload: `workflow`, `path`, `state` (to),
     `last_alive_at`, `url`, plus `reenable_error` when an auto-enable failed.
@@ -77,8 +77,8 @@ Two opt-ins are added on top:
 - Pre-warning (`warn_days > 0`, public repository only): `disable_at` = last default-branch commit date +
   60 days. `disable_soon` is true when now ≥ `disable_at - warn_days` and at least one scheduled workflow
   is `active`. A newer commit moves `disable_at` and resets the flag.
-- Auto-enable (`auto_enable`): only `disabled_inactivity` gets re-enabled. `disabled_manually`,
-  `disabled_fork` and `deleted` are human or fork decisions, and they get `schedule.disabled`. A successful
+- Auto-enable (`auto_enable`): only `disabled_inactivity` gets re-enabled. `disabled_manually`
+  and `disabled_fork` are human or fork decisions, and they get `schedule.disabled`. A successful
   PUT stores `state: active` and `reenabled_at`. A failed PUT (403, 404, 5xx) does not fail the run: it
   stores the disabled state, sends `schedule.disabled` with `reenable_error`, and the next run tries again.
   Each PUT is logged as `workflow_reenabled` or `workflow_reenable_failed`.
@@ -126,7 +126,8 @@ Two opt-ins are added on top:
   `schedule.disabled` and one `schedule.stale`. On a healthy repository it emits nothing.
 - [ ] **AC10** A failing call (any of 1 to 5) fails the run like any collector: no state saved, no events.
 - [ ] **AC11** Telegram, email, Talk and the UI show one readable line for each event type (e.g.
-  "Scheduled workflow nightly.yml disabled (inactivity)", "nightly.yml missed 3 runs since 08:05").
+  "Scheduled workflow nightly.yml disabled (inactivity)", "nightly.yml missed 3 runs since 2026-11-04 09:00 UTC", from the
+  oldest missed time).
 - [ ] **AC12** The form shows the fields and the hints above. Pasting `https://github.com/o/r/actions` picks
   `github_schedules` with repo `o/r`. The a11y, 375 px and CSP e2e checks pass on the form.
 - [ ] **AC13** On a public repository whose last commit is 54 days old, with `warn_days: 7`, one
@@ -189,7 +190,9 @@ entry per scheduled workflow.
   for the misses before that.
 - The first run reports problems, a break from 001-AC8: a deadman created on an already disabled workflow
   must say so. The opt-in is per kind.
-- Every non-`active` state fires `schedule.disabled`, `disabled_manually` included. A rule filter on
+- A deleted workflow file leaves the directory listing, so the workflow leaves the state with no event: deleting
+  the file is a deliberate act.
+- Every non-`active` state of a listed workflow fires `schedule.disabled`, `disabled_manually` included. A rule filter on
   `event.payload.state` can drop the ones you do not want.
 - The 60-day prediction uses the last commit on the default branch, not `pushed_at`. GitHub does not
   document what counts as activity. Third-party sources point at commits on the default branch, and that
@@ -201,5 +204,17 @@ entry per scheduled workflow.
   owner's token, so turning it on takes a signed-in session.
 - A failed PUT does not fail the run. Detection is the main job, and a missing Actions write permission
   must not hide the `schedule.disabled` event.
+- `schedule.recovered` needs a proof-of-life run later than the stored one, under the same `alive_on`: raising
+  `missed_runs`, switching `alive_on` or editing the workflow clears `stale` with no event.
+- When `X-RateLimit-Remaining` is below the calls a run still needs, the run stops before fetching files, with an
+  error naming the count (and a credential, when there is none). It waits for `X-RateLimit-Reset` like any rate
+  limit, without counting as a failure. When the run needs more than `X-RateLimit-Limit`, it fails instead.
+- `missed` counts every missed time up to 1000 on the stale transition, shown "1000+" at the cap. While the
+  workflow stays stale the count is kept as long as its reference does not move, so the state does not change
+  run to run. A newer proof-of-life run
+  under the same `alive_on`, followed by new misses before the next run, recounts and sends `schedule.stale`
+  again: the job came back and died again.
+- Messages read "missed N runs since <expected_at>": the oldest missed time, since the count starts at the
+  workflow's last edit when that is later than its last run.
 - PUT results go to logs, not to `audit`. The audit table records user mutations made through the API.
   The event and its `reenable_error` already record the outcome.

@@ -23,6 +23,7 @@ const (
 	KindGitHubPR         = "github_pr"
 	KindGitHubIssue      = "github_issue"
 	KindGitHubDiscussion = "github_discussion"
+	KindGitHubSchedules  = "github_schedules"
 	KindGitLabRelease    = "gitlab_release"
 	KindGitLabMR         = "gitlab_mr"
 	KindOCITags          = "oci_tags"
@@ -36,7 +37,7 @@ const (
 )
 
 // Kinds lists the watch kinds in display order.
-var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion, KindGitLabRelease, KindGitLabMR, KindOCITags}
+var Kinds = []string{KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion, KindGitHubSchedules, KindGitLabRelease, KindGitLabMR, KindOCITags}
 
 // CredentialKinds lists the credential kinds.
 var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBasic}
@@ -44,7 +45,7 @@ var CredentialKinds = []string{CredGitHubToken, CredGitLabToken, CredRegistryBas
 // CredentialKindFor is the only credential kind a watch of this kind accepts.
 func CredentialKindFor(kind string) string {
 	switch kind {
-	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion:
+	case KindGitHubRepo, KindGitHubPR, KindGitHubIssue, KindGitHubDiscussion, KindGitHubSchedules:
 		return CredGitHubToken
 	case KindGitLabRelease, KindGitLabMR:
 		return CredGitLabToken
@@ -86,6 +87,17 @@ type GitHubIssueConfig = GitHubPRConfig
 // GitHubDiscussionConfig is the normalized config of a github_discussion watch, validated like github_pr's.
 type GitHubDiscussionConfig = GitHubPRConfig
 
+// GitHubSchedulesConfig is the normalized config of a github_schedules watch.
+type GitHubSchedulesConfig struct {
+	Repo   string `json:"repo"`
+	APIURL string `json:"api_url"`
+	// AliveOn is the runs status that counts as proof of life: success or completed.
+	AliveOn    string `json:"alive_on"`
+	MissedRuns int    `json:"missed_runs"`
+	WarnDays   int    `json:"warn_days"`
+	AutoEnable bool   `json:"auto_enable"`
+}
+
 // GitLabReleaseConfig is the normalized config of a gitlab_release watch.
 type GitLabReleaseConfig struct {
 	BaseURL string `json:"base_url"`
@@ -123,6 +135,7 @@ var defaultHosts = map[string][]string{
 	KindGitHubPR:         {"api.github.com"},
 	KindGitHubIssue:      {"api.github.com"},
 	KindGitHubDiscussion: {"api.github.com"},
+	KindGitHubSchedules:  {"api.github.com"},
 	KindGitLabRelease:    {"gitlab.com"},
 	KindGitLabMR:         {"gitlab.com"},
 	KindOCITags:          {dockerHub, "ghcr.io"},
@@ -150,11 +163,14 @@ func targetOf(cfg map[string]any) (field, raw string) {
 // boxKeys only add requests to the same target: changing them is no retarget.
 var boxKeys = []string{"new_issues", "new_prs", "new_discussions"}
 
+// thresholdKeys change how a github_schedules state reads, not where it comes from: a retarget would re-report every broken workflow.
+var thresholdKeys = []string{"alive_on", "missed_runs", "warn_days", "auto_enable"}
+
 // sameTarget compares two normalized configs, the boxes left out.
 func sameTarget(a, b map[string]any) bool {
 	strip := func(m map[string]any) map[string]any {
 		out := maps.Clone(m)
-		for _, k := range boxKeys {
+		for _, k := range slices.Concat(boxKeys, thresholdKeys) {
 			delete(out, k)
 		}
 		// Not in boxKeys: reactions before the first run only shift the baseline, so checking it is not due now.
@@ -236,6 +252,10 @@ func (v validator) Config(kind string, raw map[string]any) (map[string]any, []er
 		c.Repo = v.repo(c.Repo, fe)
 		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
 		positive("number", c.Number, fe)
+	case *GitHubSchedulesConfig:
+		c.Repo = v.repo(c.Repo, fe)
+		c.APIURL = v.url("api_url", c.APIURL, defaultGitHubAPI, fe)
+		githubSchedules(c, raw, fe)
 	case *GitLabReleaseConfig:
 		c.BaseURL = v.url("base_url", c.BaseURL, defaultGitLab, fe)
 		c.Project = project(c.Project, fe)
@@ -265,6 +285,8 @@ func newConfig(kind string) any {
 		return &GitHubIssueConfig{}
 	case KindGitHubDiscussion:
 		return &GitHubDiscussionConfig{}
+	case KindGitHubSchedules:
+		return &GitHubSchedulesConfig{}
 	case KindGitLabRelease:
 		return &GitLabReleaseConfig{}
 	case KindGitLabMR:
@@ -378,6 +400,33 @@ func (v validator) url(field, raw, fallback string, fe *fieldErrors) string {
 		fe.add(field, "must use https", raw)
 	}
 	return strings.TrimRight(raw, "/")
+}
+
+func githubSchedules(c *GitHubSchedulesConfig, raw map[string]any, fe *fieldErrors) {
+	if c.AliveOn == "" {
+		c.AliveOn = "success"
+	}
+	if c.AliveOn != "success" && c.AliveOn != "completed" {
+		fe.add("alive_on", `expected "success" or "completed"`, c.AliveOn)
+	}
+	// On the raw key: 0 is out of range, not a request for the default.
+	if _, ok := raw["missed_runs"]; !ok {
+		c.MissedRuns = 3
+	}
+	if c.MissedRuns < 1 || c.MissedRuns > 10 {
+		fe.add("missed_runs", "must be between 1 and 10", c.MissedRuns)
+	}
+	if c.WarnDays < 0 || c.WarnDays > 30 {
+		fe.add("warn_days", "must be between 0 and 30", c.WarnDays)
+	}
+}
+
+// autoEnableError refuses auto_enable on a watch with no credential: the re-enable call needs a token with Actions write.
+func autoEnableError(cfg map[string]any, credentialed bool) error {
+	if cfg["auto_enable"] != true || credentialed {
+		return nil
+	}
+	return &huma.ErrorDetail{Location: "body.config.auto_enable", Message: "needs a credential: attach a github_token with Actions write", Value: true}
 }
 
 func ociTags(c *OCITagsConfig, fe *fieldErrors) {

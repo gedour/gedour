@@ -70,6 +70,32 @@ function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+/** The collector stops counting missed runs at 1000 (pkg/collect/schedules.go maxMissed). */
+export function missedCount(n: number) {
+  return n >= 1000 ? "1000+" : String(n);
+}
+
+/** GitHub's disabled_inactivity reads "inactivity" (pkg/notify/message.go disabledReason). */
+const disabledReason = (state: string) => state.replace(/^disabled_/, "").replaceAll("_", " ");
+
+/** An RFC 3339 payload time in UTC to the minute, anything else as is (pkg/notify/message.go when). */
+function when(v: unknown): string {
+  const s = str(v);
+  const t = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(s)
+    ? new Date(s)
+    : null;
+  return t && !Number.isNaN(t.getTime())
+    ? `${t.toISOString().slice(0, 16).replace("T", " ")} UTC`
+    : s;
+}
+
+/** Go's path.Base: the last element, "." for an empty path. */
+function baseName(p: string): string {
+  const t = p.replace(/\/+$/, "");
+  if (t === "") return p ? "/" : ".";
+  return t.slice(t.lastIndexOf("/") + 1);
+}
+
 export function summarizeEvent(e: WatchEvent): EventSummary {
   const p = e.payload;
   const url = typeof p.url === "string" && /^https?:\/\//.test(p.url) ? p.url : undefined;
@@ -80,6 +106,7 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
   const issue = `Issue #${str(p.number)}`;
   const discussion = `Discussion #${str(p.number)}`;
   const item = e.type.startsWith("discussion.") ? discussion : issue;
+  const workflow = baseName(str(p.path));
   switch (e.type) {
     case "release.published":
       return {
@@ -216,6 +243,53 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
       };
     case "tag.removed":
       return { badge: "Removed", tone: "neutral", text: `tag ${str(p.tag)} removed` };
+    case "schedule.disabled":
+      return {
+        badge: "Disabled",
+        tone: "bad",
+        text: `Scheduled workflow ${workflow} disabled (${disabledReason(str(p.state))})`,
+        url,
+      };
+    case "schedule.enabled":
+      return {
+        badge: "Enabled",
+        tone: "good",
+        text: `Scheduled workflow ${workflow} enabled`,
+        url,
+      };
+    case "schedule.stale": {
+      const n = typeof p.missed === "number" ? Math.trunc(p.missed) : 0;
+      const missed = n >= 1000 ? `${missedCount(n)} runs` : plural(n, "run");
+      // The oldest missed time: the count may start after last_alive_at, at the workflow's last edit.
+      const since = when(p.expected_at);
+      return {
+        badge: "Stale",
+        tone: "bad",
+        text: `${workflow} missed ${missed}${since ? ` since ${since}` : ""}`,
+        url,
+      };
+    }
+    case "schedule.recovered":
+      return {
+        badge: "Recovered",
+        tone: "good",
+        text: `Scheduled workflow ${workflow} runs again`,
+        url,
+      };
+    case "schedule.reenabled":
+      return {
+        badge: "Re-enabled",
+        tone: "good",
+        text: `Scheduled workflow ${workflow} re-enabled after ${disabledReason(from)}`,
+        url,
+      };
+    case "schedule.disable_soon":
+      return {
+        badge: "Turning off",
+        tone: "bad",
+        text: `Scheduled workflows of ${str(p.repo)} turn off on ${when(p.disable_at)} without a commit`,
+        url,
+      };
     default:
       return { badge: e.type, tone: "neutral", text: e.type, url };
   }

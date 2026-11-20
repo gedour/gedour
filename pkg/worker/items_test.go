@@ -386,3 +386,58 @@ func TestDiscussionWatchFixtures(t *testing.T) {
 		t.Fatalf("replies: %d", n)
 	}
 }
+
+// 019-AC9, 019-AC3, 019-AC4: a github_schedules watch reports on its first run, unlike 001-AC8: fixture a's disabled
+// workflow, then fixture b's re-enable. The worker hands the last state over, so b fetches the one changed file only.
+func TestSchedulesWatchFirstRun(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.addWatch(t, "github_schedules", fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":0,"auto_enable":false}`, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	events := func() string {
+		rows, _ := e.pool.Query(context.Background(), `SELECT type || ' ' || (payload->>'path') || ' ' || dedup_key FROM events WHERE watch_id = $1 ORDER BY id`, id)
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(got, ",")
+	}
+	tick(t, w)
+	var first int64
+	if err := e.pool.QueryRow(context.Background(), `SELECT id FROM watch_states WHERE watch_id = $1`, id).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	// Keyed on the negated first state id: a later first run, after a retarget, cannot collide with it.
+	m := ".github/workflows/mirror.yml"
+	if got, want := events(), fmt.Sprintf("schedule.disabled %s schedule.disabled:%s:%d", m, m, -first); got != want {
+		t.Fatalf("first run: %s, want %s", got, want)
+	}
+	e.clock.set(t0.Add(time.Hour))
+	tick(t, w)
+	up.SetFixture("b")
+	e.clock.set(t0.Add(2 * time.Hour))
+	tick(t, w)
+	if got, want := events(), fmt.Sprintf("schedule.disabled %s schedule.disabled:%s:%d,schedule.enabled %s schedule.enabled:%s:%d", m, m, -first, m, m, first); got != want {
+		t.Fatalf("events %s, want %s", got, want)
+	}
+	file := func(name string) int { return up.Hits("/repos/acme/widgets/contents/.github/workflows/" + name) }
+	if file("mirror.yml") != 1 || file("yearly.yml") != 1 || file("lint.yml") != 1 || file("ci.yml") != 2 {
+		t.Fatalf("file fetches mirror %d yearly %d lint %d ci %d", file("mirror.yml"), file("yearly.yml"), file("lint.yml"), file("ci.yml"))
+	}
+}
+
+// 001-AC8: the first-run opt-in is per kind: another kind's first state stays a quiet baseline even when the
+// github_schedules collector is in the same worker.
+func TestBaselineQuietBesideDeadman(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.addWatch(t, "github_repo", fmt.Sprintf(`{"repo":"cli/cli","api_url":%q,"include_prereleases":true}`, srv.URL), "1m")
+	tick(t, e.worker(t, e.pool, collect.Collectors()))
+	if r := e.row(t, id); *r.status != "ok" || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 1 || len(e.events(t, id)) != 0 {
+		t.Fatalf("baseline: %s, events %v", *r.status, e.events(t, id))
+	}
+}

@@ -4,6 +4,7 @@ package notify
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 )
@@ -133,6 +134,7 @@ func summarize(e Event) string {
 		subject = mr
 	}
 	discussion := "Discussion #" + str(p["number"])
+	workflow := path.Base(str(p["path"]))
 	// Issue and discussion events share the state and labels wording.
 	item := issue
 	if strings.HasPrefix(e.Type, "discussion.") {
@@ -217,10 +219,46 @@ func summarize(e Event) string {
 		return "tag " + str(p["tag"]) + " created"
 	case "tag.removed":
 		return "tag " + str(p["tag"]) + " removed"
+	case "schedule.disabled":
+		return "Scheduled workflow " + workflow + " disabled (" + disabledReason(str(p["state"])) + ")"
+	case "schedule.enabled":
+		return "Scheduled workflow " + workflow + " enabled"
+	case "schedule.stale":
+		n, _ := p["missed"].(float64)
+		runs := plural(int(n), "run")
+		// The collector stops counting at 1000.
+		if n >= 1000 {
+			runs = "1000+ runs"
+		}
+		// The oldest missed time: the count may start after last_alive_at, at the workflow's last edit.
+		if since := when(p["expected_at"]); since != "" {
+			return fmt.Sprintf("%s missed %s since %s", workflow, runs, since)
+		}
+		return fmt.Sprintf("%s missed %s", workflow, runs)
+	case "schedule.recovered":
+		return "Scheduled workflow " + workflow + " runs again"
+	case "schedule.reenabled":
+		return "Scheduled workflow " + workflow + " re-enabled after " + disabledReason(from)
+	case "schedule.disable_soon":
+		return "Scheduled workflows of " + str(p["repo"]) + " turn off on " + when(p["disable_at"]) + " without a commit"
 	case TestEventType:
 		return "test notification"
 	}
 	return e.Type
+}
+
+// disabledReason reads GitHub's disabled_inactivity as "inactivity".
+func disabledReason(state string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(state, "disabled_"), "_", " ")
+}
+
+// when shows an RFC 3339 payload time in UTC to the minute; anything else as is.
+func when(v any) string {
+	t, err := time.Parse(time.RFC3339, str(v))
+	if err != nil {
+		return str(v)
+	}
+	return t.UTC().Format("2006-01-02 15:04 UTC")
 }
 
 // Format builds the message of d; payload values are untrusted text, escaped by each channel.
@@ -235,6 +273,8 @@ func Format(d Delivery) Message {
 		m.Detail = str(d.Event.Payload["message"])
 	case d.Event.Type == "pr.commented" || d.Event.Type == "issue.commented" || d.Event.Type == "discussion.commented":
 		m.Detail = str(d.Event.Payload["excerpt"])
+	case str(d.Event.Payload["reenable_error"]) != "":
+		m.Detail = "Re-enable failed: " + str(d.Event.Payload["reenable_error"])
 	case str(d.Event.Payload["title"]) != "":
 		m.Detail = str(d.Event.Payload["title"])
 	case str(d.Event.Payload["name"]) != "" && str(d.Event.Payload["name"]) != str(d.Event.Payload["tag"]):

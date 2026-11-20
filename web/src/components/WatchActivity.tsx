@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { inputClass } from "@/components/ui/field";
 import { StatusDot } from "@/components/WatchBits";
 import { useToast } from "@/hooks/toast";
-import { summarizeEvent, TONE_CLASS } from "@/lib/events";
+import { missedCount, summarizeEvent, TONE_CLASS } from "@/lib/events";
 import { problemText } from "@/lib/problems";
 import { formatAbsolute } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,7 @@ import {
   type MRState,
   type PRState,
   type ReleaseState,
+  type SchedulesState,
   type TagState,
 } from "@/lib/watchState";
 import { nextRunText } from "@/lib/watchStatus";
@@ -307,6 +308,8 @@ export function StateView({ kind, state }: { kind: Watch["kind"]; state: unknown
       return <IssueSummary state={state as IssueState} />;
     case "github_discussion":
       return <IssueSummary state={state as DiscussionState} />;
+    case "github_schedules":
+      return <ScheduleTable state={state as SchedulesState} />;
     case "gitlab_mr":
       return <MRSummary state={state as MRState} />;
     case "oci_tags":
@@ -351,6 +354,62 @@ function ReleaseTable({ state }: { state: ReleaseState }) {
               <td className="max-w-64 truncate px-3 py-2">{r.name}</td>
               <td className="px-3 py-2 whitespace-nowrap text-muted">
                 {r.published_at ? <Timestamp at={r.published_at} /> : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScheduleTable({ state }: { state: SchedulesState }) {
+  const workflows = state.workflows ?? [];
+  if (workflows.length === 0) {
+    return <p className="text-sm text-muted">No scheduled workflow in this repository.</p>;
+  }
+  return (
+    <div className="relative overflow-x-auto rounded-lg border border-line">
+      <table className="w-full text-sm">
+        <thead className="bg-bg/60 text-left text-xs text-muted">
+          <tr>
+            <th className="px-3 py-2 font-medium">Workflow</th>
+            <th className="px-3 py-2 font-medium">State</th>
+            <th className="px-3 py-2 font-medium">Last alive</th>
+          </tr>
+        </thead>
+        <tbody>
+          {workflows.map((w) => (
+            <tr key={w.path} className="border-t border-line">
+              <td className="px-3 py-2">
+                {/^https?:\/\//.test(w.url) ? (
+                  <a
+                    href={w.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="underline-offset-2 hover:underline"
+                  >
+                    {w.name}
+                  </a>
+                ) : (
+                  w.name
+                )}
+                <span className="block font-mono text-xs text-muted">{w.path}</span>
+              </td>
+              <td className="px-3 py-2 whitespace-nowrap">
+                <span
+                  className={cn(badge, w.state === "active" ? TONE_CLASS.good : TONE_CLASS.bad)}
+                >
+                  {w.state.replaceAll("_", " ")}
+                </span>
+                {w.stale && (
+                  <span className={cn(badge, "ml-2", TONE_CLASS.bad)}>
+                    stale{w.missed ? `, ${missedCount(w.missed)} missed` : ""}
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2 whitespace-nowrap text-muted">
+                {w.last_alive_at ? <Timestamp at={w.last_alive_at} /> : "—"}
               </td>
             </tr>
           ))}

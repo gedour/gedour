@@ -63,6 +63,10 @@ function github(parts: string[]): Recognized | null {
   if (section === "discussions" && number) {
     return { kind: "github_discussion", config: { repo, number } };
   }
+  // Only the Actions tab itself: a run or workflow page stays a repository watch.
+  if (section === "actions" && parts.length === 3) {
+    return { kind: "github_schedules", config: { repo } };
+  }
   return { kind: "github_repo", config: { repo } };
 }
 

@@ -132,6 +132,64 @@ describe("WatchFormPage (new)", () => {
     });
   });
 
+  // 019-AC12: the Actions tab URL picks GitHub scheduled workflows; its fields and hints reach the config.
+  it("picks GitHub scheduled workflows from a pasted Actions URL", async () => {
+    const fn = mockApi({
+      "/api/v1/credentials": { items: [] },
+      "/api/v1/watches": () => problem(400, "x"),
+    });
+    renderApp("/watches/new");
+    await userEvent.type(screen.getByLabelText(/Paste a URL/), "https://github.com/o/r/actions");
+    expect(kindCard("GitHub scheduled workflows")).toBeChecked();
+    const repo = screen.getByLabelText("Repository");
+    expect(repo).toHaveValue("o/r");
+    expect(repo).toHaveAccessibleDescription(
+      /2 requests plus 1 per scheduled workflow, 2 more with the warning/,
+    );
+    expect(screen.getByLabelText("Name")).toHaveValue("o/r schedules");
+    const alive = screen.getByLabelText("Proof of life");
+    expect(alive).toHaveValue("success");
+    expect(screen.getAllByRole("option", { name: /run/ }).map((o) => o.textContent)).toEqual([
+      "Last successful run",
+      "Last run, any result",
+    ]);
+    expect(
+      screen.getByRole("checkbox", { name: "Re-enable workflows disabled for inactivity" }),
+    ).toHaveAccessibleDescription(/Actions write/);
+    expect(screen.getByLabelText("Warn days before the 60-day cutoff (optional)")).toHaveAttribute(
+      "min",
+      "0",
+    );
+
+    // Untouched, the server's defaults apply.
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() => expect(lastCall(fn, "/api/v1/watches", "POST")).toBeDefined());
+    expect(lastCall(fn, "/api/v1/watches", "POST")?.body).toMatchObject({
+      kind: "github_schedules",
+      config: { repo: "o/r", auto_enable: false },
+    });
+
+    await userEvent.selectOptions(alive, "completed");
+    await userEvent.type(screen.getByLabelText("Missed runs before an alert (optional)"), "5");
+    await userEvent.type(
+      screen.getByLabelText("Warn days before the 60-day cutoff (optional)"),
+      "7",
+    );
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Re-enable workflows disabled for inactivity" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create watch" }));
+    await waitFor(() =>
+      expect(lastCall(fn, "/api/v1/watches", "POST")?.body?.config).toEqual({
+        repo: "o/r",
+        alive_on: "completed",
+        missed_runs: 5,
+        warn_days: 7,
+        auto_enable: true,
+      }),
+    );
+  });
+
   // 011-AC10: a discussion URL picks the GitHub discussion card and fills its fields.
   it("picks GitHub discussion from a pasted discussion URL", async () => {
     const fn = mockApi({
@@ -140,7 +198,7 @@ describe("WatchFormPage (new)", () => {
     });
     renderApp("/watches/new");
     expect(
-      screen.getByText(/repository, release, issue, discussion, PR or MR page/),
+      screen.getByText(/repository, release, issue, discussion, PR, MR or Actions page/),
     ).toBeInTheDocument();
     await userEvent.type(
       screen.getByLabelText(/Paste a URL/),

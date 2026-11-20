@@ -368,53 +368,73 @@ function ScheduleTable({ state }: { state: SchedulesState }) {
   if (workflows.length === 0) {
     return <p className="text-sm text-muted">No scheduled workflow in this repository.</p>;
   }
+  // The clock the relative date renders against: a stored state's own time can lag by days.
+  const now = new Date();
+  const cutoff =
+    state.disable_at &&
+    workflows.some((w) => w.state === "active") &&
+    (Date.parse(state.disable_at) <= now.getTime() ? (
+      <p className="text-sm text-muted">
+        Past GitHub&apos;s 60-day cutoff without a commit: it passed{" "}
+        <Timestamp at={state.disable_at} now={now} />
+      </p>
+    ) : (
+      <p className="text-sm text-muted">
+        Without a new commit, GitHub turns these schedules off{" "}
+        <Timestamp at={state.disable_at} now={now} />
+        {state.disable_soon && <span className={cn(badge, "ml-2", TONE_CLASS.bad)}>soon</span>}
+      </p>
+    ));
   return (
-    <div className="relative overflow-x-auto rounded-lg border border-line">
-      <table className="w-full text-sm">
-        <thead className="bg-bg/60 text-left text-xs text-muted">
-          <tr>
-            <th className="px-3 py-2 font-medium">Workflow</th>
-            <th className="px-3 py-2 font-medium">State</th>
-            <th className="px-3 py-2 font-medium">Last alive</th>
-          </tr>
-        </thead>
-        <tbody>
-          {workflows.map((w) => (
-            <tr key={w.path} className="border-t border-line">
-              <td className="px-3 py-2">
-                {/^https?:\/\//.test(w.url) ? (
-                  <a
-                    href={w.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="underline-offset-2 hover:underline"
-                  >
-                    {w.name}
-                  </a>
-                ) : (
-                  w.name
-                )}
-                <span className="block font-mono text-xs text-muted">{w.path}</span>
-              </td>
-              <td className="px-3 py-2 whitespace-nowrap">
-                <span
-                  className={cn(badge, w.state === "active" ? TONE_CLASS.good : TONE_CLASS.bad)}
-                >
-                  {w.state.replaceAll("_", " ")}
-                </span>
-                {w.stale && (
-                  <span className={cn(badge, "ml-2", TONE_CLASS.bad)}>
-                    stale{w.missed ? `, ${missedCount(w.missed)} missed` : ""}
-                  </span>
-                )}
-              </td>
-              <td className="px-3 py-2 whitespace-nowrap text-muted">
-                {w.last_alive_at ? <Timestamp at={w.last_alive_at} /> : "—"}
-              </td>
+    <div className="flex flex-col gap-3">
+      {cutoff}
+      <div className="relative overflow-x-auto rounded-lg border border-line">
+        <table className="w-full text-sm">
+          <thead className="bg-bg/60 text-left text-xs text-muted">
+            <tr>
+              <th className="px-3 py-2 font-medium">Workflow</th>
+              <th className="px-3 py-2 font-medium">State</th>
+              <th className="px-3 py-2 font-medium">Last alive</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {workflows.map((w) => (
+              <tr key={w.path} className="border-t border-line">
+                <td className="px-3 py-2">
+                  {/^https?:\/\//.test(w.url) ? (
+                    <a
+                      href={w.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="underline-offset-2 hover:underline"
+                    >
+                      {w.name}
+                    </a>
+                  ) : (
+                    w.name
+                  )}
+                  <span className="block font-mono text-xs text-muted">{w.path}</span>
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap">
+                  <span
+                    className={cn(badge, w.state === "active" ? TONE_CLASS.good : TONE_CLASS.bad)}
+                  >
+                    {w.state.replaceAll("_", " ")}
+                  </span>
+                  {w.stale && (
+                    <span className={cn(badge, "ml-2", TONE_CLASS.bad)}>
+                      stale{w.missed ? `, ${missedCount(w.missed)} missed` : ""}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 whitespace-nowrap text-muted">
+                  {w.last_alive_at ? <Timestamp at={w.last_alive_at} /> : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

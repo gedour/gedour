@@ -29,6 +29,8 @@ const (
 	staleGrace = time.Hour
 	// maxMissed caps the missed count reported on the stale transition, which bounds the walk of a minutely cron.
 	maxMissed = 1000
+	// inactivityCutoff: GitHub turns off a public repository's scheduled workflows after 60 days without activity.
+	inactivityCutoff = 60 * 24 * time.Hour
 )
 
 // SchedulesState is the normalized state of a github_schedules watch.
@@ -39,6 +41,12 @@ type SchedulesState struct {
 	Workflows []ScheduledWorkflow `json:"workflows"`
 	// Unscheduled holds the blob sha of each workflow file without a schedule, by path, so an unchanged one is not fetched again.
 	Unscheduled map[string]string `json:"unscheduled"`
+	// Set only with warn_days: Repo names the subject of schedule.disable_soon, which Diff cannot read from the config.
+	Repo           string     `json:"repo,omitempty"`
+	Private        *bool      `json:"private,omitempty"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	DisableAt      *time.Time `json:"disable_at,omitempty"`
+	DisableSoon    bool       `json:"disable_soon,omitempty"`
 }
 
 // WorkflowCron is one on.schedule entry of a workflow file.
@@ -91,7 +99,11 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 	for _, w := range prev.Workflows {
 		old[w.Path] = w
 	}
-	if err := checkBudget(listed, shas, prev, old, dirURL, dirHeader, f.now(), cred); err != nil {
+	extra := 0
+	if cfg.WarnDays > 0 {
+		extra = 2
+	}
+	if err := checkBudget(listed, shas, prev, old, extra, dirURL, dirHeader, f.now(), cred); err != nil {
 		return SchedulesState{}, err
 	}
 	raw := h.Clone()
@@ -124,7 +136,63 @@ func collectGitHubSchedules(ctx context.Context, f *Fetcher, cfg watch.GitHubSch
 		}
 		s.Workflows = append(s.Workflows, w)
 	}
+	if cfg.WarnDays > 0 {
+		if err := checkActivity(ctx, f, base, h, cfg, &s); err != nil {
+			return SchedulesState{}, err
+		}
+	}
 	return s, nil
+}
+
+// checkActivity reads the repository's visibility and last default-branch commit, and flags a public repository whose
+// active scheduled workflows GitHub turns off within warn_days.
+func checkActivity(ctx context.Context, f *Fetcher, base string, h http.Header, cfg watch.GitHubSchedulesConfig, s *SchedulesState) error {
+	var repo struct {
+		Private bool `json:"private"`
+	}
+	if _, err := f.getJSON(ctx, base, h, false, &repo); err != nil {
+		return err
+	}
+	var commits []struct {
+		Commit struct {
+			// The committer date is when the commit landed: a rebased or cherry-picked one keeps an older author date.
+			Committer struct {
+				Date time.Time `json:"date"`
+			} `json:"committer"`
+		} `json:"commit"`
+	}
+	_, err := f.getJSON(ctx, base+"/commits?per_page=1", h, false, &commits)
+	// GitHub answers 409 Conflict for an empty repository: no commit yet.
+	if he := (*HTTPError)(nil); errors.As(err, &he) && he.Status == http.StatusConflict {
+		commits, err = nil, nil
+	}
+	if err != nil {
+		return err
+	}
+	s.Repo, s.Private = cfg.Repo, &repo.Private
+	if len(commits) == 0 {
+		return nil
+	}
+	last := commits[0].Commit.Committer.Date.UTC()
+	s.LastActivityAt = &last
+	if repo.Private {
+		return nil
+	}
+	at := last.Add(inactivityCutoff)
+	s.DisableAt = &at
+	warnFrom := at.Add(-time.Duration(cfg.WarnDays) * 24 * time.Hour)
+	s.DisableSoon = !f.now().Before(warnFrom) && len(activePaths(s.Workflows)) > 0
+	return nil
+}
+
+func activePaths(ws []ScheduledWorkflow) []string {
+	var out []string
+	for _, w := range ws {
+		if w.State == workflowActive {
+			out = append(out, w.Path)
+		}
+	}
+	return out
 }
 
 // cachedCrons returns the stored crons of an unchanged workflow file; cached is false when the file must be fetched.
@@ -141,13 +209,13 @@ func cachedCrons(prev SchedulesState, old map[string]ScheduledWorkflow, p, sha s
 // checkBudget stops the run before the per-file calls when the rate limit left cannot cover them: a run cut short
 // saves no state, so the next one would fetch every file again and never get through. It waits for the reset like
 // any rate limit, or fails when even a full budget is too small.
-func checkBudget(listed []listedWorkflow, shas map[string]string, prev SchedulesState, old map[string]ScheduledWorkflow, dirURL string, hdr http.Header,
-	now time.Time, cred *Credential) error {
+func checkBudget(listed []listedWorkflow, shas map[string]string, prev SchedulesState, old map[string]ScheduledWorkflow, extra int, dirURL string,
+	hdr http.Header, now time.Time, cred *Credential) error {
 	left, err := strconv.Atoi(hdr.Get("X-RateLimit-Remaining"))
 	if err != nil {
 		return nil
 	}
-	need := 0
+	need := extra
 	for _, lw := range listed {
 		sha, ok := shas[lw.Path]
 		if !ok {
@@ -319,8 +387,8 @@ func checkAlive(ctx context.Context, f *Fetcher, base string, h http.Header, cfg
 		return nil
 	}
 	w.Stale = true
-	// Kept only while its reference holds: a newer run, an edit or a switched alive_on moves the first missed time.
-	if o.Stale && o.Missed > 0 && o.ExpectedAt != nil && o.ExpectedAt.Equal(first) {
+	// Kept while its reference holds and it still reaches missed_runs: a newer run, an edit or a switched alive_on moves the first missed time.
+	if o.Stale && o.Missed >= cfg.MissedRuns && o.ExpectedAt != nil && o.ExpectedAt.Equal(first) {
 		w.Missed, w.ExpectedAt = o.Missed, o.ExpectedAt
 		return nil
 	}
@@ -353,8 +421,9 @@ func missedRuns(scheds []cron.Schedule, ref, until time.Time, limit int) (int, t
 	return n, first
 }
 
-// diffSchedules emits per workflow, by path: schedule.disabled or schedule.enabled, then schedule.stale or schedule.recovered.
-// A workflow new to the state reads as healthy before, so the first run reports what is already broken; one that left emits nothing.
+// diffSchedules emits per workflow, by path: schedule.disabled or schedule.enabled, then schedule.stale or schedule.recovered;
+// then schedule.disable_soon for the repository. A workflow new to the state reads as healthy before, and an old state
+// without disable_soon reads as false, so the first run reports what is already broken; a workflow that left emits nothing.
 func diffSchedules(old, cur SchedulesState) []Event {
 	prev := make(map[string]ScheduledWorkflow, len(old.Workflows))
 	for _, w := range old.Workflows {
@@ -379,8 +448,9 @@ func diffSchedules(old, cur SchedulesState) []Event {
 		}
 		fresh := newProof(old.AliveOn, cur.AliveOn, o, w)
 		switch {
-		// A stale job that came back and died again between two runs is stale anew.
-		case w.Stale && (!o.Stale || fresh):
+		// A stale job that came back and died again between two runs is stale anew; a new run older than the
+		// reference (an edit) leaves the episode where it was.
+		case w.Stale && (!o.Stale || fresh && !sameTime(o.ExpectedAt, w.ExpectedAt)):
 			add("schedule.stale", map[string]any{"missed": w.Missed, "expected_at": w.ExpectedAt})
 		// Only a new proof-of-life run recovers: a raised missed_runs, a switched alive_on, an edit or a re-enable
 		// (updated_at moves the reference) clears stale with no run behind it, and a disabled workflow is not stale.
@@ -388,7 +458,15 @@ func diffSchedules(old, cur SchedulesState) []Event {
 			add("schedule.recovered", nil)
 		}
 	}
+	if cur.DisableSoon && !old.DisableSoon {
+		events = append(events, Event{Type: "schedule.disable_soon", Subject: cur.Repo, Payload: map[string]any{
+			"repo": cur.Repo, "last_activity_at": cur.LastActivityAt, "disable_at": cur.DisableAt, "workflows": activePaths(cur.Workflows)}})
+	}
 	return events
+}
+
+func sameTime(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
 
 // newProof reports a proof-of-life run in w newer than the one in o, read under the same alive_on.

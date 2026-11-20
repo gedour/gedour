@@ -55,6 +55,9 @@ export interface ScheduledWorkflow {
 }
 export interface SchedulesState {
   workflows: ScheduledWorkflow[] | null;
+  /** Set with warn_days on a public repository: last commit + 60 days. */
+  disable_at?: string;
+  disable_soon?: boolean;
 }
 export interface TagState {
   tags: string[] | null;

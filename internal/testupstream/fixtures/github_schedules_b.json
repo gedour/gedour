@@ -147,5 +147,36 @@
         }
       ]
     }
-  }
+  },
+  "repo": {
+    "id": 424242,
+    "node_id": "R_kgDOGeRaQg",
+    "name": "widgets",
+    "full_name": "acme/widgets",
+    "private": false,
+    "visibility": "public",
+    "html_url": "https://github.com/acme/widgets",
+    "default_branch": "main",
+    "archived": false,
+    "fork": false
+  },
+  "commits": [
+    {
+      "sha": "9e2d4b6a8c0f1e3d5b7a9c2e4f6a8b0d1c3e5f7a",
+      "node_id": "C_kwDOGeRaQg",
+      "html_url": "https://github.com/acme/widgets/commit/9e2d4b6a8c0f1e3d5b7a9c2e4f6a8b0d1c3e5f7a",
+      "commit": {
+        "author": {
+          "name": "Ada",
+          "email": "ada@example.com"
+        },
+        "committer": {
+          "name": "GitHub",
+          "email": "noreply@github.com"
+        },
+        "message": "Fix the mirror target"
+      }
+    }
+  ],
+  "commit_age_days": 1
 }

@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
@@ -434,6 +434,102 @@ describe("StatePanel", () => {
     const weekly = screen.getByText(".github/workflows/weekly.yml").closest("tr");
     expect(weekly).toHaveTextContent("stale");
     expect(weekly).not.toHaveTextContent("missed");
+  });
+
+  // 019-AC13: the predicted cutoff, flagged once inside the warning window.
+  it.each([
+    ["active, in the window", "active", true, "soon"],
+    ["active, before the window", "active", false, ""],
+    ["no active workflow", "disabled_inactivity", true, null],
+  ] as const)("shows the predicted cutoff: %s", async (_, state, soon, flag) => {
+    // Pinned so the past/future wording and the relative date read the same clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T10:05:00Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    // snapshot() observes at 2026-11-03T10:05:00Z.
+    const disableAt = "2026-11-09T10:05:00Z";
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state,
+                  url: "",
+                  last_alive_at: null,
+                  stale: false,
+                },
+              ],
+              unscheduled: {},
+              repo: "acme/widgets",
+              private: false,
+              last_activity_at: "2026-09-11T12:00:00Z",
+              disable_at: disableAt,
+              disable_soon: soon,
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    await screen.findByText(".github/workflows/nightly.yml");
+    if (flag === null) {
+      expect(screen.queryByText(/GitHub turns these schedules off/)).not.toBeInTheDocument();
+      return;
+    }
+    const line = screen.getByText(/GitHub turns these schedules off/);
+    expect(line).toHaveTextContent(/without a new commit/i);
+    expect(within(line).getByRole("time")).toHaveAttribute("datetime", disableAt);
+    if (flag) expect(line).toHaveTextContent(/soon$/);
+    else expect(line).not.toHaveTextContent("soon");
+  });
+
+  // A cutoff already behind now reads as past, not as a coming turn-off.
+  it.each([
+    ["three days before", "2026-10-31T10:05:00Z"],
+    ["right when", "2026-11-03T10:05:00Z"],
+  ])("says the cutoff passed %s now", async (_, disableAt) => {
+    // Pinned so the past/future wording and the relative date read the same clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T10:05:00Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: false,
+                },
+              ],
+              unscheduled: {},
+              disable_at: disableAt,
+              disable_soon: true,
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    const line = await screen.findByText(/Past GitHub's 60-day cutoff/);
+    expect(within(line).getByRole("time")).toHaveAttribute("datetime", disableAt);
+    expect(screen.queryByText(/turns these schedules off/)).not.toBeInTheDocument();
+    expect(line).not.toHaveTextContent("soon");
   });
 
   it("says when a repository has no scheduled workflow", async () => {

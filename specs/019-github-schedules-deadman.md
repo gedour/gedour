@@ -58,7 +58,7 @@ Two opt-ins are added on top:
   workflow's `updated_at`. A workflow is stale when at least `missed_runs` expected times fall after that
   reference and more than 1 h before now. Only `active` workflows can be stale.
 - State, per scheduled workflow: `id`, `name`, `path`, `file_sha`, `crons` (cron and timezone), `state`,
-  `url`, `last_alive_at`, `stale`, `reenabled_at`. Repository level: `alive_on`, `private`,
+  `url`, `last_alive_at`, `stale`, `reenabled_at`. Repository level: `repo`, `alive_on`, `private`,
   `last_activity_at`, `disable_at`, `disable_soon`.
 - Events (subject: the workflow path, or the repository for `schedule.disable_soon`):
   - `schedule.disabled`: `active` to any other state. Payload: `workflow`, `path`, `state` (to),
@@ -200,6 +200,10 @@ entry per scheduled workflow.
   API may not reset the 60-day clock (the gh-action-keepalive README says toggling did not), so the warning
   can come back after an auto-enable.
 - Pre-warning only on public repositories: GitHub's docs state the 60-day rule for public repositories.
+- The last commit's committer date counts, not the author date: a rebased or cherry-picked commit keeps an older
+  author date. An empty repository (GitHub answers 409 on its commits) has no commit and gets no warning.
+- `disable_soon` stays true past `disable_at` while a workflow is still `active`. Its messages then read "past the
+  60-day cutoff since <disable_at>", compared to the observed time of the event, or to now in the state view.
 - `auto_enable` is refused through API keys. It is the first call where gedour writes to an upstream with the
   owner's token, so turning it on takes a signed-in session.
 - A failed PUT does not fail the run. Detection is the main job, and a missing Actions write permission
@@ -210,10 +214,11 @@ entry per scheduled workflow.
   error naming the count (and a credential, when there is none). It waits for `X-RateLimit-Reset` like any rate
   limit, without counting as a failure. When the run needs more than `X-RateLimit-Limit`, it fails instead.
 - `missed` counts every missed time up to 1000 on the stale transition, shown "1000+" at the cap. While the
-  workflow stays stale the count is kept as long as its reference does not move, so the state does not change
-  run to run. A newer proof-of-life run
+  workflow stays stale the count is kept as long as its reference does not move and it still reaches
+  `missed_runs`, so the state does not change run to run. A newer proof-of-life run
   under the same `alive_on`, followed by new misses before the next run, recounts and sends `schedule.stale`
-  again: the job came back and died again.
+  again: the job came back and died again. A newer run older than the reference (an edit) leaves the oldest
+  missed time where it was, and sends nothing.
 - Messages read "missed N runs since <expected_at>": the oldest missed time, since the count starts at the
   workflow's last edit when that is later than its last run.
 - PUT results go to logs, not to `audit`. The audit table records user mutations made through the API.

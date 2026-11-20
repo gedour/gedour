@@ -11,6 +11,15 @@ func ev(typ string, payload map[string]any) Delivery {
 	return Delivery{Event: Event{Type: typ, Payload: payload}, Watch: Watch{Name: "cli/cli"}}
 }
 
+func seen(d Delivery, at string) Delivery {
+	t, err := time.Parse(time.RFC3339, at)
+	if err != nil {
+		panic(err)
+	}
+	d.Event.ObservedAt = t
+	return d
+}
+
 // The server-side summaries read like the UI's (web/src/lib/events.ts).
 func TestFormat(t *testing.T) {
 	for _, tt := range []struct {
@@ -99,6 +108,13 @@ func TestFormat(t *testing.T) {
 		{ev("schedule.reenabled", map[string]any{"path": ".github/workflows/nightly.yml", "from": "disabled_inactivity"}), "Scheduled workflow nightly.yml re-enabled after inactivity", "", ""},
 		{ev("schedule.disable_soon", map[string]any{"repo": "o/r", "last_activity_at": "2026-09-25T10:00:00Z", "disable_at": "2026-11-24T10:00:00+01:00",
 			"workflows": []any{".github/workflows/nightly.yml"}}), "Scheduled workflows of o/r turn off on 2026-11-24 09:00 UTC without a commit", "", ""},
+		// Seen before, at and after the cutoff (warn_days turned on late).
+		{seen(ev("schedule.disable_soon", map[string]any{"repo": "o/r", "disable_at": "2026-11-24T10:00:00+01:00"}), "2026-11-24T08:59:59Z"),
+			"Scheduled workflows of o/r turn off on 2026-11-24 09:00 UTC without a commit", "", ""},
+		{seen(ev("schedule.disable_soon", map[string]any{"repo": "o/r", "disable_at": "2026-11-24T10:00:00+01:00"}), "2026-11-24T09:00:00Z"),
+			"Scheduled workflows of o/r are past the 60-day cutoff since 2026-11-24 09:00 UTC", "", ""},
+		{seen(ev("schedule.disable_soon", map[string]any{"repo": "o/r", "disable_at": "2026-11-01T00:00:00Z"}), "2026-11-04T12:00:00Z"),
+			"Scheduled workflows of o/r are past the 60-day cutoff since 2026-11-01 00:00 UTC", "", ""},
 		{ev("odd.type", map[string]any{"url": "javascript:alert(1)", "tag": []any{1}}), "odd.type", "", ""},
 		{TestDelivery(time.Now()), "test notification", "If you read this, the channel works.", ""},
 	} {

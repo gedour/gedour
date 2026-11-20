@@ -283,13 +283,18 @@ export function summarizeEvent(e: WatchEvent): EventSummary {
         text: `Scheduled workflow ${workflow} re-enabled after ${disabledReason(from)}`,
         url,
       };
-    case "schedule.disable_soon":
+    case "schedule.disable_soon": {
+      // A warning turned on, or seen, after the cutoff: "turn off on" a past date would read wrong.
+      const past = Date.parse(str(p.disable_at)) <= Date.parse(e.observed_at);
       return {
         badge: "Turning off",
         tone: "bad",
-        text: `Scheduled workflows of ${str(p.repo)} turn off on ${when(p.disable_at)} without a commit`,
+        text: past
+          ? `Scheduled workflows of ${str(p.repo)} are past the 60-day cutoff since ${when(p.disable_at)}`
+          : `Scheduled workflows of ${str(p.repo)} turn off on ${when(p.disable_at)} without a commit`,
         url,
       };
+    }
     default:
       return { badge: e.type, tone: "neutral", text: e.type, url };
   }

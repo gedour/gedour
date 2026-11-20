@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -199,7 +200,10 @@ type hourlyUpstream struct {
 	cron      string // hourly when empty
 	success   string // created_at of the last success
 	completed string // created_at of the last run, any result
+	private   bool
+	commit    string // committer date of the last default-branch commit, none when empty
 	queries   []string
+	paths     []string
 }
 
 func (u *hourlyUpstream) set(fn func(u *hourlyUpstream)) {
@@ -211,7 +215,17 @@ func (u *hourlyUpstream) set(fn func(u *hourlyUpstream)) {
 func (u *hourlyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.paths = append(u.paths, r.URL.Path)
 	switch {
+	case r.URL.Path == "/repos/acme/widgets":
+		_, _ = fmt.Fprintf(w, `{"full_name":"acme/widgets","private":%t,"pushed_at":"2030-01-01T00:00:00Z"}`, u.private)
+	case r.URL.Path == "/repos/acme/widgets/commits" && r.URL.RawQuery == "per_page=1":
+		if u.commit == "" {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		// The author date is older: the committer date is the one that counts.
+		_, _ = fmt.Fprintf(w, `[{"sha":"c1","commit":{"author":{"date":"2020-01-01T00:00:00Z"},"committer":{"date":%q}}}]`, u.commit)
 	case strings.HasSuffix(r.URL.Path, "/actions/workflows"):
 		state, updated := cmp.Or(u.state, "active"), cmp.Or(u.updatedAt, "2026-01-01T00:00:00Z")
 		_, _ = fmt.Fprintf(w, `{"total_count":1,"workflows":[{"id":7,"name":"Nightly","path":".github/workflows/nightly.yml","state":%q,
@@ -275,6 +289,20 @@ func TestGitHubSchedulesStaleness(t *testing.T) {
 			cur := schedulesRun(t, tt.cfg, stale, at("2026-11-04T12:30:00Z"))
 			if !strings.Contains(string(cur), `"stale":false`) {
 				t.Fatalf("still stale: %s", cur)
+			}
+			check(t, schedulesDiff(t, stale, cur), []string{})
+		})
+	}
+	// A raised missed_runs still reached recounts instead of keeping a count below it, with no event.
+	for _, tt := range []struct {
+		missedRuns, missed int
+		now                string
+	}{{5, 5, "2026-11-04T14:01:00Z"}, {4, 4, "2026-11-04T13:01:00Z"}, {4, 6, "2026-11-04T15:01:00Z"}} {
+		t.Run(fmt.Sprintf("missed_runs raised to %d, still stale at %s", tt.missedRuns, tt.now), func(t *testing.T) {
+			cur := schedulesRun(t, schedulesCfg(srv.URL, "success", tt.missedRuns), stale, at(tt.now))
+			var s SchedulesState
+			if err := json.Unmarshal(cur, &s); err != nil || !s.Workflows[0].Stale || s.Workflows[0].Missed != tt.missed || !s.Workflows[0].ExpectedAt.Equal(at("2026-11-04T09:00:00Z")) {
+				t.Fatalf("missed_runs %d: %s", tt.missedRuns, cur)
 			}
 			check(t, schedulesDiff(t, stale, cur), []string{})
 		})
@@ -374,6 +402,26 @@ func staleAgain(t *testing.T) {
 		t.Fatalf("edited %s", edited)
 	}
 	check(t, schedulesDiff(t, stale, edited), []string{})
+
+	// Edited at 09:30, stale from 10:00: a success older than the edit that shows up later is new proof of life, yet
+	// the episode has not moved, so no second schedule.stale.
+	for _, tt := range []struct{ staleAt, run, seenAt string }{
+		{"2026-11-04T13:01:00Z", "2026-11-04T09:10:00Z", "2026-11-04T13:30:00Z"},
+		{"2026-11-04T15:01:00Z", "2026-11-04T09:20:00Z", "2026-11-04T15:30:00Z"},
+	} {
+		t.Run("older run seen at "+tt.seenAt, func(t *testing.T) {
+			up.set(func(u *hourlyUpstream) { u.success, u.updatedAt = "2026-11-04T08:05:00Z", "2026-11-04T09:30:00Z" })
+			before := schedulesRun(t, success, nil, at(tt.staleAt))
+			up.set(func(u *hourlyUpstream) { u.success = tt.run })
+			after := schedulesRun(t, success, before, at(tt.seenAt))
+			var s SchedulesState
+			if err := json.Unmarshal(after, &s); err != nil || !s.Workflows[0].Stale || !s.Workflows[0].ExpectedAt.Equal(at("2026-11-04T10:00:00Z")) ||
+				!s.Workflows[0].LastAliveAt.Equal(at(tt.run)) {
+				t.Fatalf("older run %s", after)
+			}
+			check(t, schedulesDiff(t, before, after), []string{})
+		})
+	}
 }
 
 // 019-AC5, 019-AC7: expected times in UTC, in a timezone across both DST changes, and as a union of cron lines.
@@ -593,5 +641,229 @@ func TestGitHubSchedulesRateBudget(t *testing.T) {
 	remaining = "0"
 	if _, err := schedulesCollect(t, cfg, a, now.Add(time.Hour), nil); err == nil || !strings.HasPrefix(err.Error(), "rate limit: 0 left, this run needs 1 request (") {
 		t.Fatalf("known files, none left: %v", err)
+	}
+}
+
+func warnCfg(apiURL string, warnDays int) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":%d,"auto_enable":false}`, apiURL, warnDays))
+}
+
+// soonEvent is the schedule.disable_soon line for the hourly fake, last commit at last.
+func soonEvent(last string) string {
+	return `schedule.disable_soon acme/widgets {"disable_at":"` + at(last).Add(60*24*time.Hour).Format(time.RFC3339) + `","last_activity_at":"` + last +
+		`","repo":"acme/widgets","workflows":[".github/workflows/nightly.yml"]}`
+}
+
+// 019-AC13: a public repository whose last commit is 54 days old, with warn_days 7: the first run sends one
+// schedule.disable_soon with disable_at = commit + 60 d, the next run nothing, and a new commit clears the flag.
+func TestGitHubSchedulesDisableSoon(t *testing.T) {
+	now := at("2026-11-04T12:00:00Z")
+	const commit = "2026-09-11T12:00:00Z" // 54 days before now
+	up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: commit}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	cfg := warnCfg(srv.URL, 7)
+
+	first := schedulesRun(t, cfg, nil, now)
+	var s SchedulesState
+	if err := json.Unmarshal(first, &s); err != nil || s.Repo != "acme/widgets" || s.Private == nil || *s.Private || !s.DisableSoon ||
+		!s.LastActivityAt.Equal(at(commit)) || !s.DisableAt.Equal(at("2026-11-10T12:00:00Z")) {
+		t.Fatalf("state %s", first)
+	}
+	// 019-AC13: this kind reports on its first run, diffed against no state.
+	check(t, schedulesDiff(t, json.RawMessage("null"), first), []string{soonEvent(commit)})
+	if !slices.Contains(up.paths, "/repos/acme/widgets") || !slices.Contains(up.paths, "/repos/acme/widgets/commits") {
+		t.Fatalf("paths %q", up.paths)
+	}
+
+	// 019-AC13: still in the window, nothing new.
+	next := schedulesRun(t, cfg, first, now.Add(time.Hour))
+	check(t, schedulesDiff(t, first, next), []string{})
+
+	// 019-AC13: a new commit moves disable_at and clears the flag, with no event.
+	up.set(func(u *hourlyUpstream) { u.commit = "2026-11-04T12:30:00Z" })
+	moved := schedulesRun(t, cfg, next, now.Add(2*time.Hour))
+	s = SchedulesState{}
+	if err := json.Unmarshal(moved, &s); err != nil || s.DisableSoon || !s.DisableAt.Equal(at("2027-01-03T12:30:00Z")) {
+		t.Fatalf("moved %s", moved)
+	}
+	check(t, schedulesDiff(t, next, moved), []string{})
+	// 019-AC13: 53 days on, the window opens again and warns again.
+	up.set(func(u *hourlyUpstream) { u.success = "2026-12-27T12:05:00Z" })
+	again := schedulesRun(t, cfg, moved, at("2026-12-27T12:30:00Z"))
+	check(t, schedulesDiff(t, moved, again), []string{soonEvent("2026-11-04T12:30:00Z")})
+}
+
+// 019-AC13: the window opens exactly warn_days before disable_at, and only for a public repository with an active
+// scheduled workflow and a commit.
+func TestGitHubSchedulesDisableSoonCases(t *testing.T) {
+	now := at("2026-11-04T12:00:00Z")
+	for _, tt := range []struct {
+		name     string
+		warnDays int
+		edit     func(u *hourlyUpstream)
+		soon     bool
+	}{
+		{"window opens at disable_at - warn_days", 7, func(u *hourlyUpstream) { u.commit = "2026-09-12T12:00:00Z" }, true},
+		{"a second before the window", 7, func(u *hourlyUpstream) { u.commit = "2026-09-12T12:00:01Z" }, false},
+		{"past the cutoff, still active", 1, func(u *hourlyUpstream) { u.commit = "2026-01-01T00:00:00Z" }, true},
+		{"warn_days 30", 30, func(u *hourlyUpstream) { u.commit = "2026-10-05T12:00:00Z" }, true},
+		{"private, 54 days", 7, func(u *hourlyUpstream) { u.private, u.commit = true, "2026-09-11T12:00:00Z" }, false},
+		{"private, past the cutoff", 30, func(u *hourlyUpstream) { u.private, u.commit = true, "2025-01-01T00:00:00Z" }, false},
+		{"disabled for inactivity", 7, func(u *hourlyUpstream) { u.state, u.commit = "disabled_inactivity", "2026-09-11T12:00:00Z" }, false},
+		{"disabled by hand", 30, func(u *hourlyUpstream) { u.state, u.commit = "disabled_manually", "2026-01-01T00:00:00Z" }, false},
+		{"no commit", 30, nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := &hourlyUpstream{success: "2026-11-04T11:05:00Z"}
+			if tt.edit != nil {
+				up.set(tt.edit)
+			}
+			srv := httptest.NewServer(up)
+			defer srv.Close()
+			raw := schedulesRun(t, warnCfg(srv.URL, tt.warnDays), nil, now)
+			var s SchedulesState
+			if err := json.Unmarshal(raw, &s); err != nil || s.DisableSoon != tt.soon || (up.private && (s.DisableAt != nil || !*s.Private)) {
+				t.Fatalf("state %s", raw)
+			}
+			var want []string
+			for _, e := range schedulesDiff(t, json.RawMessage("null"), raw) {
+				if strings.HasPrefix(e, "schedule.disable_soon") {
+					want = append(want, e)
+				}
+			}
+			if (len(want) == 1) != tt.soon {
+				t.Fatalf("events %q", want)
+			}
+		})
+	}
+}
+
+// 019-AC13: with warn_days 0, neither /repos/{repo} nor /commits is called and the state has no repository fields.
+func TestGitHubSchedulesNoWarnNoCalls(t *testing.T) {
+	up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: "2026-09-11T12:00:00Z"}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	raw := schedulesRun(t, warnCfg(srv.URL, 0), nil, at("2026-11-04T12:00:00Z"))
+	want := []string{"/repos/acme/widgets/actions/workflows", "/repos/acme/widgets/contents/.github/workflows",
+		"/repos/acme/widgets/contents/.github/workflows/nightly.yml", "/repos/acme/widgets/actions/workflows/7/runs"}
+	if !slices.Equal(up.paths, want) || strings.Contains(string(raw), "disable") || strings.Contains(string(raw), "private") {
+		t.Fatalf("paths %q, state %s", up.paths, raw)
+	}
+	check(t, schedulesDiff(t, json.RawMessage("null"), raw), []string{})
+}
+
+// 019-AC13: a state stored before the warning existed (no repository fields) diffs quietly against a run outside the
+// window, and a run inside it sends its one schedule.disable_soon; turning warn_days off then on warns again.
+func TestGitHubSchedulesDisableSoonFromOldState(t *testing.T) {
+	up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: "2026-11-01T00:00:00Z"}
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	now := at("2026-11-04T12:00:00Z")
+	old := schedulesRun(t, schedulesCfg(srv.URL, "success", 3), nil, now)
+	if strings.Contains(string(old), "disable") {
+		t.Fatalf("old %s", old)
+	}
+	quiet := schedulesRun(t, warnCfg(srv.URL, 7), old, now)
+	check(t, schedulesDiff(t, old, quiet), []string{})
+	up.set(func(u *hourlyUpstream) { u.commit = "2026-09-11T12:00:00Z" })
+	soon := schedulesRun(t, warnCfg(srv.URL, 7), old, now)
+	check(t, schedulesDiff(t, old, soon), []string{soonEvent("2026-09-11T12:00:00Z")})
+	off := schedulesRun(t, warnCfg(srv.URL, 0), soon, now)
+	check(t, schedulesDiff(t, soon, off), []string{})
+	on := schedulesRun(t, warnCfg(srv.URL, 7), off, now)
+	check(t, schedulesDiff(t, off, on), []string{soonEvent("2026-09-11T12:00:00Z")})
+	// Still flagged while the workflow goes stale: only the workflow's event.
+	up.set(func(u *hourlyUpstream) { u.success = "2026-11-04T07:05:00Z" })
+	stale := schedulesRun(t, warnCfg(srv.URL, 7), on, now)
+	if got := schedulesDiff(t, on, stale); len(got) != 1 || !strings.HasPrefix(got[0], "schedule.stale ") {
+		t.Fatalf("events %q", got)
+	}
+}
+
+// 019-AC10: with warn_days, a failing repository or commits call fails the run with no state.
+func TestGitHubSchedulesWarnCallFails(t *testing.T) {
+	for _, path := range []string{"/repos/acme/widgets", "/repos/acme/widgets/commits"} {
+		t.Run(path, func(t *testing.T) {
+			up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: "2026-09-11T12:00:00Z"}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == path {
+					http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
+					return
+				}
+				up.ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+			raw, err := schedulesCollect(t, warnCfg(srv.URL, 7), nil, at("2026-11-04T12:00:00Z"), nil)
+			if err == nil || raw != nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "HTTP 500") {
+				t.Fatalf("state %s, err %v", raw, err)
+			}
+		})
+	}
+}
+
+// 001-AC11: warn_days adds its 2 calls to the rate budget.
+func TestGitHubSchedulesWarnBudget(t *testing.T) {
+	up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: "2026-09-11T12:00:00Z"}
+	var remaining string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/contents/.github/workflows") {
+			w.Header().Set("X-RateLimit-Remaining", remaining)
+			w.Header().Set("X-RateLimit-Reset", "1793797200")
+		}
+		up.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	now := at("2026-11-04T12:00:00Z")
+	// First run: nightly.yml and its runs, plus the repository and its last commit.
+	remaining = "3"
+	if _, err := schedulesCollect(t, warnCfg(srv.URL, 7), nil, now, nil); err == nil || !strings.HasPrefix(err.Error(), "rate limit: 3 left, this run needs 4 requests") {
+		t.Fatalf("first run: %v", err)
+	}
+	a := schedulesRun(t, warnCfg(srv.URL, 0), nil, now)
+	remaining = "2"
+	if _, err := schedulesCollect(t, warnCfg(srv.URL, 7), a, now, nil); err == nil || !strings.HasPrefix(err.Error(), "rate limit: 2 left, this run needs 3 requests") {
+		t.Fatalf("known file: %v", err)
+	}
+	remaining = "3"
+	schedulesRun(t, warnCfg(srv.URL, 7), a, now)
+	remaining = "1"
+	schedulesRun(t, warnCfg(srv.URL, 0), a, now)
+}
+
+// GitHub answers 409 Conflict on the commits of an empty repository: no commit, no warning, the run succeeds. Only that
+// call and that status: a 409 on the repository or a 404 on the commits still fail the run.
+func TestGitHubSchedulesEmptyRepository(t *testing.T) {
+	for _, tt := range []struct {
+		path   string
+		status int
+		ok     bool
+	}{
+		{"/repos/acme/widgets/commits", http.StatusConflict, true},
+		{"/repos/acme/widgets", http.StatusConflict, false},
+		{"/repos/acme/widgets/commits", http.StatusNotFound, false},
+	} {
+		t.Run(fmt.Sprintf("%s %d", tt.path, tt.status), func(t *testing.T) {
+			up := &hourlyUpstream{success: "2026-11-04T11:05:00Z", commit: "2026-09-11T12:00:00Z"}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == tt.path {
+					http.Error(w, `{"message":"Git Repository is empty."}`, tt.status)
+					return
+				}
+				up.ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+			raw, err := schedulesCollect(t, warnCfg(srv.URL, 7), nil, at("2026-11-04T12:00:00Z"), nil)
+			if !tt.ok {
+				if err == nil || raw != nil {
+					t.Fatalf("state %s, err %v", raw, err)
+				}
+				return
+			}
+			var s SchedulesState
+			if err != nil || json.Unmarshal(raw, &s) != nil || s.Private == nil || s.LastActivityAt != nil || s.DisableAt != nil || s.DisableSoon {
+				t.Fatalf("state %s, err %v", raw, err)
+			}
+		})
 	}
 }

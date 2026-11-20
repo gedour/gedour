@@ -426,6 +426,63 @@ func TestSchedulesWatchFirstRun(t *testing.T) {
 	if file("mirror.yml") != 1 || file("yearly.yml") != 1 || file("lint.yml") != 1 || file("ci.yml") != 2 {
 		t.Fatalf("file fetches mirror %d yearly %d lint %d ci %d", file("mirror.yml"), file("yearly.yml"), file("lint.yml"), file("ci.yml"))
 	}
+	// 019-AC13: warn_days 0 reads neither the repository nor its commits.
+	if up.Hits("/repos/acme/widgets") != 0 || up.Hits("/repos/acme/widgets/commits") != 0 {
+		t.Fatalf("warn calls: repo %d commits %d", up.Hits("/repos/acme/widgets"), up.Hits("/repos/acme/widgets/commits"))
+	}
+}
+
+// 019-AC13: with warn_days 7, fixture a's public repository, last commit 54 days old, gets one schedule.disable_soon
+// on the first run beside schedule.disabled; an unchanged run adds nothing, and fixture b's newer commit none.
+func TestSchedulesWatchDisableSoon(t *testing.T) {
+	e := newEnv(t)
+	up := testupstream.New()
+	up.SetNow(e.clock.now)
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	id := e.addWatch(t, "github_schedules", fmt.Sprintf(`{"repo":"acme/widgets","api_url":%q,"alive_on":"success","missed_runs":3,"warn_days":7,"auto_enable":false}`, srv.URL), "1m")
+	w := e.worker(t, e.pool, collect.Collectors())
+	events := func() string {
+		rows, _ := e.pool.Query(context.Background(), `SELECT type || ' ' || coalesce(payload->>'path', payload->>'repo') FROM events WHERE watch_id = $1 ORDER BY id`, id)
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(got, ",")
+	}
+	const want = "schedule.disabled .github/workflows/mirror.yml,schedule.disable_soon acme/widgets"
+	tick(t, w)
+	if got := events(); got != want {
+		t.Fatalf("first run: %s", got)
+	}
+	var disableAt, lastActivity time.Time
+	var workflows string
+	if err := e.pool.QueryRow(context.Background(), `SELECT (payload->>'disable_at')::timestamptz, (payload->>'last_activity_at')::timestamptz, payload->>'workflows'
+		FROM events WHERE watch_id = $1 AND type = 'schedule.disable_soon'`, id).Scan(&disableAt, &lastActivity, &workflows); err != nil {
+		t.Fatal(err)
+	}
+	if !lastActivity.Equal(t0.Add(-54*24*time.Hour)) || !disableAt.Equal(t0.Add(6*24*time.Hour)) || workflows != `[".github/workflows/yearly.yml"]` {
+		t.Fatalf("payload: last %v disable %v workflows %s", lastActivity, disableAt, workflows)
+	}
+	e.clock.set(t0.Add(time.Hour))
+	tick(t, w)
+	if got := events(); got != want {
+		t.Fatalf("unchanged run: %s", got)
+	}
+	up.SetFixture("b")
+	e.clock.set(t0.Add(2 * time.Hour))
+	tick(t, w)
+	if got := events(); got != want+",schedule.enabled .github/workflows/mirror.yml" {
+		t.Fatalf("fixture b: %s", got)
+	}
+	var soon *bool
+	if err := e.pool.QueryRow(context.Background(), `SELECT (state->>'disable_soon')::bool, (state->>'disable_at')::timestamptz FROM watch_states
+		WHERE watch_id = $1 ORDER BY id DESC LIMIT 1`, id).Scan(&soon, &disableAt); err != nil || soon != nil || !disableAt.Equal(t0.Add(2*time.Hour+59*24*time.Hour)) {
+		t.Fatalf("fixture b state: soon %v disable_at %v err %v", soon, disableAt, err)
+	}
+	if up.Hits("/repos/acme/widgets") != 3 || up.Hits("/repos/acme/widgets/commits") != 3 {
+		t.Fatalf("warn calls: repo %d commits %d", up.Hits("/repos/acme/widgets"), up.Hits("/repos/acme/widgets/commits"))
+	}
 }
 
 // 001-AC8: the first-run opt-in is per kind: another kind's first state stays a quiet baseline even when the

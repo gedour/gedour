@@ -99,6 +99,8 @@ func New() *Server {
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions", s.discussions)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}", s.static("github_discussion", "discussion"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/discussions/{n}/comments", s.static("github_discussion", "comments"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}", s.static("github_schedules", "repo"))
+	s.mux.HandleFunc("GET /repos/{o}/{r}/commits", s.lastCommit)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows", s.static("github_schedules", "workflows"))
 	s.mux.HandleFunc("GET /repos/{o}/{r}/actions/workflows/{id}/runs", s.workflowRuns)
 	s.mux.HandleFunc("GET /repos/{o}/{r}/contents/{path...}", s.contents)
@@ -321,6 +323,30 @@ func (s *Server) workflowRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// lastCommit serves the default branch's last commit from the github_schedules fixture, dated commit_age_days before
+// the server's clock for the same reason as workflowRuns: a fixed date would leave the warning window.
+func (s *Server) lastCommit(w http.ResponseWriter, _ *http.Request) {
+	var commits []map[string]any
+	var days int
+	if json.Unmarshal(Part("github_schedules", s.current(), "commits"), &commits) != nil ||
+		json.Unmarshal(Part("github_schedules", s.current(), "commit_age_days"), &days) != nil {
+		panic("github_schedules fixture: bad commits or commit_age_days")
+	}
+	s.mu.Lock()
+	at := s.now().Add(-time.Duration(days) * 24 * time.Hour).UTC().Format(time.RFC3339)
+	s.mu.Unlock()
+	for _, c := range commits {
+		commit, _ := c["commit"].(map[string]any)
+		for _, who := range []string{"author", "committer"} {
+			if p, ok := commit[who].(map[string]any); ok {
+				p["date"] = at
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(commits)
 }
 
 // contents serves the workflows directory listing, and each workflow file raw.

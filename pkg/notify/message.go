@@ -240,6 +240,10 @@ func summarize(e Event) string {
 	case "schedule.reenabled":
 		return "Scheduled workflow " + workflow + " re-enabled after " + disabledReason(from)
 	case "schedule.disable_soon":
+		// A warning turned on, or seen, after the cutoff: "turn off on" a past date would read wrong.
+		if t, err := time.Parse(time.RFC3339, str(p["disable_at"])); err == nil && !e.ObservedAt.IsZero() && !t.After(e.ObservedAt) {
+			return "Scheduled workflows of " + str(p["repo"]) + " are past the 60-day cutoff since " + when(p["disable_at"])
+		}
 		return "Scheduled workflows of " + str(p["repo"]) + " turn off on " + when(p["disable_at"]) + " without a commit"
 	case TestEventType:
 		return "test notification"

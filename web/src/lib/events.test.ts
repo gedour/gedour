@@ -438,6 +438,25 @@ describe("summarizeEvent", () => {
       "Scheduled workflows of o/r turn off on 2026-11-24 09:00 UTC without a commit",
       "bad",
     ],
+    // Seen at and after the cutoff (ev's observed_at is 2026-11-04T00:00:00Z).
+    [
+      ev("schedule.disable_soon", { repo: "o/r", disable_at: "2026-11-04T01:00:00+01:00" }),
+      "Turning off",
+      "Scheduled workflows of o/r are past the 60-day cutoff since 2026-11-04 00:00 UTC",
+      "bad",
+    ],
+    [
+      ev("schedule.disable_soon", { repo: "o/r", disable_at: "2026-10-01T00:00:00Z" }),
+      "Turning off",
+      "Scheduled workflows of o/r are past the 60-day cutoff since 2026-10-01 00:00 UTC",
+      "bad",
+    ],
+    [
+      ev("schedule.disable_soon", { repo: "o/r", disable_at: "2026-11-04T00:00:01Z" }),
+      "Turning off",
+      "Scheduled workflows of o/r turn off on 2026-11-04 00:00 UTC without a commit",
+      "bad",
+    ],
     [
       ev("schedule.disable_soon", { repo: "o/r", disable_at: "soon" }),
       "Turning off",

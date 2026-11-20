@@ -147,5 +147,36 @@
         }
       ]
     }
-  }
+  },
+  "repo": {
+    "id": 424242,
+    "node_id": "R_kgDOGeRaQg",
+    "name": "widgets",
+    "full_name": "acme/widgets",
+    "private": false,
+    "visibility": "public",
+    "html_url": "https://github.com/acme/widgets",
+    "default_branch": "main",
+    "archived": false,
+    "fork": false
+  },
+  "commits": [
+    {
+      "sha": "5f1c0a7e3b9d2c4f8a6e1b0d9c7f3a2e5b8d4c1f",
+      "node_id": "C_kwDOGeRaQg",
+      "html_url": "https://github.com/acme/widgets/commit/5f1c0a7e3b9d2c4f8a6e1b0d9c7f3a2e5b8d4c1f",
+      "commit": {
+        "author": {
+          "name": "Ada",
+          "email": "ada@example.com"
+        },
+        "committer": {
+          "name": "GitHub",
+          "email": "noreply@github.com"
+        },
+        "message": "Bump the report template"
+      }
+    }
+  ],
+  "commit_age_days": 54
 }

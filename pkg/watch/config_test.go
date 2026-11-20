@@ -110,6 +110,20 @@ func TestConfigValidation(t *testing.T) {
 		{"github discussion missing number and bad repo", KindGitHubDiscussion, `{"repo":"a/b/c"}`, "", []string{"body.config.repo", "body.config.number"}},
 		{"github discussion no repo", KindGitHubDiscussion, `{"number":1}`, "", []string{"body.config.repo"}},
 		{"github discussion http api", KindGitHubDiscussion, `{"repo":"a/b","number":1,"api_url":"http://ghe.example"}`, "", []string{"body.config.api_url"}},
+		// 019-AC1: github_schedules fills its defaults and checks each field.
+		{"github schedules defaults", KindGitHubSchedules, `{"repo":"acme/widgets"}`,
+			`{"alive_on":"success","api_url":"https://api.github.com","auto_enable":false,"missed_runs":3,"repo":"acme/widgets","warn_days":0}`, nil},
+		{"github schedules all set", KindGitHubSchedules, `{"repo":"acme/widgets","alive_on":"completed","missed_runs":10,"warn_days":30,"auto_enable":true}`,
+			`{"alive_on":"completed","api_url":"https://api.github.com","auto_enable":true,"missed_runs":10,"repo":"acme/widgets","warn_days":30}`, nil},
+		{"github schedules bad repo", KindGitHubSchedules, `{"repo":"acme"}`, "", []string{"body.config.repo"}},
+		{"github schedules missed 0", KindGitHubSchedules, `{"repo":"a/b","missed_runs":0}`, "", []string{"body.config.missed_runs"}},
+		{"github schedules missed 11", KindGitHubSchedules, `{"repo":"a/b","missed_runs":11}`, "", []string{"body.config.missed_runs"}},
+		{"github schedules missed string", KindGitHubSchedules, `{"repo":"a/b","missed_runs":"3"}`, "", []string{"body.config.missed_runs"}},
+		{"github schedules warn -1", KindGitHubSchedules, `{"repo":"a/b","warn_days":-1}`, "", []string{"body.config.warn_days"}},
+		{"github schedules warn 31", KindGitHubSchedules, `{"repo":"a/b","warn_days":31}`, "", []string{"body.config.warn_days"}},
+		{"github schedules alive_on", KindGitHubSchedules, `{"repo":"a/b","alive_on":"failure"}`, "", []string{"body.config.alive_on"}},
+		{"github schedules all bad", KindGitHubSchedules, `{"repo":"a","alive_on":"x","missed_runs":-1,"warn_days":99,"api_url":"http://ghe.example"}`, "",
+			[]string{"body.config.repo", "body.config.api_url", "body.config.alive_on", "body.config.missed_runs", "body.config.warn_days"}},
 		{"gitlab release defaults", KindGitLabRelease, `{"project":"gitlab-org/gitlab"}`,
 			`{"base_url":"https://gitlab.com","project":"gitlab-org/gitlab"}`, nil},
 		{"gitlab nested self-hosted", KindGitLabRelease, `{"project":"/grp/sub/proj/","base_url":"https://git.example"}`,
@@ -186,10 +200,26 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("last4(%q) = %q", in, got)
 		}
 	}
-	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken, KindGitHubIssue: CredGitHubToken, KindGitHubDiscussion: CredGitHubToken,
+	for kind, want := range map[string]string{KindGitHubRepo: CredGitHubToken, KindGitHubPR: CredGitHubToken, KindGitHubIssue: CredGitHubToken, KindGitHubDiscussion: CredGitHubToken, KindGitHubSchedules: CredGitHubToken,
 		KindGitLabRelease: CredGitLabToken, KindGitLabMR: CredGitLabToken, KindOCITags: CredRegistryBasic} {
 		if CredentialKindFor(kind) != want {
 			t.Errorf("%s: %s", kind, CredentialKindFor(kind))
+		}
+	}
+}
+
+// 019-AC1: auto_enable needs a credential; off, or with one, it passes.
+func TestAutoEnableError(t *testing.T) {
+	on := map[string]any{"repo": "a/b", "auto_enable": true}
+	if err := autoEnableError(on, false); locations([]error{err})[0] != "body.config.auto_enable" {
+		t.Fatalf("no credential: %v", err)
+	}
+	for _, tt := range []struct {
+		cfg  map[string]any
+		cred bool
+	}{{on, true}, {map[string]any{"auto_enable": false}, false}, {map[string]any{}, false}, {nil, false}} {
+		if err := autoEnableError(tt.cfg, tt.cred); err != nil {
+			t.Errorf("%v %v: %v", tt.cfg, tt.cred, err)
 		}
 	}
 }

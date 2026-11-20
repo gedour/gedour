@@ -6,6 +6,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -116,6 +117,43 @@ func TestOpenAPIDrift(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatal("api/openapi.json is stale: run `make openapi` and commit the result")
+	}
+}
+
+// Every kind enum (watch, watch filter, rule and script inputs) lists exactly watch.Kinds: a new kind cannot miss one.
+func TestOpenAPIKindEnums(t *testing.T) {
+	var doc any
+	if err := json.Unmarshal(renderOpenAPI(t), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join(watch.Kinds, ",")
+	found := 0
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if enum, ok := x["enum"].([]any); ok && slices.Contains(enum, any(watch.KindGitHubRepo)) {
+				found++
+				got := make([]string, 0, len(enum))
+				for _, e := range enum {
+					got = append(got, e.(string))
+				}
+				if strings.Join(got, ",") != want {
+					t.Errorf("kind enum %v, want %s", got, want)
+				}
+			}
+			for _, c := range x {
+				walk(c)
+			}
+		case []any:
+			for _, c := range x {
+				walk(c)
+			}
+		}
+	}
+	walk(doc)
+	if found < 5 {
+		t.Fatalf("%d kind enums found", found)
 	}
 }
 

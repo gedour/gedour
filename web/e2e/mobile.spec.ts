@@ -76,6 +76,14 @@ test("main views fit 375 px", async ({ page }) => {
         .locator("..")
         .click();
       await expect(page.getByLabel("Discussion number")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      // 019-AC12: the github_schedules form fits too.
+      await page
+        .getByRole("radio", { name: /GitHub scheduled workflows/ })
+        .locator("..")
+        .click();
+      await expect(page.getByLabel("Proof of life")).toBeVisible();
+      await expect(page.getByText(/2 requests plus 1 per scheduled workflow/)).toBeVisible();
     }
     await expectNoHorizontalScroll(page);
   }

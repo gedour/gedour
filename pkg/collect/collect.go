@@ -75,6 +75,17 @@ func (k kind[C, S]) Diff(old, new json.RawMessage) ([]Event, error) {
 	return k.diff(o, n), nil
 }
 
+// Deadman is a kind that reports what is already broken on its first run: its first state diffs against an empty one
+// instead of being a quiet baseline (unlike 001-AC8). It also reads its last stored state in Fetcher.Prev.
+type Deadman interface {
+	Collector
+	deadman()
+}
+
+type deadman[C, S any] struct{ kind[C, S] }
+
+func (deadman[C, S]) deadman() {}
+
 // Collectors returns the collector of every watch kind.
 func Collectors() map[string]Collector {
 	return map[string]Collector{
@@ -82,6 +93,7 @@ func Collectors() map[string]Collector {
 		watch.KindGitHubPR:         kind[watch.GitHubPRConfig, PRState]{collectGitHubPR, diffPR},
 		watch.KindGitHubIssue:      kind[watch.GitHubIssueConfig, IssueState]{collectGitHubIssue, diffIssue},
 		watch.KindGitHubDiscussion: kind[watch.GitHubDiscussionConfig, DiscussionState]{collectGitHubDiscussion, diffDiscussion},
+		watch.KindGitHubSchedules:  deadman[watch.GitHubSchedulesConfig, SchedulesState]{kind[watch.GitHubSchedulesConfig, SchedulesState]{collectGitHubSchedules, diffSchedules}},
 		watch.KindGitLabRelease:    kind[watch.GitLabReleaseConfig, ReleaseState]{collectGitLabReleases, diffReleases},
 		watch.KindGitLabMR:         kind[watch.GitLabMRConfig, MRState]{collectGitLabMR, diffMR},
 		watch.KindOCITags:          kind[watch.OCITagsConfig, TagState]{collectOCITags, diffTags},

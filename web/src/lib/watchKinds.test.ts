@@ -26,6 +26,21 @@ describe("toConfig / fromConfig", () => {
       new_prs: false,
       new_discussions: false,
     });
+    // 019-AC12: the select sends its value, numbers as numbers, the box always.
+    expect(
+      toConfig("github_schedules", {
+        repo: "a/b",
+        alive_on: "completed",
+        missed_runs: "3",
+        warn_days: "0",
+      }),
+    ).toEqual({
+      repo: "a/b",
+      alive_on: "completed",
+      missed_runs: 3,
+      warn_days: 0,
+      auto_enable: false,
+    });
     expect(toConfig("oci_tags", { repository: "postgres", semver_only: true })).toEqual({
       repository: "postgres",
       semver_only: true,
@@ -68,6 +83,7 @@ describe("targetSummary", () => {
     ["github_pr", { repo: "golang/go", number: 5 }, "golang/go #5"],
     ["github_issue", { repo: "cli/cli", number: 9400 }, "cli/cli #9400"],
     ["github_discussion", { repo: "cli/cli", number: 9507 }, "cli/cli #9507"],
+    ["github_schedules", { repo: "acme/widgets", missed_runs: 3 }, "acme/widgets schedules"],
     ["gitlab_release", { project: "a/b" }, "a/b releases"],
     ["gitlab_mr", { project: "a/b", iid: 9 }, "a/b !9"],
     ["oci_tags", { registry: "docker.io", repository: "library/postgres" }, "postgres tags"],
@@ -111,6 +127,11 @@ describe("upstreamPage", () => {
       "github_discussion",
       { repo: "o/r", number: 5, api_url: "https://api.github.com" },
       "https://github.com/o/r/discussions/5",
+    ],
+    [
+      "github_schedules",
+      { repo: "o/r", api_url: "https://api.github.com" },
+      "https://github.com/o/r/actions",
     ],
     [
       "gitlab_release",
@@ -178,6 +199,7 @@ describe("credentialHost", () => {
   it.each([
     ["github_repo", {}, "api.github.com"],
     ["github_pr", { api_url: " https://ghe.example.com:8443/api/v3 " }, "ghe.example.com:8443"],
+    ["github_schedules", {}, "api.github.com"],
     ["gitlab_mr", {}, "gitlab.com"],
     ["gitlab_release", { base_url: "https://git.example.com" }, "git.example.com"],
     ["gitlab_release", { base_url: "not a url" }, "not a url"],

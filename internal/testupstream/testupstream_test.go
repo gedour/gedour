@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -200,4 +201,62 @@ func TestPush(t *testing.T) {
 	if n := len(up.Received()); n != len(got) {
 		t.Fatalf("hang recorded: %d entries, want %d", n, len(got))
 	}
+}
+
+// 019-AC14: a workflow re-enable answers 204 like GitHub and is recorded with its headers; another method is not one.
+func TestWorkflowEnable(t *testing.T) {
+	up := New()
+	srv := httptest.NewServer(up)
+	defer srv.Close()
+	for _, tt := range []struct {
+		method string
+		code   int
+	}{{http.MethodPut, http.StatusNoContent}, {http.MethodPost, http.StatusMethodNotAllowed}, {http.MethodGet, http.StatusMethodNotAllowed}} {
+		req, _ := http.NewRequestWithContext(context.Background(), tt.method, srv.URL+"/repos/acme/widgets/actions/workflows/1001/enable", nil)
+		req.Header.Set("Authorization", "Bearer x")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != tt.code {
+			t.Errorf("%s: %d", tt.method, resp.StatusCode)
+		}
+	}
+	if got := up.Received(); len(got) != 1 || got[0].Endpoint != "enable-1001" || got[0].Header["Authorization"] != "Bearer x" {
+		t.Fatalf("received: %+v", got)
+	}
+	// Listed active from then on, a state set by hand too, until the fixture set changes.
+	up.SetWorkflowState("1002", "disabled_manually")
+	if got := listedStates(t, srv.URL); got != "1001 active,1002 disabled_manually,1003 active,1004 active,1005 active" {
+		t.Fatalf("states %s", got)
+	}
+	up.SetFixture("a")
+	if got := listedStates(t, srv.URL); got != "1001 disabled_inactivity,1002 active,1003 active,1004 active,1005 active" {
+		t.Fatalf("states after SetFixture %s", got)
+	}
+}
+
+func listedStates(t *testing.T, base string) string {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/repos/acme/widgets/actions/workflows", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body struct {
+		Workflows []struct {
+			ID    int    `json:"id"`
+			State string `json:"state"`
+		} `json:"workflows"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, w := range body.Workflows {
+		out = append(out, fmt.Sprintf("%d %s", w.ID, w.State))
+	}
+	return strings.Join(out, ",")
 }

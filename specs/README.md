@@ -20,3 +20,4 @@
 | [016](016-mcp-credentials.md) | Credentials over MCP | shipped |
 | [017](017-group-poll-events.md) | One message per poll, gedour link in messages | shipped |
 | [018](018-digest-weekdays.md) | Digest weekdays | shipped |
+| [019](019-github-schedules-deadman.md) | GitHub scheduled workflows deadman | shipped |

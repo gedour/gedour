@@ -641,7 +641,7 @@ func TestStaleRuns(t *testing.T) {
 }
 
 // Shutdown: in-flight runs finish within the drain timeout; past it they are cancelled and their
-// claims released for another replica.
+// claims released for another replica when cut short (a run that read everything is stored, TestSchedulesWatchShutdownAfterReenable).
 func TestRunDrainsAndReleases(t *testing.T) {
 	t.Run("finishes in-flight", func(t *testing.T) {
 		e := newEnv(t)
@@ -692,7 +692,8 @@ func TestRunDrainsAndReleases(t *testing.T) {
 		<-started
 		cancel()
 		<-done
-		if r := e.row(t, id); r.status != nil || !r.next.Equal(t0) {
+		// A run cut short by the shutdown stores nothing: another replica runs it.
+		if r := e.row(t, id); r.status != nil || !r.next.Equal(t0) || e.count(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, id) != 0 {
 			t.Fatalf("claim not released: %+v", r)
 		}
 	})

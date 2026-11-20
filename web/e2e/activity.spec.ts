@@ -862,6 +862,52 @@ test("a discussion watch reports a close and a reply", async ({ page }) => {
   await call("DELETE", `/api/v1/watches/${id}`);
 });
 
+// 019-AC12, 019-AC11: a pasted Actions URL picks the scheduled workflows kind; its first run reports fixture A's
+// disabled workflow, then fixture B's re-enabled one shows on top.
+test("a scheduled workflows watch reports a disabled then enabled workflow", async ({ page }) => {
+  const t = tag();
+  await page.goto("/watches/new");
+  await setFixture(page, "a");
+  await page.getByLabel("Paste a URL").fill("https://github.com/acme/widgets/actions");
+  await expect(page.getByText("Recognized: GitHub scheduled workflows")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /GitHub scheduled workflows/ })).toBeChecked();
+  await expect(page.getByLabel("Repository", { exact: true })).toHaveValue("acme/widgets");
+  await page.getByLabel("API URL (optional)").fill(UPSTREAM);
+  await page.getByLabel("Name").fill(`Schedules ${t}`);
+  await page.getByRole("button", { name: "Create watch" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: `Schedules ${t}` })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/").pop() as string;
+  const call = await api(page);
+  await expect
+    .poll(async () => (await (await call("GET", `/api/v1/watches/${id}`)).json()).last_status, {
+      timeout: 15_000,
+    })
+    .toBe("ok");
+
+  // Unlike other kinds, the first run reports what is already broken.
+  await page.reload();
+  const events = page.getByRole("list", { name: "Events" }).getByRole("listitem");
+  await expect(events).toHaveText([/Scheduled workflow mirror\.yml disabled \(inactivity\)/]);
+
+  await setFixture(page, "b");
+  await page
+    .getByRole("region", { name: "Status" })
+    .getByRole("button", { name: "Run now" })
+    .click();
+  await expect(events).toHaveText(
+    [
+      /Scheduled workflow mirror\.yml enabled/,
+      /Scheduled workflow mirror\.yml disabled \(inactivity\)/,
+    ],
+    { timeout: 15_000 },
+  );
+  await page.getByRole("tab", { name: "State" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText(".github/workflows/mirror.yml");
+
+  await setFixture(page, "a");
+  await call("DELETE", `/api/v1/watches/${id}`);
+});
+
 // 010-AC18: a rule targeting a Web Push channel pushes its routed events and each delivery is sent.
 // 017-AC2, 017-AC18: the poll's two events are one notification, "2 new events" with the watch name, opening /inbox.
 test("a rule routes upstream changes to Web Push", async ({ page }) => {

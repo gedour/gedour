@@ -216,6 +216,24 @@ func TestRetargetResetsBaseline(t *testing.T) {
 	}
 }
 
+// A github_schedules threshold edit keeps the states, so the next run diffs rather than re-reporting from empty; a repo change drops them.
+func TestScheduleThresholdsKeepStates(t *testing.T) {
+	a := newDevApp(t)
+	alice := a.signIn(t, "alice")
+	var w activityWatch
+	a.mustCall(t, alice, http.MethodPost, "/api/v1/watches", map[string]any{"name": "d", "kind": "github_schedules", "config": map[string]any{"repo": "acme/widgets"}}, http.StatusCreated, &w)
+	base := "/api/v1/watches/" + w.ID
+	a.exec(t, `INSERT INTO watch_states (watch_id, state, state_hash) VALUES ($1, '{}', 'h')`, w.ID)
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "acme/widgets", "missed_runs": 5, "alive_on": "completed", "warn_days": 7}}, http.StatusOK, &w)
+	if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 1 {
+		t.Fatalf("thresholds changed: states=%d", s)
+	}
+	a.mustCall(t, alice, http.MethodPatch, base, map[string]any{"config": map[string]any{"repo": "acme/gadgets", "missed_runs": 5}}, http.StatusOK, &w)
+	if s := a.countRows(t, `SELECT count(*) FROM watch_states WHERE watch_id = $1`, w.ID); s != 0 {
+		t.Fatalf("repo changed: states=%d", s)
+	}
+}
+
 // 011-AC13: toggling reactions keeps the states, and checking it does not make the watch due: the next run baselines it.
 func TestReactionsBoxKeepsSchedule(t *testing.T) {
 	a := newDevApp(t)

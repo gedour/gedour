@@ -34,6 +34,7 @@ func (e *RateLimitError) Error() string {
 
 // HTTPError is a non-2xx upstream answer.
 type HTTPError struct {
+	Method string
 	Status int
 	URL    string
 	Header http.Header
@@ -41,7 +42,7 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	msg := fmt.Sprintf("GET %s: HTTP %d", e.URL, e.Status)
+	msg := fmt.Sprintf("%s %s: HTTP %d", e.Method, e.URL, e.Status)
 	if e.Body != "" {
 		msg += ": " + e.Body
 	}
@@ -70,12 +71,26 @@ type Fetcher struct {
 	Now   func() time.Time
 	// Notes holds a release watch's notes by tag, for this run's events only; nil for other kinds.
 	Notes map[string]string
+	// Prev is the watch's last stored state, set only for a Deadman kind; nil on its first run.
+	Prev json.RawMessage
 	// Items holds the issue.opened, pr.opened and discussion.opened event of each listed item whose box is on, by number, for
 	// this run's events only; nil unless a github_repo box is on.
 	Items map[int]Event
+	// Reenables lists this run's workflow re-enable calls, for the run log; nil unless a github_schedules watch made one.
+	Reenables []Reenable
+}
+
+// Reenable is the outcome of one github_schedules auto-enable PUT.
+type Reenable struct {
+	Repo, Path string
+	// Status is the HTTP status, 0 when no answer came back.
+	Status int
+	// Err is empty on success.
+	Err string
 }
 
 type response struct {
+	status int
 	header http.Header
 	body   []byte
 }
@@ -89,6 +104,11 @@ func (f *Fetcher) now() time.Time {
 
 // get fetches rawURL; conditional sends the cached validators and returns ErrNotModified on 304.
 func (f *Fetcher) get(ctx context.Context, rawURL string, hdr http.Header, conditional bool) (*response, error) {
+	return f.do(ctx, http.MethodGet, rawURL, hdr, conditional)
+}
+
+// do sends a bodiless request through the guarded client, with the response cap and the rate-limit detection.
+func (f *Fetcher) do(ctx context.Context, method, rawURL string, hdr http.Header, conditional bool) (*response, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse url: %w", err)
@@ -97,7 +117,7 @@ func (f *Fetcher) get(ctx context.Context, rawURL string, hdr http.Header, condi
 		return nil, err
 	}
 	f.addHost(u.Host)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -117,15 +137,15 @@ func (f *Fetcher) get(ctx context.Context, rawURL string, hdr http.Header, condi
 	}
 	resp, err := f.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", rawURL, err)
+		return nil, fmt.Errorf("%s %s: %w", method, rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: read body: %w", rawURL, err)
+		return nil, fmt.Errorf("%s %s: read body: %w", method, rawURL, err)
 	}
 	if len(body) > MaxBody {
-		return nil, fmt.Errorf("GET %s: response larger than %d MiB", rawURL, MaxBody>>20)
+		return nil, fmt.Errorf("%s %s: response larger than %d MiB", method, rawURL, MaxBody>>20)
 	}
 	if until, ok := rateLimited(resp.StatusCode, resp.Header, f.now()); ok {
 		return nil, &RateLimitError{Until: until, URL: rawURL}
@@ -134,7 +154,7 @@ func (f *Fetcher) get(ctx context.Context, rawURL string, hdr http.Header, condi
 	case resp.StatusCode == http.StatusNotModified && conditional:
 		return nil, ErrNotModified
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		return nil, &HTTPError{Status: resp.StatusCode, URL: rawURL, Header: resp.Header, Body: snippet(body)}
+		return nil, &HTTPError{Method: method, Status: resp.StatusCode, URL: rawURL, Header: resp.Header, Body: snippet(body)}
 	}
 	if conditional {
 		v := Validators{ETag: resp.Header.Get("ETag"), LastModified: resp.Header.Get("Last-Modified")}
@@ -145,7 +165,7 @@ func (f *Fetcher) get(ctx context.Context, rawURL string, hdr http.Header, condi
 			f.Updates[rawURL] = v
 		}
 	}
-	return &response{header: resp.Header, body: body}, nil
+	return &response{status: resp.StatusCode, header: resp.Header, body: body}, nil
 }
 
 func (f *Fetcher) addHost(h string) {

@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { mockApi } from "@/test/api";
 import { renderApp } from "@/test/render";
@@ -364,6 +364,187 @@ describe("StatePanel", () => {
     expect(panel).toHaveTextContent("#9400");
     expect(panel).toHaveTextContent("closed (not planned)");
     expect(panel).toHaveTextContent("bugwontfix");
+  });
+
+  // 019-AC11: each scheduled workflow with its state, staleness and last proof of life.
+  it("renders the scheduled workflows of a repository", async () => {
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Mirror",
+                  path: ".github/workflows/mirror.yml",
+                  state: "disabled_inactivity",
+                  url: "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+                  last_alive_at: "2026-01-01T03:00:31Z",
+                  stale: false,
+                },
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state: "active",
+                  url: "javascript:alert(1)",
+                  last_alive_at: null,
+                  stale: true,
+                  missed: 3,
+                },
+                // The collector stops counting at 1000.
+                {
+                  name: "Minutely",
+                  path: ".github/workflows/minutely.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: true,
+                  missed: 1000,
+                },
+                // A stale entry stored without its count still reads stale.
+                {
+                  name: "Weekly",
+                  path: ".github/workflows/weekly.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: true,
+                },
+              ],
+              unscheduled: {},
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(await screen.findByRole("link", { name: "Mirror" })).toHaveAttribute(
+      "href",
+      "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+    );
+    expect(screen.queryByRole("link", { name: "Nightly" })).not.toBeInTheDocument();
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveTextContent("disabled inactivity");
+    expect(panel).toHaveTextContent("stale, 3 missed");
+    expect(screen.getByText(".github/workflows/minutely.yml").closest("tr")).toHaveTextContent(
+      "stale, 1000+ missed",
+    );
+    expect(panel).toHaveTextContent(".github/workflows/nightly.yml");
+    const weekly = screen.getByText(".github/workflows/weekly.yml").closest("tr");
+    expect(weekly).toHaveTextContent("stale");
+    expect(weekly).not.toHaveTextContent("missed");
+  });
+
+  // 019-AC13: the predicted cutoff, flagged once inside the warning window.
+  it.each([
+    ["active, in the window", "active", true, "soon"],
+    ["active, before the window", "active", false, ""],
+    ["no active workflow", "disabled_inactivity", true, null],
+  ] as const)("shows the predicted cutoff: %s", async (_, state, soon, flag) => {
+    // Pinned so the past/future wording and the relative date read the same clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T10:05:00Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    // snapshot() observes at 2026-11-03T10:05:00Z.
+    const disableAt = "2026-11-09T10:05:00Z";
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state,
+                  url: "",
+                  last_alive_at: null,
+                  stale: false,
+                },
+              ],
+              unscheduled: {},
+              repo: "acme/widgets",
+              private: false,
+              last_activity_at: "2026-09-11T12:00:00Z",
+              disable_at: disableAt,
+              disable_soon: soon,
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    await screen.findByText(".github/workflows/nightly.yml");
+    if (flag === null) {
+      expect(screen.queryByText(/GitHub turns these schedules off/)).not.toBeInTheDocument();
+      return;
+    }
+    const line = screen.getByText(/GitHub turns these schedules off/);
+    expect(line).toHaveTextContent(/without a new commit/i);
+    expect(within(line).getByRole("time")).toHaveAttribute("datetime", disableAt);
+    if (flag) expect(line).toHaveTextContent(/soon$/);
+    else expect(line).not.toHaveTextContent("soon");
+  });
+
+  // A cutoff already behind now reads as past, not as a coming turn-off. Now, not the state's observed_at
+  // (2026-11-03T10:05:00Z): a state observed before the cutoff, viewed after it, reads as past.
+  it.each([
+    ["three days before", "2026-10-31T10:05:00Z", "2026-11-03T10:05:00Z"],
+    ["right when", "2026-11-03T10:05:00Z", "2026-11-03T10:05:00Z"],
+    ["after the observed state", "2026-11-04T10:05:00Z", "2026-11-05T10:05:00Z"],
+  ])("says the cutoff passed %s now", async (_, disableAt, now) => {
+    // Pinned so the past/future wording and the relative date read the same clock.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": {
+          items: [
+            snapshot(1, {
+              workflows: [
+                {
+                  name: "Nightly",
+                  path: ".github/workflows/nightly.yml",
+                  state: "active",
+                  url: "",
+                  last_alive_at: null,
+                  stale: false,
+                },
+              ],
+              unscheduled: {},
+              disable_at: disableAt,
+              disable_soon: true,
+            }),
+          ],
+        },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    const line = await screen.findByText(/Past GitHub's 60-day cutoff/);
+    expect(within(line).getByRole("time")).toHaveAttribute("datetime", disableAt);
+    expect(screen.queryByText(/turns these schedules off/)).not.toBeInTheDocument();
+    expect(line).not.toHaveTextContent("soon");
+  });
+
+  it("says when a repository has no scheduled workflow", async () => {
+    mockApi(
+      routes(watch({ kind: "github_schedules" }), {
+        "/api/v1/watches/w1/states": { items: [snapshot(1, { workflows: null, unscheduled: {} })] },
+      }),
+    );
+    renderApp("/watches/w1");
+    await openState();
+    expect(
+      await screen.findByText("No scheduled workflow in this repository."),
+    ).toBeInTheDocument();
   });
 
   it("renders a discussion summary with its category and answer", async () => {

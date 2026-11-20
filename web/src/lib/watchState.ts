@@ -44,6 +44,21 @@ export interface MRState {
   sha: string;
   url: string;
 }
+export interface ScheduledWorkflow {
+  name: string;
+  path: string;
+  state: string;
+  url: string;
+  last_alive_at: string | null;
+  stale: boolean;
+  missed?: number;
+}
+export interface SchedulesState {
+  workflows: ScheduledWorkflow[] | null;
+  /** Set with warn_days on a public repository: last commit + 60 days. */
+  disable_at?: string;
+  disable_soon?: boolean;
+}
 export interface TagState {
   tags: string[] | null;
   count: number;
@@ -69,6 +84,15 @@ export function stateLine(kind: WatchKind, state: unknown): string {
       const s = state as IssueState;
       const labels = s.labels ?? [];
       return `${issueStateText(s)}${labels.length ? ` · ${labels.join(", ")}` : ""}`;
+    }
+    case "github_schedules": {
+      const ws = (state as SchedulesState).workflows ?? [];
+      const disabled = ws.filter((w) => w.state !== "active").length;
+      const stale = ws.filter((w) => w.stale).length;
+      const problems = [disabled && `${disabled} disabled`, stale && `${stale} stale`].filter(
+        Boolean,
+      );
+      return `${ws.length} scheduled workflow${ws.length === 1 ? "" : "s"} · ${problems.length ? problems.join(" · ") : "all healthy"}`;
     }
     case "gitlab_mr": {
       const s = state as MRState;

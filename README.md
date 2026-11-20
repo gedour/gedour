@@ -2,7 +2,7 @@
 
 # gedour
 
-Self-hosted watch service: follows upstream releases, issues, discussions, pull/merge requests and image tags, keeps their
+Self-hosted watch service: follows upstream releases, issues, discussions, pull/merge requests, scheduled workflows and image tags, keeps their
 last state, and sends only the changes that matter to the channels you pick.
 
 The name is Breton: *gedour* (pronounced like *get* + *door*, hard G, /ˈɡeː.dur/) means lookout,
@@ -291,7 +291,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   share the load, each due run executes once, and a crashed worker's watch runs again after the lease.
   Watches of a disabled owner are not claimed, and `gedour_watches_due` leaves them out.
   Runs time out after 60 s (stored as an error, with backoff); on SIGTERM in-flight runs get
-  `GEDOUR_SHUTDOWN_TIMEOUT` to finish. A run-now, resume or edit during a run never starts a second one:
+  `GEDOUR_SHUTDOWN_TIMEOUT` to finish. Past it, a run cut short goes back to the queue; one that had read
+  everything is stored. A run-now, resume or edit during a run never starts a second one:
   the watch reads `running: true`, and the request is kept for when the run ends, unless that run ends on the upstream's rate limit, which sets the next run; a changed target still runs at once.
 - Default schedule: `1h` for GitHub watches (unauthenticated GitHub allows 60 requests an hour per
   address), `15m` for the others; any schedule can be set explicitly.
@@ -300,12 +301,12 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `RateLimit-Reset`, `Retry-After`) push the next run to the reset time, at most 1 h away, without
   counting as a failure. Release watches send `If-None-Match`/`If-Modified-Since`; a 304 means unchanged. A GitHub
   repository watch with a new-items box on reads all its lists in full: a 304 on one would skip the others.
-- The first run stores a baseline and emits nothing. Each later change becomes typed events
+- The first run stores a baseline and emits nothing (`github_schedules` excepted, below). Each later change becomes typed events
   (`release.published`, `release.promoted`, `issue.opened`, `pr.opened`, `discussion.opened`, `pr.state_changed`, `pr.draft_changed`,
   `pr.review_changed`, `pr.ci_changed`, `pr.commented`, `issue.state_changed`, `issue.labels_changed`,
   `issue.commented`, `discussion.state_changed`, `discussion.answer_changed`, `discussion.labels_changed`,
   `discussion.commented`, `issue.reacted`, `pr.reacted`, `discussion.reacted`, `mr.state_changed`, `mr.draft_changed`, `mr.approval_changed`,
-  `mr.pipeline_changed`, `tag.created`, `tag.removed`). Changing a watch's target clears its states: the next
+  `mr.pipeline_changed`, `tag.created`, `tag.removed`, and the `schedule.*` events below). Changing a watch's target clears its states: the next
   run is a new baseline. The last 50 states per watch are kept; events are kept.
 - `pr.commented` covers conversation comments, inline review comments and review bodies, one event per
   comment. A PR run makes 6 GitHub requests (7 past 100 conversation comments).
@@ -352,6 +353,47 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `comment`), `added` (kind to its rise, rises only) and `counts` (the 8 current counts). A drop emits nothing. The
   first run after the box is checked, and a comment new in the run, are a baseline. Toggling the box is no
   retarget, and checking it does not make the watch due. Who reacted is not reported.
+- A `github_schedules` watch (config `repo`, `api_url`, like `github_repo`) follows every scheduled workflow of
+  one repository: each workflow whose file in `.github/workflows` on the default branch has an `on.schedule`
+  entry. Other workflows, dynamic ones (CodeQL, Dependabot) included, are left out. Config: `alive_on`
+  (`success`, the default, or `completed`: the scheduled run that counts as proof of life), `missed_runs` (1 to
+  10, default 3), `warn_days` (0 to 30, default 0: off) and `auto_enable` (default `false`). Changing these four
+  is no retarget: the states stay.
+  - Events, subject the workflow path, payload `workflow`, `path`, `state`, `last_alive_at`, `url`:
+    `schedule.disabled` (the workflow left `active` for `disabled_inactivity`, `disabled_manually` or
+    `disabled_fork`; plus `reenable_error` when a re-enable failed), `schedule.enabled` (back to
+    `active`), `schedule.stale` (plus `missed`, the count up to 1000, and `expected_at`, the oldest missed time),
+    `schedule.recovered` and `schedule.reenabled` (gedour re-enabled it; plus `from`). And
+    `schedule.disable_soon`, subject the repository, payload `repo`, `last_activity_at`, `disable_at`,
+    `workflows` (paths of the active scheduled workflows).
+  - Staleness: the expected times come from the workflow's cron lines, in UTC or in its `timezone`. A workflow
+    is stale when `missed_runs` of them fall after its last proof-of-life run (or, when later, its last update,
+    its re-enable by gedour, or when gedour first saw it active again) and more than 1 h before now: GitHub delays scheduled runs under load. Only an `active` workflow is stale.
+    A job that runs again, then stalls again before the next check, gets a new `schedule.stale`.
+  - Unlike other kinds, the first run reports what is already broken: `schedule.disabled`, `schedule.stale` and
+    `schedule.disable_soon`. A healthy repository emits nothing.
+  - Requests per run: 2 (the workflow list and the `.github/workflows` listing) plus 1 per active scheduled
+    workflow (its last scheduled run). A workflow file is fetched again only when its blob `sha` changes. When
+    the rate limit left cannot cover the rest of a run, the run stops before those calls and waits for the reset;
+    one that needs more than the whole limit fails, its error naming the count (attach a credential).
+  - `warn_days` adds 2 requests (the repository and its last commit). GitHub turns off the scheduled workflows of
+    a public repository after 60 days without activity: `schedule.disable_soon` goes out `warn_days` days before
+    the last default-branch commit + 60 days, while a scheduled workflow is active. A newer commit resets it. A
+    private repository never gets it.
+  - `auto_enable` re-enables a `disabled_inactivity` workflow (`PUT .../enable`: 1 request, sent once every read
+    of the run is done; the workflow's runs call waits for the next run), with `schedule.reenabled` instead of
+    `schedule.disabled`. `disabled_manually` and `disabled_fork` are left alone. Only a 204 counts: a failed PUT
+    (403, 404, 5xx, another status, network) does not fail the run: `schedule.disabled` carries `reenable_error`,
+    once per failure streak, also on a workflow already disabled, and each next run tries again, with
+    `schedule.reenabled` once it works. A rate-limited PUT waits for the reset like any call, unless a PUT of the
+    same run worked: the run then keeps it and leaves the rest, with their stored reason, for the next run, as it
+    does when it times out.
+    Each PUT is logged (`workflow_reenabled`, `workflow_reenable_failed`), not audited. `auto_enable` needs a
+    credential (400 without one), and only a signed-in session turns it on or changes the repository, `api_url` or
+    credential of a watch that has it on: an API key gets a 403 there, yet may edit the other fields.
+  - Token permissions (fine-grained): Actions read, Metadata read, Contents read on a private repository, and
+    Actions write for `auto_enable`. Example: a watch on `acme/widgets` with `missed_runs: 3` reports a nightly
+    job that has not succeeded for three nights.
 - SSRF guard: outbound requests refuse loopback, private (RFC 1918, ULA), link-local (cloud metadata
   included), CGNAT, multicast and reserved addresses (IPv4 inside NAT64 and 6to4 included, Teredo refused),
   checked after DNS resolution on every connection,
@@ -764,6 +806,10 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
   rule with restricted days back to every day (an immediate rule that kept days: save it once), scale web and
   worker to 0, run migration 28's `Down` section by hand (`psql`; it refuses a rule not on every day and names
   it), delete version 28 from `goose_db_version`, then deploy the older image.
+- Scheduled workflows deadman (migration 29). Rollback: deploy the older image first; its `github_schedules`
+  watches then fail every run and their detail page does not render. Delete those watches, run migration 29's
+  `Down` section by hand (`psql`; it refuses while such a watch exists) and delete version 29 from
+  `goose_db_version`.
 
 ## Endpoints
 

@@ -1,0 +1,182 @@
+{
+  "workflows": {
+    "total_count": 5,
+    "workflows": [
+      {
+        "id": 1001,
+        "node_id": "W_kwDO1001",
+        "name": "Mirror",
+        "path": ".github/workflows/mirror.yml",
+        "state": "disabled_inactivity",
+        "created_at": "2025-03-10T08:00:00Z",
+        "updated_at": "2026-07-01T09:00:00Z",
+        "url": "https://api.github.com/repos/acme/widgets/actions/workflows/1001",
+        "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+        "badge_url": "https://github.com/acme/widgets/workflows/Mirror/badge.svg"
+      },
+      {
+        "id": 1002,
+        "node_id": "W_kwDO1002",
+        "name": "Yearly report",
+        "path": ".github/workflows/yearly.yml",
+        "state": "active",
+        "created_at": "2025-03-10T08:00:00Z",
+        "updated_at": "2025-12-01T10:00:00Z",
+        "url": "https://api.github.com/repos/acme/widgets/actions/workflows/1002",
+        "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/yearly.yml",
+        "badge_url": "https://github.com/acme/widgets/workflows/Yearly%20report/badge.svg"
+      },
+      {
+        "id": 1003,
+        "node_id": "W_kwDO1003",
+        "name": "CI",
+        "path": ".github/workflows/ci.yml",
+        "state": "active",
+        "created_at": "2025-03-10T08:00:00Z",
+        "updated_at": "2025-03-10T08:00:00Z",
+        "url": "https://api.github.com/repos/acme/widgets/actions/workflows/1003",
+        "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/ci.yml",
+        "badge_url": "https://github.com/acme/widgets/workflows/CI/badge.svg"
+      },
+      {
+        "id": 1004,
+        "node_id": "W_kwDO1004",
+        "name": "Lint",
+        "path": ".github/workflows/lint.yml",
+        "state": "active",
+        "created_at": "2025-03-10T08:00:00Z",
+        "updated_at": "2025-03-10T08:00:00Z",
+        "url": "https://api.github.com/repos/acme/widgets/actions/workflows/1004",
+        "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/lint.yml",
+        "badge_url": "https://github.com/acme/widgets/workflows/Lint/badge.svg"
+      },
+      {
+        "id": 1005,
+        "node_id": "W_kwDO1005",
+        "name": "CodeQL",
+        "path": "dynamic/github-code-scanning/codeql",
+        "state": "active",
+        "created_at": "2025-03-10T08:00:00Z",
+        "updated_at": "2025-03-10T08:00:00Z",
+        "url": "https://api.github.com/repos/acme/widgets/actions/workflows/1005",
+        "html_url": "https://github.com/acme/widgets/actions/workflows/dynamic/github-code-scanning/codeql",
+        "badge_url": "https://github.com/acme/widgets/workflows/CodeQL/badge.svg"
+      }
+    ]
+  },
+  "contents": [
+    {
+      "name": "ci.yml",
+      "path": ".github/workflows/ci.yml",
+      "sha": "3c1f0e5a7d2b4c6e8f9a0b1c2d3e4f5a6b7c8d9e",
+      "size": 135,
+      "url": "https://api.github.com/repos/acme/widgets/contents/.github/workflows/ci.yml?ref=main",
+      "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/ci.yml",
+      "git_url": "https://api.github.com/repos/acme/widgets/git/blobs/3c1f0e5a7d2b4c6e8f9a0b1c2d3e4f5a6b7c8d9e",
+      "download_url": "https://raw.githubusercontent.com/acme/widgets/main/.github/workflows/ci.yml",
+      "type": "file"
+    },
+    {
+      "name": "lint.yml",
+      "path": ".github/workflows/lint.yml",
+      "sha": "4d2a1f6b8e3c5d7f9a0b1c2d3e4f5a6b7c8d9e0f",
+      "size": 111,
+      "url": "https://api.github.com/repos/acme/widgets/contents/.github/workflows/lint.yml?ref=main",
+      "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/lint.yml",
+      "git_url": "https://api.github.com/repos/acme/widgets/git/blobs/4d2a1f6b8e3c5d7f9a0b1c2d3e4f5a6b7c8d9e0f",
+      "download_url": "https://raw.githubusercontent.com/acme/widgets/main/.github/workflows/lint.yml",
+      "type": "file"
+    },
+    {
+      "name": "mirror.yml",
+      "path": ".github/workflows/mirror.yml",
+      "sha": "1a9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e",
+      "size": 163,
+      "url": "https://api.github.com/repos/acme/widgets/contents/.github/workflows/mirror.yml?ref=main",
+      "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/mirror.yml",
+      "git_url": "https://api.github.com/repos/acme/widgets/git/blobs/1a9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e",
+      "download_url": "https://raw.githubusercontent.com/acme/widgets/main/.github/workflows/mirror.yml",
+      "type": "file"
+    },
+    {
+      "name": "yearly.yml",
+      "path": ".github/workflows/yearly.yml",
+      "sha": "2b0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f",
+      "size": 180,
+      "url": "https://api.github.com/repos/acme/widgets/contents/.github/workflows/yearly.yml?ref=main",
+      "html_url": "https://github.com/acme/widgets/blob/main/.github/workflows/yearly.yml",
+      "git_url": "https://api.github.com/repos/acme/widgets/git/blobs/2b0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f",
+      "download_url": "https://raw.githubusercontent.com/acme/widgets/main/.github/workflows/yearly.yml",
+      "type": "file"
+    }
+  ],
+  "files": {
+    ".github/workflows/mirror.yml": "name: Mirror\n\non:\n  schedule:\n    - cron: '0 3 1 1 *'\n  workflow_dispatch:\n\njobs:\n  mirror:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/mirror.sh\n",
+    ".github/workflows/yearly.yml": "name: Yearly report\n\non:\n  schedule:\n    - cron: '0 1 1 1 *'\n      timezone: \"Europe/Paris\"\n\njobs:\n  report:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ./scripts/report.sh\n",
+    ".github/workflows/ci.yml": "name: CI\n\non:\n  push:\n    branches: [main]\n  pull_request:\n\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test\n",
+    ".github/workflows/lint.yml": "name: Lint\non: [push, pull_request]\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make lint\n"
+  },
+  "runs": {
+    "1001": {
+      "total_count": 1,
+      "workflow_runs": [
+        {
+          "id": 9001001,
+          "name": "Mirror",
+          "workflow_id": 1001,
+          "event": "schedule",
+          "status": "completed",
+          "conclusion": "success",
+          "head_branch": "main",
+          "html_url": "https://github.com/acme/widgets/actions/runs/9001001"
+        }
+      ]
+    },
+    "1002": {
+      "total_count": 1,
+      "workflow_runs": [
+        {
+          "id": 9001002,
+          "name": "Yearly report",
+          "workflow_id": 1002,
+          "event": "schedule",
+          "status": "completed",
+          "conclusion": "success",
+          "head_branch": "main",
+          "html_url": "https://github.com/acme/widgets/actions/runs/9001002"
+        }
+      ]
+    }
+  },
+  "repo": {
+    "id": 424242,
+    "node_id": "R_kgDOGeRaQg",
+    "name": "widgets",
+    "full_name": "acme/widgets",
+    "private": false,
+    "visibility": "public",
+    "html_url": "https://github.com/acme/widgets",
+    "default_branch": "main",
+    "archived": false,
+    "fork": false
+  },
+  "commits": [
+    {
+      "sha": "5f1c0a7e3b9d2c4f8a6e1b0d9c7f3a2e5b8d4c1f",
+      "node_id": "C_kwDOGeRaQg",
+      "html_url": "https://github.com/acme/widgets/commit/5f1c0a7e3b9d2c4f8a6e1b0d9c7f3a2e5b8d4c1f",
+      "commit": {
+        "author": {
+          "name": "Ada",
+          "email": "ada@example.com"
+        },
+        "committer": {
+          "name": "GitHub",
+          "email": "noreply@github.com"
+        },
+        "message": "Bump the report template"
+      }
+    }
+  ],
+  "commit_age_days": 54
+}

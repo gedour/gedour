@@ -137,6 +137,11 @@ func TestGitHubDiscussionKindMigration(t *testing.T) {
 	testKindCheckMigration(t, "github_discussion", "github_issue", 19)
 }
 
+// 019 phase 1: github_schedules joins the kind CHECK on a develop DB, with the same refusing down.
+func TestGitHubSchedulesKindMigration(t *testing.T) {
+	testKindCheckMigration(t, "github_schedules", "github_discussion", 28)
+}
+
 // testKindCheckMigration checks the migration after version before adds kind to the CHECK, keeping a watch of other.
 func testKindCheckMigration(t *testing.T, kind, other string, before int64) {
 	ctx := context.Background()

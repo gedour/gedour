@@ -1201,6 +1201,7 @@ export interface components {
         | "github_pr"
         | "github_issue"
         | "github_discussion"
+        | "github_schedules"
         | "gitlab_release"
         | "gitlab_mr"
         | "oci_tags";
@@ -1770,6 +1771,7 @@ export interface components {
         | "github_pr"
         | "github_issue"
         | "github_discussion"
+        | "github_schedules"
         | "gitlab_release"
         | "gitlab_mr"
         | "oci_tags";
@@ -1941,6 +1943,7 @@ export interface components {
         | "github_pr"
         | "github_issue"
         | "github_discussion"
+        | "github_schedules"
         | "gitlab_release"
         | "gitlab_mr"
         | "oci_tags";
@@ -1979,6 +1982,7 @@ export interface components {
         | "github_pr"
         | "github_issue"
         | "github_discussion"
+        | "github_schedules"
         | "gitlab_release"
         | "gitlab_mr"
         | "oci_tags";
@@ -3767,6 +3771,7 @@ export interface operations {
           | "github_pr"
           | "github_issue"
           | "github_discussion"
+          | "github_schedules"
           | "gitlab_release"
           | "gitlab_mr"
           | "oci_tags";

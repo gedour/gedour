@@ -1,4 +1,5 @@
 import {
+  AlarmClock,
   CircleDot,
   Container,
   GitMerge,
@@ -55,6 +56,14 @@ export const KINDS: KindInfo[] = [
     defaultSchedule: "1h",
   },
   {
+    kind: "github_schedules",
+    label: "GitHub scheduled workflows",
+    blurb: "Disabled or silent scheduled workflows of a repository",
+    icon: AlarmClock,
+    credential: "github_token",
+    defaultSchedule: "1h",
+  },
+  {
     kind: "gitlab_release",
     label: "GitLab releases",
     blurb: "Releases of a project, any GitLab",
@@ -97,7 +106,11 @@ export function credentialLabel(kind: CredentialKind): string {
 export interface FieldSpec {
   key: string;
   label: string;
-  type: "text" | "number" | "checkbox";
+  type: "text" | "number" | "checkbox" | "select";
+  /** select only: the first one shows when the config has none, as the server's default. */
+  options?: { value: string; label: string }[];
+  /** number only; 1 when unset. */
+  min?: number;
   placeholder?: string;
   hint?: string;
   optional?: boolean;
@@ -146,6 +159,9 @@ const REACTIONS_FREE = reactions(
 const DISCUSSION_REQUESTS =
   "Each run then makes 2 to 3 more requests: GitHub allows 60 an hour without a token.";
 
+const SCHEDULES_REQUESTS =
+  "Each run makes 2 requests plus 1 per scheduled workflow, 2 more with the warning: GitHub allows 60 an hour without a token.";
+
 // Shared keys (repo, api_url, base_url, project) carry over when the kind changes in the form.
 export const FIELDS: Record<WatchKind, FieldSpec[]> = {
   github_repo: [
@@ -177,6 +193,42 @@ export const FIELDS: Record<WatchKind, FieldSpec[]> = {
     REPO,
     { key: "number", label: "Discussion number", type: "number", placeholder: "123" },
     REACTIONS_FREE,
+    GITHUB_API,
+  ],
+  github_schedules: [
+    { ...REPO, hint: SCHEDULES_REQUESTS },
+    {
+      key: "alive_on",
+      label: "Proof of life",
+      type: "select",
+      options: [
+        { value: "success", label: "Last successful run" },
+        { value: "completed", label: "Last run, any result" },
+      ],
+    },
+    {
+      key: "missed_runs",
+      label: "Missed runs before an alert",
+      type: "number",
+      placeholder: "3",
+      hint: "Expected runs in a row with no proof of life, 1 to 10",
+      optional: true,
+    },
+    {
+      key: "warn_days",
+      label: "Warn days before the 60-day cutoff",
+      type: "number",
+      min: 0,
+      placeholder: "0",
+      hint: "Public repositories, 0 to 30; 0 turns the warning off",
+      optional: true,
+    },
+    {
+      key: "auto_enable",
+      label: "Re-enable workflows disabled for inactivity",
+      type: "checkbox",
+      hint: "Needs a credential whose token has Actions write.",
+    },
     GITHUB_API,
   ],
   gitlab_release: [GITLAB_URL, PROJECT],
@@ -251,6 +303,8 @@ export function targetSummary(w: Pick<Watch, "kind" | "config">): string {
     case "github_issue":
     case "github_discussion":
       return `${c.repo} #${c.number}`;
+    case "github_schedules":
+      return `${c.repo} schedules`;
     case "gitlab_release":
       return `${c.project} releases`;
     case "gitlab_mr":
@@ -287,6 +341,9 @@ export function upstreamPage(w: Pick<Watch, "kind" | "config">): string | null {
     case "github_discussion":
       url = `${githubWeb(s("api_url"))}/${s("repo")}/discussions/${s("number")}`;
       break;
+    case "github_schedules":
+      url = `${githubWeb(s("api_url"))}/${s("repo")}/actions`;
+      break;
     case "gitlab_release":
       url = `${s("base_url")}/${s("project")}/-/releases`;
       break;
@@ -316,6 +373,7 @@ const DEFAULT_TARGET: Record<WatchKind, [field: string, fallback: string]> = {
   github_pr: ["api_url", "https://api.github.com"],
   github_issue: ["api_url", "https://api.github.com"],
   github_discussion: ["api_url", "https://api.github.com"],
+  github_schedules: ["api_url", "https://api.github.com"],
   gitlab_release: ["base_url", "https://gitlab.com"],
   gitlab_mr: ["base_url", "https://gitlab.com"],
   oci_tags: ["registry", "docker.io"],

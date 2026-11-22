@@ -1,6 +1,6 @@
 # 021 — Mark read on upstream open
 
-**Status**: in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-22
 
@@ -78,54 +78,54 @@ that fetches the link without running its script gets an empty page and changes 
 
 ## Acceptance criteria
 
-- [ ] **AC1** With `read_on_open` absent or `false`, the rendered text of single, grouped and digest
+- [x] **AC1** With `read_on_open` absent or `false`, the rendered text of single, grouped and digest
   messages is byte-identical to before this spec: Telegram and Talk text, email subject and both decoded
   MIME parts.
-- [ ] **AC2** With `read_on_open: true` and `GEDOUR_PUBLIC_URL` set, every upstream link rendered in a
+- [x] **AC2** With `read_on_open: true` and `GEDOUR_PUBLIC_URL` set, every upstream link rendered in a
   single, grouped, digest or live test message on Telegram, Talk and email is
   `<first public URL>/r#<event id>.<owner id>.<tag>`, `<owner id>` the channel owner's; the "Open in
   gedour" and inbox links are unchanged; the length caps, whole-line cuts, "+N more" and inbox link of
   012/017 apply to the text as rendered with signed links, and a message the Telegram fallback cuts to
   its title has no upstream link.
-- [ ] **AC3** With `read_on_open: true` and no `GEDOUR_PUBLIC_URL`, messages are as in AC1.
-- [ ] **AC4** An event without an upstream URL or with a non-http(s) one gets no upstream link, as
+- [x] **AC3** With `read_on_open: true` and no `GEDOUR_PUBLIC_URL`, messages are as in AC1.
+- [x] **AC4** An event without an upstream URL or with a non-http(s) one gets no upstream link, as
   today. With `read_on_open` on and a public URL set, neither does one with an http(s) prefix that `url.Parse` refuses or reads
   without a host, and a Talk event whose URL is over `maxTalkLink` gets its signed link (the cap applies
   to the rendered link).
-- [ ] **AC5** A channel saved with a non-boolean `read_on_open`, or `read_on_open` on another channel
+- [x] **AC5** A channel saved with a non-boolean `read_on_open`, or `read_on_open` on another channel
   type, is a 400; `null` reads as absent (off), as `gedour_link`'s `null` does; `read_on_open: true`
   saved on each of the three types reads back true from `GET /api/v1/channels/{id}`.
-- [ ] **AC6** `GET /r` answers 200 with the same body for any request, no event data, no state change;
+- [x] **AC6** `GET /r` answers 200 with the same body for any request, no event data, no state change;
   `GET /r.js` answers the script; `Content-Type` is `text/html` and `text/javascript` (responses carry
   `nosniff`); neither returns the SPA, with or without a frontend build.
-- [ ] **AC7** `POST /api/v1/open` with a valid link and no session: the owner's unread item gets
+- [x] **AC7** `POST /api/v1/open` with a valid link and no session: the owner's unread item gets
   `read_at`, the owner's open inbox stream gets the new count, the answer is 200 `{"url"}` with the
   stored upstream URL and `Cache-Control: no-store`.
-- [ ] **AC8** A valid link whose item is already read keeps its first `read_at` and still answers the URL;
+- [x] **AC8** A valid link whose item is already read keeps its first `read_at` and still answers the URL;
   an archived unread item gets `read_at` and stays archived; a readable event with no inbox item for the
   owner answers the URL and changes nothing.
-- [ ] **AC9** A body without `link`, a non-string `link` or malformed JSON is a huma 400; a body over
+- [x] **AC9** A body without `link`, a non-string `link` or malformed JSON is a huma 400; a body over
   1 KiB a 413. Any string that does not verify (changed tag, event id or owner id, malformed, too long, a
   tag from another `GEDOUR_ENCRYPTION_KEY`, an unknown event, a stored `url` that fails the re-check)
   answers the same 404, no URL, no state change, no query run before the tag checks. A fixed test vector
   (key, event id, owner id, expected link) passes; a tag whose last character differs only in its unused
   bits is a 404; a sender and a service without a key swap no link and answer 404.
-- [ ] **AC10** A valid link answers the same 404, and changes nothing, when at the call the event's
+- [x] **AC10** A valid link answers the same 404, and changes nothing, when at the call the event's
   watch is deleted or owned by someone else, or the owner is disabled; a watch transferred back or an
   owner re-enabled makes the link work again.
-- [ ] **AC11** A valid link posted by another signed-in user marks the owner's item read, never theirs.
-- [ ] **AC12** The page, served under the CSP, follows a valid link to the stored upstream URL (AC14); on a 404
+- [x] **AC11** A valid link posted by another signed-in user marks the owner's item read, never theirs.
+- [x] **AC12** The page, served under the CSP, follows a valid link to the stored upstream URL (AC14); on a 404
   or a 413 it shows the invalid-link message and an inbox link; on a 500 or a 429 the try-again message and an inbox link;
   with JavaScript off the inbox link only.
-- [ ] **AC13** The channel form shows "Mark read when I open upstream" unchecked for a new Telegram, Talk
+- [x] **AC13** The channel form shows "Mark read when I open upstream" unchecked for a new Telegram, Talk
   or email channel, saves the checked state as `read_on_open: true`, and reloads it checked.
-- [ ] **AC14** e2e, as bob: a Telegram channel with `read_on_open` on gets a rule live test from the rule
+- [x] **AC14** e2e, as bob: a Telegram channel with `read_on_open` on gets a rule live test from the rule
   page's live test button (seeded watch, `untilNotTooSoon` on 429, as `rule-live-test.spec.ts`);
   following the received message's upstream link in a browser context without a session gets 200 from
   `POST /api/v1/open` and navigates to the stored `url` (`https://github.com/**` answered by `page.route`),
   with the CSP guard (`watchCsp`) on that context. The read mark is AC7's: other bob specs open the
   newest item in parallel.
-- [ ] **AC15** A Web Push click with only `/r` and `/r.js` tabs open opens a new window; a `/rules` tab
+- [x] **AC15** A Web Push click with only `/r` and `/r.js` tabs open opens a new window; a `/rules` tab
   still gets the message (`web/src/sw.test.ts`).
 
 ## Phases

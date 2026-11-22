@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
@@ -102,9 +103,27 @@ func New(log *zap.Logger, build BuildInfo, ping PingFunc, ui fs.FS, authn *auth.
 	// An MCP client's OAuth probe must not read the SPA's HTML as metadata.
 	mux.Handle("GET /.well-known/", http.NotFoundHandler())
 	mux.Handle("GET /mcp/", http.NotFoundHandler())
+	// 021: outside the SPA, so a read-on-open link works without a frontend build.
+	mux.Handle("GET /r", static("text/html; charset=utf-8", openPage))
+	mux.Handle("GET /r.js", static("text/javascript; charset=utf-8", openScript))
 	// GET only: other methods on non-API paths get the mux's 405 instead of the SPA.
 	mux.Handle("GET /", webui.Handler(ui))
 	return secureHeaders(contentSecurityPolicy(webui.InlineScriptHashes(ui)), requestID(authn.Guard(mux)))
+}
+
+var (
+	//go:embed open/r.html
+	openPage []byte
+	//go:embed open/r.js
+	openScript []byte
+)
+
+// static serves body as is: the same bytes for every request.
+func static(contentType string, body []byte) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		_, _ = w.Write(body)
+	})
 }
 
 func canonicalUUIDParams(ctx huma.Context, next func(huma.Context)) {

@@ -39,13 +39,15 @@ const (
 	CSRFProblemTitle = "CSRF token invalid"
 )
 
-// Public /api paths: the API contract and build info, readable before login.
+// Public /api paths: the API contract and build info, readable before login, and the read-on-open call.
 var publicAPI = map[string]bool{
 	"/api/openapi.json":     true,
 	"/api/openapi.yaml":     true,
 	"/api/openapi-3.0.json": true,
 	"/api/openapi-3.0.yaml": true,
 	"/api/v1/version":       true,
+	// The read-on-open link carries its own credential, a signed tag the handler checks (021).
+	"/api/v1/open": true,
 }
 
 // User is a signed-in user.

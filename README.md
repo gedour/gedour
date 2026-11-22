@@ -502,6 +502,14 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   link counts toward the cap: a cut message keeps it, a cut digest carries it once, in its "+N more" line.
   `gedour_link: false` in the channel config ("Link to gedour" in the channel form) turns it off; absent
   means on. Off, or without `GEDOUR_PUBLIC_URL`, messages are as without it.
+- Mark read on open: `read_on_open: true` in a Telegram, Nextcloud Talk or email channel config ("Mark read
+  when I open upstream" in the channel form; absent means off) sends every upstream link of its messages
+  through `<first public URL>/r#<event id>.<owner id>.<tag>`. Opening it marks the event read in the channel
+  owner's inbox, then goes on to the upstream page; no sign-in, the signed tag is the credential. It needs
+  `GEDOUR_PUBLIC_URL`; without it messages are as with the option off. Anyone who opens the link marks the
+  item read: a group chat member, any address of the `to` list, a mail sandbox that runs JavaScript. Links
+  keep working after the option is turned off or the channel deleted, and stop when `GEDOUR_ENCRYPTION_KEY`
+  changes or the owner can no longer read the event.
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing
@@ -660,7 +668,8 @@ kubectl create secret generic gedour \
 ```
 
 Other settings (table in [Configuration](#configuration)) go into the ConfigMap from an overlay:
-`GEDOUR_PUBLIC_URL` (web, required with OIDC), the `GEDOUR_OIDC_*` role settings (web), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
+`GEDOUR_PUBLIC_URL` (both roles: required with OIDC on web, and the worker builds the gedour and mark-read-on-open
+links of messages), the `GEDOUR_OIDC_*` role settings (web), `GEDOUR_ALLOW_HTTP_HOSTS` and `GEDOUR_ALLOW_PRIVATE_NETS`
 (both roles: web validates watch URLs, the worker fetches), `GEDOUR_WORKER_POLL` and
 `GEDOUR_WORKER_CONCURRENCY` (worker), `GEDOUR_TELEGRAM_API_URL`, `GEDOUR_SMTP_TLS` and `GEDOUR_SMTP_PLAIN_NETS`
 (both). Telegram bot tokens belong to channels, in the database. Never set `GEDOUR_DEV_USER` in a cluster.
@@ -819,6 +828,9 @@ v0.23.0 or later (its node runs Kubernetes 1.30+, for the `preStop` sleep action
 - `POST /mcp`: MCP server, API key only (see [MCP](#mcp)); `GET` and `DELETE` answer 405.
 - `GET /api/openapi.json`: OpenAPI document.
 - `GET /api/v1/version`: build information.
+- `GET /r`, `GET /r.js`: the mark-read-on-open page and its script (see [Routing and channels](#routing-and-channels));
+  `POST /api/v1/open` with `{"link": "..."}`, no session: marks the item read and answers `{"url"}`, 404 for any
+  link that does not verify.
 - `GET /auth/login?return_to=/path`, `GET /auth/callback`: sign-in flow. On failure both answer 303 to
   `return_to` (`/` when unknown) with `auth=unavailable` (provider or token endpoint unreachable) or
   `auth=failed` added; the rest of `return_to`, fragment included, is kept as sent.

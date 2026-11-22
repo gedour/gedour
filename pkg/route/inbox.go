@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/gedour/gedour/pkg/db"
+	"github.com/gedour/gedour/pkg/notify"
 	"github.com/gedour/gedour/pkg/watch"
 )
 
@@ -125,6 +126,66 @@ func (s *Service) registerInbox(api huma.API) {
 			WHERE i.event_id = e.id AND i.user_id = $1 AND e.watch_id = $2 AND i.read_at IS NULL AND i.archived_at IS NULL AND `+
 			watch.ReadableSQL("w", "$1::uuid"), in.ID)
 	})
+	huma.Register(api, huma.Operation{
+		OperationID: "open-link", Method: http.MethodPost, Path: "/api/v1/open",
+		Summary: "Mark an event read from a read-on-open link and get its upstream URL",
+		Description: "No session: the link's tag is the credential. Marks the item read in the inbox of the link's owner, archived " +
+			"items included. Every link that does not verify, or whose event the owner can no longer read, is the same 404.",
+		Tags: tags, MaxBodyBytes: 1 << 10,
+	}, s.open)
+}
+
+type openInput struct {
+	Body struct {
+		Link string `json:"link" doc:"The fragment of the /r link, without its #"`
+	}
+}
+
+type openOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         struct {
+		URL string `json:"url" doc:"The event's upstream page"`
+	}
+}
+
+// openEvent holds only for an event the link's owner, still active, can read: $1 the event, $2 the owner.
+var openEvent = ` JOIN watches w ON w.id = e.watch_id JOIN users u ON u.id = $2::uuid
+	WHERE e.id = $1 AND ` + activeOwner + ` AND ` + watch.ReadableSQL("w", "$2::uuid")
+
+// open is POST /api/v1/open (021-AC7..AC11): the link's owner, never the caller, gets the read mark.
+func (s *Service) open(ctx context.Context, in *openInput) (*openOutput, error) {
+	notFound := huma.Error404NotFound("this link is not valid")
+	// Security: the tag is checked before any query, so a forged link costs one HMAC and no database work.
+	id, owner, ok := s.sender.VerifyOpen(in.Body.Link)
+	if !ok {
+		return nil, notFound
+	}
+	out := &openOutput{CacheControl: "no-store"}
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var u *string
+		if err := tx.QueryRow(ctx, `SELECT e.payload->>'url' FROM events e`+openEvent, id, owner).Scan(&u); errors.Is(err, pgx.ErrNoRows) {
+			return notFound
+		} else if err != nil {
+			return err
+		}
+		if u == nil || !notify.LinkableURL(*u) {
+			return notFound
+		}
+		out.Body.URL = *u
+		tag, err := tx.Exec(ctx, `UPDATE inbox_items i SET read_at = now() FROM events e`+openEvent+
+			` AND i.event_id = e.id AND i.user_id = $2::uuid AND i.read_at IS NULL`, id, owner)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() > 0 {
+			_, err = tx.Exec(ctx, `SELECT pg_notify($1, $2)`, InboxChannel, owner)
+		}
+		return err
+	})
+	if err != nil {
+		return nil, s.fail("open-link", err)
+	}
+	return out, nil
 }
 
 func (s *Service) listInbox(ctx context.Context, in *listInboxInput) (*listInboxOutput, error) {

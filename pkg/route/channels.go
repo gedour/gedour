@@ -62,7 +62,7 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox."`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read."`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -306,7 +306,7 @@ func (s *Service) validateConfig(typ string, raw map[string]any) (map[string]any
 		case len(to) > notify.MaxRecipients:
 			errs = append(errs, configError("to", fmt.Sprintf("at most %d recipients", notify.MaxRecipients), len(to)))
 		}
-		norm = notify.EmailConfig{To: to, GedourLink: c.GedourLink}
+		norm = notify.EmailConfig{To: to, GedourLink: c.GedourLink, ReadOnOpen: c.ReadOnOpen}
 	case notify.TypeWebhook:
 		var c notify.WebhookConfig
 		if err := decodeConfig(raw, &c); err != nil {
@@ -791,8 +791,8 @@ func testOutcome(err error) (ok bool, msg string) {
 func loadChannel(ctx context.Context, q rowQuerier, box *secret.Box, id string) (notify.Channel, error) {
 	ch := notify.Channel{ID: id}
 	var ct, nonce []byte
-	if err := q.QueryRow(ctx, `SELECT type, config, secret_ciphertext, secret_nonce FROM channels WHERE id = $1`, id).
-		Scan(&ch.Type, &ch.Config, &ct, &nonce); err != nil {
+	if err := q.QueryRow(ctx, `SELECT type, owner_id::text, config, secret_ciphertext, secret_nonce FROM channels WHERE id = $1`, id).
+		Scan(&ch.Type, &ch.OwnerID, &ch.Config, &ct, &nonce); err != nil {
 		return ch, fmt.Errorf("load channel: %w", err)
 	}
 	if ct != nil {

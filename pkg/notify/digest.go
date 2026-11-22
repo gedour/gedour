@@ -20,6 +20,8 @@ type Digest struct {
 	Poll bool
 	// Link ends a Telegram or Talk message with one inbox link (017 gedour_link); a cut one's "+N more" is that link.
 	Link bool
+	// upstream rewrites each event's upstream URL (021 read_on_open), set by SendDigest; nil: as is.
+	upstream func(Delivery, string) string
 }
 
 type digestGroup struct {
@@ -28,7 +30,7 @@ type digestGroup struct {
 }
 
 // groups splits ds by watch, each watch where its oldest event stands.
-func groups(ds []Delivery) []digestGroup {
+func groups(ds []Delivery, upstream func(Delivery, string) string) []digestGroup {
 	var out []digestGroup
 	at := map[string]int{}
 	for _, d := range ds {
@@ -41,6 +43,9 @@ func groups(ds []Delivery) []digestGroup {
 		}
 		m := Format(d)
 		m.Summary = oneLine(m.Summary)
+		if upstream != nil {
+			m.URL = upstream(d, m.URL)
+		}
 		out[i].msgs = append(out[i].msgs, m)
 	}
 	return out
@@ -69,7 +74,7 @@ func (dg Digest) count() string {
 // with "+N more", never leaving a watch heading without an event under it.
 func (st digestStyle) render(dg Digest) string {
 	ds := dg.Deliveries
-	gs := groups(ds)
+	gs := groups(ds, dg.upstream)
 	parts := []string{st.header(dg.count())}
 	for _, g := range gs {
 		parts = append(parts, st.group(g.watch))
@@ -207,6 +212,7 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 			return fmt.Errorf("telegram config: %w", err)
 		}
 		dg.Link = linkOn(c.GedourLink)
+		dg.upstream = s.digestUpstream(c.ReadOnOpen, ch.OwnerID)
 		return s.telegram(ctx, c, ch.Secret, TelegramDigest(dg, s.inboxURL()))
 	case TypeNextcloudTalk:
 		var c NextcloudTalkConfig
@@ -214,6 +220,7 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 			return fmt.Errorf("nextcloud talk config: %w", err)
 		}
 		dg.Link = linkOn(c.GedourLink)
+		dg.upstream = s.digestUpstream(c.ReadOnOpen, ch.OwnerID)
 		return s.talk(ctx, c, ch.Secret, dg.ID, TalkDigest(dg, s.inboxURL()))
 	case TypeEmail:
 		var c EmailConfig
@@ -223,9 +230,14 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 		if s.Mailer == nil {
 			return errors.New("email: no SMTP server configured")
 		}
+		dg.upstream = s.digestUpstream(c.ReadOnOpen, ch.OwnerID)
 		return s.Mailer.Send(ctx, c.To, MailDigest(dg, s.inboxURL()), s.now())
 	}
 	return Permanent(fmt.Errorf("digest on channel type %q", ch.Type))
+}
+
+func (s *Sender) digestUpstream(on *bool, owner string) func(Delivery, string) string {
+	return func(d Delivery, u string) string { return s.upstream(readOnOpen(on), owner, d.Event.ID, u) }
 }
 
 // PushDigestPayload is the Web Push digest of a channel: the count as title, the first watch names as body,
@@ -233,7 +245,7 @@ func (s *Sender) SendDigest(ctx context.Context, ch Channel, dg Digest) error {
 // A poll's tag is its lead delivery's: it never replaces an earlier poll's notification still unseen.
 func PushDigestPayload(dg Digest, channelID string, silent bool) []byte {
 	var names []string
-	for _, g := range groups(dg.Deliveries) {
+	for _, g := range groups(dg.Deliveries, nil) {
 		names = append(names, g.watch)
 	}
 	tag := "gedour-digest-" + channelID

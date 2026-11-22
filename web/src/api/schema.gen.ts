@@ -543,6 +543,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/open": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Mark an event read from a read-on-open link and get its upstream URL
+     * @description No session: the link's tag is the credential. Marks the item read in the inbox of the link's owner, archived items included. Every link that does not verify, or whose event the owner can no longer read, is the same 404.
+     */
+    post: operations["open-link"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/push/devices": {
     parameters: {
       query?: never;
@@ -1033,7 +1053,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
+      /** @description telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read. */
       config: {
         [key: string]: unknown;
       };
@@ -1231,7 +1251,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
+      /** @description telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read. */
       config: {
         [key: string]: unknown;
       };
@@ -1592,6 +1612,14 @@ export interface components {
       id: string;
       /** @description The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode */
       is_admin: boolean;
+    };
+    OpenInputBody: {
+      /** @description The fragment of the /r link, without its # */
+      link: string;
+    };
+    OpenOutputBody: {
+      /** @description The event's upstream page */
+      url: string;
     };
     OtherRule: {
       /** Format: uuid */
@@ -3169,6 +3197,40 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MeOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "open-link": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OpenInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          "Cache-Control"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpenOutputBody"];
         };
       };
       /** @description Error */

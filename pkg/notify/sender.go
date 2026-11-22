@@ -83,6 +83,7 @@ type TelegramConfig struct {
 	ChatID     string `json:"chat_id"`
 	Silent     bool   `json:"silent"`
 	GedourLink *bool  `json:"gedour_link,omitempty"`
+	ReadOnOpen *bool  `json:"read_on_open,omitempty"`
 }
 
 // NextcloudTalkConfig is the config of a Nextcloud Talk channel; the bot's shared secret is its secret.
@@ -91,12 +92,14 @@ type NextcloudTalkConfig struct {
 	Conversation string `json:"conversation"`
 	Silent       bool   `json:"silent"`
 	GedourLink   *bool  `json:"gedour_link,omitempty"`
+	ReadOnOpen   *bool  `json:"read_on_open,omitempty"`
 }
 
 // EmailConfig is the config of an email channel; the SMTP server is instance config.
 type EmailConfig struct {
 	To         []string `json:"to"`
 	GedourLink *bool    `json:"gedour_link,omitempty"`
+	ReadOnOpen *bool    `json:"read_on_open,omitempty"`
 }
 
 // linkOn reads gedour_link: absent is on (017), so channels saved before it get the link without a migration.
@@ -109,10 +112,12 @@ type WebhookConfig struct {
 
 // Channel is a channel ready to send: its decrypted secret lives for one send only.
 type Channel struct {
-	ID     string
-	Type   string
-	Config json.RawMessage
-	Secret string `json:"-"`
+	ID   string
+	Type string
+	// OwnerID is bound into the channel's read-on-open links (021).
+	OwnerID string
+	Config  json.RawMessage
+	Secret  string `json:"-"`
 }
 
 // Sender sends deliveries. Client must be a netguard client that follows no redirect.
@@ -130,6 +135,8 @@ type Sender struct {
 	HTTPHosts []string
 	// PublicURL is the first GEDOUR_PUBLIC_URL, for the gedour and inbox links; empty: no link.
 	PublicURL string
+	// OpenKey signs read-on-open links (021); empty: no link is swapped and none verifies.
+	OpenKey []byte
 }
 
 // eventURL is the inbox deep link of event id (010-AC13) when link is on; empty without a public URL.
@@ -161,6 +168,7 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 			return fmt.Errorf("telegram config: %w", err)
 		}
 		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
+		msg.URL = s.upstream(readOnOpen(c.ReadOnOpen), ch.OwnerID, d.Event.ID, msg.URL)
 		return s.telegram(ctx, c, ch.Secret, TelegramText(msg))
 	case TypeNextcloudTalk:
 		var c NextcloudTalkConfig
@@ -168,6 +176,7 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 			return fmt.Errorf("nextcloud talk config: %w", err)
 		}
 		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
+		msg.URL = s.upstream(readOnOpen(c.ReadOnOpen), ch.OwnerID, d.Event.ID, msg.URL)
 		return s.talk(ctx, c, ch.Secret, d.ID, TalkText(msg))
 	case TypeEmail:
 		var c EmailConfig
@@ -178,6 +187,7 @@ func (s *Sender) Send(ctx context.Context, ch Channel, d Delivery) error {
 			return errors.New("email: no SMTP server configured")
 		}
 		msg.Gedour = s.eventURL(c.GedourLink, d.Event.ID)
+		msg.URL = s.upstream(readOnOpen(c.ReadOnOpen), ch.OwnerID, d.Event.ID, msg.URL)
 		return s.Mailer.Send(ctx, c.To, msg, s.now())
 	case TypeWebhook:
 		var c WebhookConfig

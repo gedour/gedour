@@ -299,6 +299,7 @@ function ChannelForm({
     staleTime: Infinity,
   });
   const linkHint = useId();
+  const openHint = useId();
   const [type, setType] = useState<ChannelKind>(channel?.type ?? "webhook");
   const [name, setName] = useState(channel?.name ?? "");
   const cfg = channel?.config ?? {};
@@ -309,6 +310,7 @@ function ChannelForm({
   const [silent, setSilent] = useState(cfg.silent === true);
   // 017: absent means on, so a channel saved before the setting reads checked.
   const [gedourLink, setGedourLink] = useState(cfg.gedour_link !== false);
+  const [readOnOpen, setReadOnOpen] = useState(cfg.read_on_open === true);
   const [scriptId, setScriptId] = useState(String(cfg.script_id ?? ""));
   const [picked, setPicked] = useState<string[] | null>(
     Array.isArray(cfg.devices) ? cfg.devices.map(String) : null,
@@ -358,11 +360,13 @@ function ChannelForm({
   const client = useQueryClient();
   const toast = useToast();
   const available = types.data?.find((t) => t.type === type);
+  const linkable = type === "telegram" || type === "nextcloud_talk" || type === "email";
 
   const config = () => {
-    if (type === "telegram") return { chat_id: chatId, silent, gedour_link: gedourLink };
-    if (type === "nextcloud_talk") return { url, conversation, silent, gedour_link: gedourLink };
-    if (type === "email") return { to: splitRecipients(to), gedour_link: gedourLink };
+    const links = { gedour_link: gedourLink, read_on_open: readOnOpen };
+    if (type === "telegram") return { chat_id: chatId, silent, ...links };
+    if (type === "nextcloud_talk") return { url, conversation, silent, ...links };
+    if (type === "email") return { to: splitRecipients(to), ...links };
     if (type === "script") return { script_id: scriptId };
     if (type === "web_push") return { devices: picked ?? "all", silent };
     return { url };
@@ -733,23 +737,41 @@ function ChannelForm({
             )}
           </Field>
         )}
-        {(type === "telegram" || type === "nextcloud_talk" || type === "email") && (
-          <div className="flex flex-col gap-1.5">
-            <label className="inline-flex w-fit items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={gedourLink}
-                onChange={(e) => setGedourLink(e.target.checked)}
-                aria-describedby={linkHint}
-                className="size-4 accent-beacon"
-              />
-              Link to gedour
-            </label>
-            <p id={linkHint} className="text-xs text-muted">
-              Ends each message with a link to the event in gedour, or to the inbox for several
-              events.
-            </p>
-          </div>
+        {linkable && (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <label className="inline-flex w-fit items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={gedourLink}
+                  onChange={(e) => setGedourLink(e.target.checked)}
+                  aria-describedby={linkHint}
+                  className="size-4 accent-beacon"
+                />
+                Link to gedour
+              </label>
+              <p id={linkHint} className="text-xs text-muted">
+                Ends each message with a link to the event in gedour, or to the inbox for several
+                events.
+              </p>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="inline-flex w-fit items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={readOnOpen}
+                  onChange={(e) => setReadOnOpen(e.target.checked)}
+                  aria-describedby={openHint}
+                  className="size-4 accent-beacon"
+                />
+                Mark read when I open upstream
+              </label>
+              <p id={openHint} className="text-xs text-muted">
+                Upstream links go through gedour, which needs GEDOUR_PUBLIC_URL. Anyone who opens
+                the link marks the item read.
+              </p>
+            </div>
+          </>
         )}
         <DialogActions>
           <Button type="button" variant="ghost" onClick={onClose}>

@@ -64,7 +64,8 @@
   needs `make openapi`: `TestOpenAPIDrift` (Go) and `pnpm check:api` (web) fail on a stale file. Huma ignores
   embedded structs in inputs: declare path params and body fields inline. Unknown `/api` paths
   answer problem+json 404, known paths with a wrong method problem+json 405 + `Allow`; never the SPA.
-  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/`, `/.well-known/` and `/sw.js` (`web/public/sw.js`, 404 when missing).
+  Other GET paths fall back to `index.html`, except `/mcp`, `/mcp/`, `/.well-known/`, `/sw.js` (`web/public/sw.js`, 404 when missing),
+  and `/r` and `/r.js` (`pkg/server/open`, embedded: they work without a frontend build).
 - `/metrics` and `/livez` (liveness, ignores PG) live only on the metrics listener; `/healthz` is on both.
 - The main listener sends a CSP whose `script-src` hashes are computed at startup from the served
   `index.html`. No `<style>` elements or `style=""` attributes in markup, no data: URIs (Vite
@@ -87,8 +88,8 @@
 - One auth state: a 401 from `request()` or the stream's `signed_out` sets `auth` (`api/client.ts`) and
   `AuthGate` swaps the app for `SignInGate`. Only `api/client.ts` may navigate by script; app code
   signs out with `signOut()` and reloads with `reloadPage()`, `navigation` is a test seam (ESLint `no-restricted-*`, see `src/lint.test.ts`).
-  One exception out of ESLint's reach: the reload in `index.html` when a hashed asset fails before `window.load`
-  (`e2e/asset-recovery.spec.ts`). `renderApp(path, me)` starts signed in as `me`; `null` boots through the gate.
+  Two exceptions out of ESLint's reach: the reload in `index.html` when a hashed asset fails before `window.load`
+  (`e2e/asset-recovery.spec.ts`), and the `location.replace` of `pkg/server/open/r.js` to the upstream page. `renderApp(path, me)` starts signed in as `me`; `null` boots through the gate.
 - Auth: `auth.Guard` puts every `/api` path behind a session, except those in its `publicAPI` set; mutations
   need `X-CSRF-Token`. Frontend calls go through `web/src/api/client.ts`, which adds it.
 - `/auth/signed-out` is an SPA route outside the shell and the gate that must never call the API.

@@ -419,7 +419,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox.",
+            "description": "telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read.",
             "type": "object"
           },
           "created_at": {
@@ -905,7 +905,7 @@
         "properties": {
           "config": {
             "additionalProperties": {},
-            "description": "telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox.",
+            "description": "telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read.",
             "type": "object"
           },
           "created_at": {
@@ -1896,6 +1896,32 @@
           "dev_mode",
           "is_admin",
           "acting_as"
+        ],
+        "type": "object"
+      },
+      "OpenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "link": {
+            "description": "The fragment of the /r link, without its #",
+            "type": "string"
+          }
+        },
+        "required": [
+          "link"
+        ],
+        "type": "object"
+      },
+      "OpenOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "The event's upstream page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
         ],
         "type": "object"
       },
@@ -4674,6 +4700,55 @@
         "summary": "The signed-in user and the session's CSRF token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/open": {
+      "post": {
+        "description": "No session: the link's tag is the credential. Marks the item read in the inbox of the link's owner, archived items included. Every link that does not verify, or whose event the owner can no longer read, is the same 404.",
+        "operationId": "open-link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenOutputBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark an event read from a read-on-open link and get its upstream URL",
+        "tags": [
+          "inbox"
         ]
       }
     },

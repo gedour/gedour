@@ -16,6 +16,12 @@ const inbox = "https://g.test/inbox"
 // sent is the text a Telegram or Talk channel receives for d through s.
 func sent(t *testing.T, s *Sender, ch Channel, d Delivery) string {
 	t.Helper()
+	return capture(t, s, ch, func(ch Channel) error { return s.Send(context.Background(), ch, d) })
+}
+
+// capture is the text a Telegram or Talk channel receives from send, the channel pointed at a local receiver.
+func capture(t *testing.T, s *Sender, ch Channel, send func(Channel) error) string {
+	t.Helper()
 	srv, got := receiver(t, http.StatusOK)
 	s.TelegramURL = srv.URL
 	if ch.Type == TypeNextcloudTalk {
@@ -25,7 +31,7 @@ func sent(t *testing.T, s *Sender, ch Channel, d Delivery) string {
 		c.URL = srv.URL
 		ch.Config, _ = json.Marshal(c)
 	}
-	if err := s.Send(context.Background(), ch, d); err != nil {
+	if err := send(ch); err != nil {
 		t.Fatal(err)
 	}
 	var body struct{ Text, Message string }

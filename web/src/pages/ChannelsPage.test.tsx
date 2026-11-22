@@ -139,7 +139,7 @@ describe("ChannelsPage", () => {
     expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
       name: "Phone",
       type: "telegram",
-      config: { chat_id: "-1001", silent: false, gedour_link: true },
+      config: { chat_id: "-1001", silent: false, gedour_link: true, read_on_open: false },
       secret: "123:abc",
     });
 
@@ -157,7 +157,11 @@ describe("ChannelsPage", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Ops",
         type: "email",
-        config: { to: ["a@x.test", "b@x.test", "c@x.test"], gedour_link: true },
+        config: {
+          to: ["a@x.test", "b@x.test", "c@x.test"],
+          gedour_link: true,
+          read_on_open: false,
+        },
       }),
     );
   });
@@ -216,6 +220,7 @@ describe("ChannelsPage", () => {
         conversation: "abcd1234",
         silent: false,
         gedour_link: true,
+        read_on_open: false,
       },
       secret: "s".repeat(40),
     });
@@ -256,6 +261,7 @@ describe("ChannelsPage", () => {
         conversation: "abcd1234",
         silent: false,
         gedour_link: true,
+        read_on_open: false,
       },
     });
   });
@@ -278,7 +284,7 @@ describe("ChannelsPage", () => {
     );
     let dialog = screen.getByRole("dialog");
     const link = () => within(dialog).queryByRole("checkbox", { name: "Link to gedour" });
-    for (const kind of ["Webhook", "Web Push"]) {
+    for (const kind of ["Webhook", "Web Push", "Script"]) {
       await userEvent.click(within(dialog).getByText(kind));
       expect(link()).not.toBeInTheDocument();
     }
@@ -299,6 +305,53 @@ describe("ChannelsPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit Phone" }));
     dialog = screen.getByRole("dialog");
     expect(link()).not.toBeChecked();
+  });
+
+  // 021-AC13: "Mark read when I open upstream" is unchecked for a new Telegram, Talk or email channel, absent
+  // elsewhere; checked saves read_on_open true, which reloads checked.
+  it("saves Mark read when I open upstream checked and reloads it checked", async () => {
+    let items: Channel[] = [];
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) => {
+        if (init?.method !== "POST") return Response.json({ items });
+        const body = JSON.parse(String(init.body)) as Pick<Channel, "name" | "type" | "config">;
+        items = [channel({ ...body, id: "c9" })];
+        return Response.json(items[0], { status: 201 });
+      },
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    let dialog = screen.getByRole("dialog");
+    const open = () =>
+      within(dialog).queryByRole("checkbox", { name: "Mark read when I open upstream" });
+    for (const kind of ["Webhook", "Web Push", "Script"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(open()).not.toBeInTheDocument();
+    }
+    for (const kind of ["Email", "Nextcloud Talk", "Telegram"]) {
+      await userEvent.click(within(dialog).getByText(kind));
+      expect(open()).not.toBeChecked();
+      expect(open()).toHaveAccessibleDescription(
+        "Upstream links go through gedour, which needs GEDOUR_PUBLIC_URL. Anyone who opens the link marks the item read.",
+      );
+    }
+    await userEvent.click(open() as HTMLElement);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Phone");
+    await userEvent.type(within(dialog).getByLabelText("Chat ID"), "-1001");
+    await userEvent.type(within(dialog).getByLabelText("Bot token"), "123:abc");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+      name: "Phone",
+      type: "telegram",
+      config: { chat_id: "-1001", silent: false, gedour_link: true, read_on_open: true },
+      secret: "123:abc",
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Phone" }));
+    dialog = screen.getByRole("dialog");
+    expect(open()).toBeChecked();
   });
 
   // 003-AC5: the switch is on the Telegram and Talk forms only, named and operable from the keyboard.
@@ -730,7 +783,7 @@ describe("ChannelsPage", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Phone",
         type: "telegram",
-        config: { chat_id: "-1001", silent: false, gedour_link: true },
+        config: { chat_id: "-1001", silent: false, gedour_link: true, read_on_open: false },
         secret: "123:abc",
       }),
     );

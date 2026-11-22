@@ -260,6 +260,54 @@ func TestGedourLinkConfig(t *testing.T) {
 	}
 }
 
+// 021-AC5: read_on_open is a boolean on Telegram, Talk and email: null reads as absent, true reads back true;
+// a non-boolean, or the key on another type, is a 400.
+func TestReadOnOpenConfig(t *testing.T) {
+	a, _, _ := newPushApp(t)
+	alice := a.signIn(t, "alice")
+	a.sender.Mailer = &notify.Mailer{Addr: "127.0.0.1:1", From: &mail.Address{Address: "g@x.test"}, TLS: notify.TLSNone}
+	ok := map[string]map[string]any{
+		"telegram":       {"name": "T", "type": "telegram", "config": map[string]any{"chat_id": "-1"}, "secret": botToken},
+		"nextcloud_talk": {"name": "N", "type": "nextcloud_talk", "config": map[string]any{"url": "https://cloud.example", "conversation": "abcd"}, "secret": strings.Repeat("s", 40)},
+		"email":          {"name": "E", "type": "email", "config": map[string]any{"to": []string{"a@x.test"}}},
+	}
+	for typ, body := range ok {
+		cfg := maps.Clone(body["config"].(map[string]any))
+		cfg["read_on_open"] = nil
+		body = maps.Clone(body)
+		body["config"] = cfg
+		var ch channelJSON
+		a.mustCall(t, alice, http.MethodPost, "/api/v1/channels", body, http.StatusCreated, &ch)
+		if v, set := ch.Config["read_on_open"]; set {
+			t.Errorf("%s: null stored as %v", typ, v)
+		}
+		cfg["read_on_open"] = true
+		a.mustCall(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"config": cfg}, http.StatusOK, &ch)
+		var got channelJSON
+		a.mustCall(t, alice, http.MethodGet, "/api/v1/channels/"+ch.ID, nil, http.StatusOK, &got)
+		if got.Config["read_on_open"] != true {
+			t.Errorf("%s: %+v, want read_on_open true", typ, got.Config)
+		}
+		for _, bad := range []any{"true", 1, []any{true}, map[string]any{}} {
+			cfg["read_on_open"] = bad
+			p := a.problemOf(t, alice, http.MethodPatch, "/api/v1/channels/"+ch.ID, map[string]any{"config": cfg}, http.StatusBadRequest)
+			if fmt.Sprint(p.locations()) != "[body.config]" {
+				t.Errorf("%s read_on_open %v: %v", typ, bad, p.locations())
+			}
+		}
+	}
+	for _, body := range []map[string]any{
+		{"name": "w", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/x", "read_on_open": true}},
+		{"name": "s", "type": "script", "config": map[string]any{"script_id": "00000000-0000-0000-0000-000000000000", "read_on_open": false}},
+		{"name": "p", "type": "web_push", "config": map[string]any{"devices": "all", "read_on_open": true}},
+	} {
+		p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", body, http.StatusBadRequest)
+		if fmt.Sprint(p.locations()) != "[body.config]" {
+			t.Errorf("%s: %v", body["type"], p.locations())
+		}
+	}
+}
+
 // 001-AC15/001-AC16: channels per type, validated on save, secrets write-only, private to their owner.
 func TestChannels(t *testing.T) {
 	a := newDevApp(t)

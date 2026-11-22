@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"math/rand/v2"
@@ -207,11 +208,25 @@ func TestRunWorkerOnly(t *testing.T) {
 }
 
 func TestNewSender(t *testing.T) {
-	cfg := config.Config{TelegramAPIURL: "https://api.telegram.org", SMTPPlainNets: []string{"10.9.2.3/16"}}
+	const encKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	cfg := config.Config{TelegramAPIURL: "https://api.telegram.org", SMTPPlainNets: []string{"10.9.2.3/16"}, EncryptionKey: encKey}
 	guard, _ := netguard.New(nil)
 	s, err := newSender(cfg, guard, server.BuildInfo{Version: "v1"})
 	if err != nil || s.Mailer != nil || s.UserAgent != "gedour/v1" {
 		t.Fatalf("without SMTP: %+v %v", s, err)
+	}
+	// 021-AC9: the sender signs read-on-open links with the key derived from GEDOUR_ENCRYPTION_KEY.
+	raw, _ := secret.ParseKey(encKey)
+	want, _ := notify.DeriveOpenKey(raw)
+	if len(s.OpenKey) != 32 || !bytes.Equal(s.OpenKey, want) {
+		t.Fatalf("open key %x, want %x", s.OpenKey, want)
+	}
+	for _, bad := range []string{"", "short", "AAAA"} {
+		c := cfg
+		c.EncryptionKey = bad
+		if _, err := newSender(c, guard, server.BuildInfo{}); err == nil {
+			t.Errorf("encryption key %q: want an error", bad)
+		}
 	}
 	// The client bound caps every send: below TelegramTimeout it cuts Telegram's own.
 	if s.Client.Timeout < notify.TelegramTimeout {
@@ -223,7 +238,7 @@ func TestNewSender(t *testing.T) {
 		{config.RoleAll, "http://localhost:8080", vapidContact},
 		{config.RoleAll, "HTTPS://Gedour.example", "HTTPS://Gedour.example"},
 	} {
-		c := config.Config{Role: tt.role, PublicURL: tt.public, AllowHTTPHosts: []string{"127.0.0.1"}}
+		c := config.Config{Role: tt.role, PublicURL: tt.public, AllowHTTPHosts: []string{"127.0.0.1"}, EncryptionKey: encKey}
 		ws, err := newSender(c, guard, server.BuildInfo{})
 		if err != nil || ws.VAPIDSubject != tt.sub || !slices.Equal(ws.HTTPHosts, c.AllowHTTPHosts) {
 			t.Errorf("public %q: subject %q, http hosts %v, %v", tt.public, ws.VAPIDSubject, ws.HTTPHosts, err)

@@ -1033,7 +1033,7 @@ export interface components {
       updated: number;
     };
     Channel: {
-      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
+      /** @description telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read. */
       config: {
         [key: string]: unknown;
       };
@@ -1231,7 +1231,7 @@ export interface components {
       schedule?: string;
     };
     CreatedChannel: {
-      /** @description telegram: chat_id, silent, gedour_link; nextcloud_talk: url, conversation, silent, gedour_link; email: to, gedour_link; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. */
+      /** @description telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices ("all" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read. */
       config: {
         [key: string]: unknown;
       };

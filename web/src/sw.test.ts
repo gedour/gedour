@@ -123,9 +123,12 @@ describe("service worker", () => {
     expect(t.postMessage).toHaveBeenCalledWith({ url: `${ORIGIN}/inbox` });
   });
 
-  // A tab showing the API, /mcp or the worker script runs no SPA: skip it, or open a window.
+  // A tab showing the API, /mcp, the worker script or a read-on-open page runs no SPA: skip it, or open a window.
+  // 021-AC15: /r and /r.js are skipped, a /rules tab still gets the message.
   it("skips tabs the app does not run in", async () => {
-    const off = ["/api/v1/me", "/mcp", "/mcp/x", "/sw.js"].map((p) => tab(undefined, p));
+    const off = ["/api/v1/me", "/mcp", "/mcp/x", "/sw.js", "/r", "/r.js"].map((p) =>
+      tab(undefined, p),
+    );
     const app = tab(undefined, "/mcpx");
     const { dispatch } = loadWorker([...off, app]);
     await dispatch("notificationclick", {
@@ -138,6 +141,13 @@ describe("service worker", () => {
       notification: { close: vi.fn(), data: { url: "/inbox" } },
     });
     expect(only.scope.clients.openWindow).toHaveBeenCalledWith(`${ORIGIN}/inbox`);
+    const rules = tab(undefined, "/rules");
+    const withRules = loadWorker([...off, rules]);
+    await withRules.dispatch("notificationclick", {
+      notification: { close: vi.fn(), data: { url: "/inbox" } },
+    });
+    expect(rules.postMessage).toHaveBeenCalledWith({ url: `${ORIGIN}/inbox` });
+    expect(withRules.scope.clients.openWindow).not.toHaveBeenCalled();
   });
 
   it("still routes the tab when focusing it is refused", async () => {

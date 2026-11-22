@@ -30,7 +30,7 @@ function targetURL(notification) {
 }
 
 // Tabs the SPA does not run in: a message there is heard by nobody.
-const NOT_SPA = /^\/(api\/|mcp(\/|$)|sw\.js$)/;
+const NOT_SPA = /^\/(api\/|mcp(\/|$)|sw\.js$|r(\.js)?$)/;
 
 // An open gedour tab routes in place, without a reload (the SPA listens for this message).
 async function openNotification(notification) {

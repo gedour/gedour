@@ -55,8 +55,8 @@ that fetches the link without running its script gets an empty page and changes 
 - The upstream URL is that stored `url`, re-checked as at signing (http(s) prefix, `url.Parse` with a
   host); a failure is the same 404. Nothing from the request picks it.
 - The page script reads `location.hash`, posts it without its leading `#`, and calls `location.replace` with the answer's URL.
-  On 404 it says the link is not valid; on any other failure (5xx, 429, network) it says gedour could not
-  be reached, try again. Both show an inbox link. Without JavaScript, a `<noscript>` line links to the inbox.
+  On 429, a 5xx or a network failure it says gedour could not be reached, try again; on any other
+  non-2xx (404, 400, 413) it says the link is not valid. Both show an inbox link. Without JavaScript, a `<noscript>` line links to the inbox.
 - The "Open in gedour" link (017) and the digest inbox links are unchanged.
 - The service worker's `NOT_SPA` (`web/public/sw.js`) gains `/r` and `/r.js`, so a Web Push click never
   routes into a `/r` tab.
@@ -115,7 +115,7 @@ that fetches the link without running its script gets an empty page and changes 
   owner re-enabled makes the link work again.
 - [ ] **AC11** A valid link posted by another signed-in user marks the owner's item read, never theirs.
 - [ ] **AC12** The page, served under the CSP, follows a valid link to the stored upstream URL (AC14); on a 404
-  it shows the invalid-link message and an inbox link; on a 500 the try-again message and an inbox link;
+  or a 413 it shows the invalid-link message and an inbox link; on a 500 or a 429 the try-again message and an inbox link;
   with JavaScript off the inbox link only.
 - [ ] **AC13** The channel form shows "Mark read when I open upstream" unchecked for a new Telegram, Talk
   or email channel, saves the checked state as `read_on_open: true`, and reloads it checked.
@@ -144,7 +144,7 @@ that fetches the link without running its script gets an empty page and changes 
 
 ### Phase 2 — Channel form and e2e
 - Work: checkbox and hint in `ChannelsPage.tsx`; vitest; e2e specs as bob, one for the page (404,
-  500 via `page.route` on `/api/v1/open`, JavaScript off) and AC14, which holds the success path.
+  413, 429, 500 via `page.route` on `/api/v1/open`, JavaScript off) and AC14, which holds the success path.
 - **Covers**: AC12, AC13, AC14
 - **Data model impact**: none
 - **DoD**: `make test`, `make lint` green; ChannelsPage vitest covers AC13; `make e2e` green with the new

@@ -543,6 +543,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/open": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Mark an event read from a read-on-open link and get its upstream URL
+     * @description No session: the link's tag is the credential. Marks the item read in the inbox of the link's owner, archived items included. Every link that does not verify, or whose event the owner can no longer read, is the same 404.
+     */
+    post: operations["open-link"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/push/devices": {
     parameters: {
       query?: never;
@@ -1592,6 +1612,14 @@ export interface components {
       id: string;
       /** @description The user held the admin role (GEDOUR_OIDC_ADMIN_ROLE) at sign-in; always true in dev mode */
       is_admin: boolean;
+    };
+    OpenInputBody: {
+      /** @description The fragment of the /r link, without its # */
+      link: string;
+    };
+    OpenOutputBody: {
+      /** @description The event's upstream page */
+      url: string;
     };
     OtherRule: {
       /** Format: uuid */
@@ -3169,6 +3197,40 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["MeOutputBody"];
+        };
+      };
+      /** @description Error */
+      default: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["ErrorModel"];
+        };
+      };
+    };
+  };
+  "open-link": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OpenInputBody"];
+      };
+    };
+    responses: {
+      /** @description OK */
+      200: {
+        headers: {
+          "Cache-Control"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OpenOutputBody"];
         };
       };
       /** @description Error */

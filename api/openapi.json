@@ -1899,6 +1899,32 @@
         ],
         "type": "object"
       },
+      "OpenInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "link": {
+            "description": "The fragment of the /r link, without its #",
+            "type": "string"
+          }
+        },
+        "required": [
+          "link"
+        ],
+        "type": "object"
+      },
+      "OpenOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "The event's upstream page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "OtherRule": {
         "additionalProperties": false,
         "properties": {
@@ -4674,6 +4700,55 @@
         "summary": "The signed-in user and the session's CSRF token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/open": {
+      "post": {
+        "description": "No session: the link's tag is the credential. Marks the item read in the inbox of the link's owner, archived items included. Every link that does not verify, or whose event the owner can no longer read, is the same 404.",
+        "operationId": "open-link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenOutputBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Mark an event read from a read-on-open link and get its upstream URL",
+        "tags": [
+          "inbox"
         ]
       }
     },

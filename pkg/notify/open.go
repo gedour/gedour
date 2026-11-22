@@ -61,8 +61,17 @@ func (s *Sender) upstream(on bool, owner string, eventID int64, u string) string
 	if !on || s.PublicURL == "" || len(s.OpenKey) == 0 || u == "" || eventID == 0 || owner == "" {
 		return u
 	}
-	if p, err := url.Parse(u); err != nil || p.Host == "" {
+	if !LinkableURL(u) {
 		return ""
 	}
 	return strings.TrimRight(s.PublicURL, "/") + "/r#" + openLink(s.OpenKey, eventID, owner)
+}
+
+// LinkableURL reports whether u may be a read-on-open target: http(s), parsed with a host (021).
+func LinkableURL(u string) bool {
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return false
+	}
+	p, err := url.Parse(u)
+	return err == nil && p.Host != ""
 }

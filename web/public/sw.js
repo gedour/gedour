@@ -33,9 +33,14 @@ function targetURL(notification) {
 const NOT_SPA = /^\/(api\/|mcp(\/|$)|sw\.js$|r(\.js)?$)/;
 
 // An open gedour tab routes in place, without a reload (the SPA listens for this message).
+// A target outside the SPA (/r) opens its own window: the SPA's router would show its not-found page.
 async function openNotification(notification) {
   notification.close();
   const url = targetURL(notification);
+  if (NOT_SPA.test(new URL(url).pathname)) {
+    await self.clients.openWindow(url);
+    return;
+  }
   const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const win = windows.find((w) => !NOT_SPA.test(new URL(w.url).pathname));
   if (!win) {

@@ -1,6 +1,6 @@
 # 021 — Mark read on upstream open
 
-**Status**: shipped
+**Status**: shipped (phases 1-2); phase 3 in progress
 **Requested by**: babs
 **Date**: 2026-11-22
 
@@ -18,6 +18,9 @@ gedour. Opening the link shows a blank gedour page for a moment, marks the event
 owner's inbox, then lands on the upstream page. No sign-in is needed: the link carries a signature that
 gedour checks. The signature sits in the URL fragment, which browsers never send to a server: a client
 that fetches the link without running its script gets an empty page and changes nothing.
+
+Update (2026-11-23, phase 3): Web Push channels get the same setting. A notification about one event then
+opens the upstream page through `/r`, marking the event read, instead of opening it in the gedour inbox.
 
 ## Scope
 
@@ -66,10 +69,28 @@ that fetches the link without running its script gets an empty page and changes 
   mail sandboxes that run JavaScript), AGENTS.md: SPA fallback exceptions (`/r`, `/r.js`) and `/r.js`'s `location.replace` as a second
   script navigation outside ESLint's reach.
 
+Phase 3, Web Push:
+
+- `web_push` channel config gets `read_on_open` too (boolean, `false` when absent).
+- With it on, a single-event notification (`PushPayload`, a real event, live test included) whose event
+  has an upstream URL the swap accepts (as phase 1: http(s) prefix, `url.Parse` with a host) carries
+  `url: "/r#<link>"`, same link format and key as phase 1, the channel owner's id. It is a path on gedour's
+  origin, so it needs no `GEDOUR_PUBLIC_URL` and passes the service worker's same-origin rule unchanged.
+  Otherwise (option off, channel test, no or refused URL, no key) the payload is byte-identical to before.
+- A grouped (017) or digest (012) notification holding exactly one event follows the single-event rule;
+  two or more keep `url: "/inbox"`: one click cannot open several upstream pages.
+- Service worker click: a target whose path is in `NOT_SPA` (`/r`) opens in a new window, never posted to
+  an open SPA tab, whose router would show its not-found page and mark nothing. Inbox targets keep today's
+  routing into an open tab.
+- Channel form: the "Mark read when I open upstream" checkbox on the Web Push form too; its hint there
+  leaves out `GEDOUR_PUBLIC_URL`.
+- API doc string, OpenAPI, README Web Push section.
+
 ## Out of scope
 
 - Webhook and script channels: they carry the raw event.
-- Web Push: a click already opens the event in gedour, which marks it read (010-AC13).
+- ~~Web Push~~: in scope since phase 3.
+- A Web Push notification of several events opening anything but the inbox.
 - Link expiry, per-link revocation, a click log, links bound to a channel.
 - Keeping links valid across a change of `GEDOUR_ENCRYPTION_KEY`: a new key refuses old links.
 - Telling a headless browser that runs the script apart from a human (`Sec-Fetch-User` and the like).
@@ -128,6 +149,24 @@ that fetches the link without running its script gets an empty page and changes 
 - [x] **AC15** A Web Push click with only `/r` and `/r.js` tabs open opens a new window; a `/rules` tab
   still gets the message (`web/src/sw.test.ts`).
 
+- [ ] **AC16** With `read_on_open: true` on a `web_push` channel, the notification of a single real event
+  (live test included) with an accepted upstream URL has `url` `/r#<event id>.<owner id>.<tag>`, `<owner
+  id>` the channel owner's, with or without `GEDOUR_PUBLIC_URL`; its tag, title, body and urgency are as
+  before.
+- [ ] **AC17** With `read_on_open` absent or `false`, for a channel test, for an event without an upstream
+  URL or with one the swap refuses, and for a sender without a key, Web Push payloads are byte-identical to
+  before this spec.
+- [ ] **AC18** A grouped or digest notification of one event follows AC16 and AC17; of two or more events
+  its `url` stays `/inbox`.
+- [ ] **AC19** `read_on_open` is accepted on `web_push` (AC5's other rules hold: non-boolean is a 400,
+  `null` is off, `true` reads back true); webhook and script still refuse it.
+- [ ] **AC20** Service worker: a click on a notification whose url path is `/r` opens a new window on that
+  url even with an SPA tab open, and posts nothing to that tab; a click on an `/inbox` url still routes in
+  the open SPA tab (`web/src/sw.test.ts`).
+- [ ] **AC21** The Web Push channel form shows "Mark read when I open upstream" unchecked for a new
+  channel, saves the checked state as `read_on_open: true`, reloads it checked, and its hint does not
+  mention `GEDOUR_PUBLIC_URL`.
+
 ## Phases
 
 ### Phase 1 — Signed links, open API and page
@@ -149,6 +188,18 @@ that fetches the link without running its script gets an empty page and changes 
 - **Data model impact**: none
 - **DoD**: `make test`, `make lint` green; ChannelsPage vitest covers AC13; `make e2e` green with the new
   specs (bounded runner, 4 workers), CSP guard included.
+
+### Phase 3 — Web Push
+- Work: `read_on_open` on `WebPushConfig` (validation, default off); `PushPayload` and `PushDigestPayload`
+  take the swap (sender key, channel owner id) at their callers in `pkg/route` (`pushSend`, the digest send,
+  not the channel test); `sw.js` opens `NOT_SPA` targets in a new window; checkbox on the Web Push form;
+  doc string, OpenAPI (`make openapi`), README.
+- **Covers**: AC16, AC17, AC18, AC19, AC20, AC21
+- **Data model impact**: none (channel config is JSON; absent means off)
+- **DoD**: `make test`, `make coverage`, `make lint`, `pre-commit run --all-files` green; `TestOpenAPIDrift`
+  and `pnpm check:api` green; `go test ./pkg/notify ./pkg/route ./pkg/server -run ReadOnOpen` covers AC16 to
+  AC19; `sw.test.ts` covers AC20, `ChannelsPage.test.tsx` AC21; full `make e2e` green (bounded runner, 4
+  workers).
 
 ## Data model impact (summary)
 
@@ -187,4 +238,8 @@ None. `read_on_open` lives in the channel's JSON config; `POST /api/v1/open` rea
 - Mark read is not audited, as `POST /api/v1/inbox/read` is not.
 - No rate limit: a bad tag costs one HMAC and no query; a valid one, revoked or not, costs one small
   transaction, as any signed-in API call, and only the message's recipients hold one.
+- Web Push links are relative (`/r#…`): the service worker opens only its own origin, and a relative
+  path needs no `GEDOUR_PUBLIC_URL` (phase 3).
+- A one-event digest or group notification gets the signed link, as the click has one target; two or more
+  keep the inbox (phase 3).
 - Path `/r` short on purpose: it counts toward Telegram's 4096 and Talk's caps.

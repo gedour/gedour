@@ -364,8 +364,9 @@ func (d *Deliverer) deliverDigest(stop context.Context, j claimed) {
 			// One priority per poll group (claimSingles): a high group keeps its high urgency (005).
 			rule = dg.Deliveries[0].Rule
 		}
-		_, err = pushFanOut(ctx, d.pool, d.box, d.sender, ch, ids, func(silent bool) ([]byte, string) {
-			return notify.PushDigestPayload(dg, ch.ID, silent), notify.PushUrgency(silent, rule)
+		_, err = pushFanOut(ctx, d.pool, d.box, d.sender, ch, ids, func(c notify.WebPushConfig) ([]byte, string) {
+			open := d.sender.PushOpen(c.ReadOnOpen, ch.OwnerID, dg.Deliveries...)
+			return notify.PushDigestPayload(dg, ch.ID, c.Silent, open), notify.PushUrgency(c.Silent, rule)
 		})
 	case err == nil:
 		err = d.sender.SendDigest(ctx, ch, dg)

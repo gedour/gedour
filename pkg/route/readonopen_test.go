@@ -2,6 +2,7 @@ package route
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -128,4 +129,90 @@ func TestReadOnOpenLiveTest(t *testing.T) {
 	if ids := signedEvents(t, r.sender, text, alice); len(ids) != 1 || ids[0] != ev || !strings.Contains(text, "[test] ") {
 		t.Fatalf("live test %q", text)
 	}
+}
+
+// 021-AC16, 021-AC17, 021-AC18: on Web Push, a single event, its live test and a one-event digest open the signed
+// /r link bound to the channel owner, relative and without a public URL; title, body, tag and urgency stay as
+// the channel without the option gets them. An event without a URL, a poll of two and a digest of two do not.
+func TestReadOnOpenWebPush(t *testing.T) {
+	r := newRuleTestEnv(t)
+	r.sender.OpenKey = openKey(t)
+	alice := r.user(t, "alice")
+	on, off := r.channel(t, alice, false, r.device(t, alice, "on", false)), r.channel(t, alice, false, r.device(t, alice, "off", false))
+	if _, err := r.pool.Exec(context.Background(), `UPDATE channels SET config = config || '{"read_on_open": true}' WHERE id = $1`, on); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := loadChannel(context.Background(), r.pool, r.box, on)
+	if err != nil || ch.OwnerID != alice {
+		t.Fatalf("channel %+v %v", ch, err)
+	}
+	last := func(dev string) (notify.PushMessage, string) {
+		t.Helper()
+		got := r.received("push-" + dev)
+		var m notify.PushMessage
+		if len(got) == 0 || json.Unmarshal([]byte(got[len(got)-1].Body), &m) != nil {
+			t.Fatalf("%s: %+v", dev, got)
+		}
+		return m, got[len(got)-1].Header["Urgency"]
+	}
+	// check compares the last pushes: off opens offURL; on the signed link of event, offURL for event 0.
+	check := func(name string, event int64, offURL string) {
+		t.Helper()
+		m, mu := last("on")
+		o, ou := last("off")
+		if event == 0 {
+			if m.URL != offURL {
+				t.Fatalf("%s: on opens %q, want %q", name, m.URL, offURL)
+			}
+		} else if id, owner, ok := r.sender.VerifyOpen(strings.TrimPrefix(m.URL, "/r#")); !strings.HasPrefix(m.URL, "/r#") || !ok || id != event || owner != alice {
+			t.Fatalf("%s: on opens %q: %d %q %v", name, m.URL, id, owner, ok)
+		}
+		// Poll and digest tags name their channel or lead delivery: only an event's tag is shared.
+		sameTag := m.Tag == o.Tag || !strings.HasPrefix(m.Tag, "gedour-event-")
+		if o.URL != offURL || m.Title != o.Title || m.Body != o.Body || m.Silent != o.Silent || !sameTag || mu != ou {
+			t.Fatalf("%s: on %+v %s, off %+v %s", name, m, mu, o, ou)
+		}
+	}
+	w := r.watch(t, alice)
+	rule := r.rule(t, alice, &w, "", on, off)
+	d := r.deliverer()
+
+	ev := r.event(t, w, "release.published", "v1")
+	r.withURLs(t)
+	routeAll(t, r.router())
+	r.once(t, d)
+	check("single", ev, "/inbox?event="+strconv.FormatInt(ev, 10))
+
+	bare := r.event(t, w, "release.published", "v2")
+	routeAll(t, r.router())
+	r.once(t, d)
+	check("no url", 0, "/inbox?event="+strconv.FormatInt(bare, 10))
+
+	r.poll(t, w, "v3", "v4")
+	r.withURLs(t)
+	routeAll(t, r.router())
+	r.once(t, d)
+	check("poll of two", 0, "/inbox")
+
+	if got := r.items(t, alice, rule, ev); !got[on].OK || !got[off].OK {
+		t.Fatalf("live test %+v", got)
+	}
+	check("live test", ev, "/inbox?event="+strconv.FormatInt(ev, 10))
+
+	w2 := r.watch(t, alice)
+	r.digestRule(t, alice, &w2, "", on, off)
+	one := r.event(t, w2, "release.published", "d1")
+	r.withURLs(t)
+	routeAll(t, r.router())
+	r.makeDue(t)
+	r.once(t, d)
+	check("digest of one", one, "/inbox")
+
+	r.event(t, w2, "release.published", "d2")
+	r.event(t, w2, "release.published", "d3")
+	r.withURLs(t)
+	routeAll(t, r.router())
+	r.makeDue(t)
+	r.once(t, d)
+	check("digest of two", 0, "/inbox")
 }

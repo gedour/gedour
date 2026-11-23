@@ -22,4 +22,4 @@
 | [018](018-digest-weekdays.md) | Digest weekdays | shipped |
 | [019](019-github-schedules-deadman.md) | GitHub scheduled workflows deadman | shipped |
 | [020](020-inbox-watch-filter.md) | Inbox filter by watch | shipped |
-| [021](021-read-on-open.md) | Mark read on upstream open | shipped |
+| [021](021-read-on-open.md) | Mark read on upstream open | shipped; phase 3 (Web Push) in progress |

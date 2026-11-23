@@ -176,7 +176,7 @@ func TestFormatTestMarker(t *testing.T) {
 			t.Errorf("test %v: summary %q title %q", tt.test, m.Summary, m.Title)
 		}
 		var push PushMessage
-		_ = json.Unmarshal(PushPayload(d, false), &push)
+		_ = json.Unmarshal(PushPayload(d, false, ""), &push)
 		if push.Title != tt.title {
 			t.Errorf("test %v: push title %q", tt.test, push.Title)
 		}

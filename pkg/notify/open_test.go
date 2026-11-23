@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"maps"
 	"mime"
@@ -364,5 +365,85 @@ func TestReadOnOpenURLs(t *testing.T) {
 	}
 	if got := s.upstream(true, owner, 0, "https://x.test"); got != "https://x.test" {
 		t.Errorf("event 0: %q", got)
+	}
+}
+
+// 021-AC16, 021-AC17, 021-AC18: a Web Push notification of one real event, a live test included, opens the
+// relative signed /r link, public URL or not, only with the option on, a key, an owner and a URL the swap
+// accepts; its tag, title and body stay. Otherwise, a channel test, and a group or digest of two events,
+// the payload is the one without the option.
+func TestReadOnOpenPush(t *testing.T) {
+	yes, no := true, false
+	live := sample
+	live.Test = true
+	// A channel test with a URL: only its event id 0 keeps the link out.
+	test := TestDelivery(time.Now())
+	test.Event.Payload = map[string]any{"message": "m", "url": "https://x.test/a"}
+	withURL := func(u any) Delivery {
+		d := sample
+		d.Event.Payload = map[string]any{"tag": "v1", "url": u}
+		return d
+	}
+	for _, pub := range []string{"", public} {
+		for _, tt := range []struct {
+			name   string
+			on     *bool
+			key    bool
+			owner  string
+			d      Delivery
+			signed bool
+		}{
+			{"on", &yes, true, owner, sample, true},
+			{"live test", &yes, true, owner, live, true},
+			{"absent", nil, true, owner, sample, false},
+			{"false", &no, true, owner, sample, false},
+			{"no key", &yes, false, owner, sample, false},
+			{"no owner", &yes, true, "", sample, false},
+			{"channel test", &yes, true, owner, test, false},
+			{"no url", &yes, true, owner, withURL(nil), false},
+			{"ftp url", &yes, true, owner, withURL("ftp://x.test/a"), false},
+			{"no host", &yes, true, owner, withURL("https:///a"), false},
+			{"unparsable", &yes, true, owner, withURL("http://[::1"), false},
+		} {
+			s := readOnOpenSender(t, pub, tt.key)
+			before := PushPayload(tt.d, true, "")
+			got := PushPayload(tt.d, true, s.PushOpen(tt.on, tt.owner, tt.d))
+			var m, b PushMessage
+			_ = json.Unmarshal(got, &m)
+			_ = json.Unmarshal(before, &b)
+			if !tt.signed {
+				if string(got) != string(before) {
+					t.Errorf("%s %q: %s, want %s", tt.name, pub, got, before)
+				}
+				continue
+			}
+			if want := "/r#" + openLink(s.OpenKey, tt.d.Event.ID, owner); m.URL != want {
+				t.Errorf("%s %q: url %q, want %q", tt.name, pub, m.URL, want)
+			}
+			if b.URL = m.URL; m != b {
+				t.Errorf("%s %q: %+v, want %+v", tt.name, pub, m, b)
+			}
+		}
+	}
+	s := readOnOpenSender(t, "", true)
+	for _, poll := range []bool{false, true} {
+		one, two := digestOf(1, func(int) string { return "v1" }), digestOf(2, func(int) string { return "v1" })
+		one.Poll, two.Poll = poll, poll
+		var m PushMessage
+		_ = json.Unmarshal(PushDigestPayload(one, "c1", false, s.PushOpen(&yes, owner, one.Deliveries...)), &m)
+		var b PushMessage
+		_ = json.Unmarshal(PushDigestPayload(one, "c1", false, ""), &b)
+		if want := "/r#" + openLink(s.OpenKey, 1, owner); m.URL != want || b.URL != "/inbox" {
+			t.Errorf("poll %v, one event: %q, want %q", poll, m.URL, want)
+		}
+		if b.URL = m.URL; m != b {
+			t.Errorf("poll %v, one event: %+v, want %+v", poll, m, b)
+		}
+		if got, want := PushDigestPayload(two, "c1", false, s.PushOpen(&yes, owner, two.Deliveries...)), PushDigestPayload(two, "c1", false, ""); string(got) != string(want) {
+			t.Errorf("poll %v, two events: %s, want %s", poll, got, want)
+		}
+		if got, want := PushDigestPayload(one, "c1", false, s.PushOpen(nil, owner, one.Deliveries...)), PushDigestPayload(one, "c1", false, ""); string(got) != string(want) {
+			t.Errorf("poll %v, option off: %s, want %s", poll, got, want)
+		}
 	}
 }

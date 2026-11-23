@@ -223,7 +223,10 @@ describe("Web Push devices in the channel form", () => {
       `${defaultDeviceName()}This browser`,
     );
     expect(within(dialog).getByLabelText(/All my devices/)).toBeChecked();
-    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+    // No device boxes with all devices: the only checkbox is read_on_open's (021-AC21).
+    expect(within(dialog).getAllByRole("checkbox")).toEqual([
+      within(dialog).getByRole("checkbox", { name: "Mark read when I open upstream" }),
+    ]);
     await userEvent.click(within(dialog).getByLabelText(/Pick devices/));
     const list = within(dialog).getByRole("list", { name: "My devices" });
     expect(within(list).getByRole("checkbox", { name: /This browser/ })).toBeChecked();
@@ -236,7 +239,7 @@ describe("Web Push devices in the channel form", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Phone",
         type: "web_push",
-        config: { devices: ["d-new", "d1"], silent: true },
+        config: { devices: ["d-new", "d1"], silent: true, read_on_open: false },
       }),
     );
     expect(push.requestPermission).toHaveBeenCalledTimes(1);
@@ -419,7 +422,7 @@ describe("Web Push devices in the channel form", () => {
     await waitFor(() =>
       expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
         name: "Push",
-        config: { devices: ["d2"], silent: false },
+        config: { devices: ["d2"], silent: false, read_on_open: false },
       }),
     );
   });
@@ -629,7 +632,7 @@ describe("Web Push devices in the channel form", () => {
     await waitFor(() =>
       expect(lastCall(fn, "/api/v1/channels/c1", "PATCH")?.body).toEqual({
         name: "Push",
-        config: { devices: ["d1"], silent: false },
+        config: { devices: ["d1"], silent: false, read_on_open: false },
       }),
     );
   });

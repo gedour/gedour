@@ -308,7 +308,7 @@ describe("ChannelsPage", () => {
   });
 
   // 021-AC13: "Mark read when I open upstream" is unchecked for a new Telegram, Talk or email channel, absent
-  // elsewhere; checked saves read_on_open true, which reloads checked.
+  // on webhook and script (Web Push: 021-AC21); checked saves read_on_open true, which reloads checked.
   it("saves Mark read when I open upstream checked and reloads it checked", async () => {
     let items: Channel[] = [];
     const fn = mockApi({
@@ -326,7 +326,7 @@ describe("ChannelsPage", () => {
     let dialog = screen.getByRole("dialog");
     const open = () =>
       within(dialog).queryByRole("checkbox", { name: "Mark read when I open upstream" });
-    for (const kind of ["Webhook", "Web Push", "Script"]) {
+    for (const kind of ["Webhook", "Script"]) {
       await userEvent.click(within(dialog).getByText(kind));
       expect(open()).not.toBeInTheDocument();
     }
@@ -350,6 +350,46 @@ describe("ChannelsPage", () => {
       secret: "123:abc",
     });
     await userEvent.click(await screen.findByRole("button", { name: "Edit Phone" }));
+    dialog = screen.getByRole("dialog");
+    expect(open()).toBeChecked();
+  });
+
+  // 021-AC21: on Web Push, "Mark read when I open upstream" is unchecked for a new channel, without "Link to
+  // gedour", its hint without GEDOUR_PUBLIC_URL; checked saves read_on_open true, which reloads checked.
+  it("saves Mark read when I open upstream on Web Push", async () => {
+    let items: Channel[] = [];
+    const fn = mockApi({
+      "/api/v1/channels": (_: URL, init?: RequestInit) => {
+        if (init?.method !== "POST") return Response.json({ items });
+        const body = JSON.parse(String(init.body)) as Pick<Channel, "name" | "type" | "config">;
+        items = [channel({ ...body, id: "c9" })];
+        return Response.json(items[0], { status: 201 });
+      },
+    });
+    renderApp("/channels");
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: "New channel" }))[0] as HTMLElement,
+    );
+    let dialog = screen.getByRole("dialog");
+    const open = () =>
+      within(dialog).queryByRole("checkbox", { name: "Mark read when I open upstream" });
+    await userEvent.click(within(dialog).getByText("Web Push"));
+    expect(open()).not.toBeChecked();
+    expect(open()).toHaveAccessibleDescription(
+      "A notification of one event opens its upstream page through gedour, which marks it read. Anyone who opens it marks the item read.",
+    );
+    expect(open()).not.toHaveAccessibleDescription(/GEDOUR_PUBLIC_URL/);
+    expect(within(dialog).queryByRole("checkbox", { name: "Link to gedour" })).toBeNull();
+    await userEvent.click(open() as HTMLElement);
+    await userEvent.type(within(dialog).getByLabelText("Name"), "Pushes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create channel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
+      name: "Pushes",
+      type: "web_push",
+      config: { devices: "all", silent: false, read_on_open: true },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Pushes" }));
     dialog = screen.getByRole("dialog");
     expect(open()).toBeChecked();
   });
@@ -719,7 +759,7 @@ describe("ChannelsPage", () => {
       expect(lastCall(fn, "/api/v1/channels", "POST")?.body).toEqual({
         name: "Pushes",
         type: "web_push",
-        config: { devices: ["d1"], silent: false },
+        config: { devices: ["d1"], silent: false, read_on_open: false },
       }),
     );
   });

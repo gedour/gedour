@@ -165,13 +165,13 @@ func TestRulePriorityNotInJSON(t *testing.T) {
 func TestPushPayload(t *testing.T) {
 	d := Delivery{ID: 7, Event: Event{ID: 42, Type: "release.published", Payload: map[string]any{"tag": "v1", "name": "Big <release> & co"}}, Watch: Watch{Name: "cli/cli"}}
 	var m PushMessage
-	if err := json.Unmarshal(PushPayload(d, true), &m); err != nil {
+	if err := json.Unmarshal(PushPayload(d, true, ""), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m != (PushMessage{Title: "cli/cli: v1 published", Body: "Big <release> & co", URL: "/inbox?event=42", Tag: "gedour-event-42", Silent: true}) {
 		t.Fatalf("%+v", m)
 	}
-	if err := json.Unmarshal(PushPayload(TestDelivery(time.Now()), false), &m); err != nil || m.URL != "/inbox" || m.Tag != "gedour-test" || m.Silent {
+	if err := json.Unmarshal(PushPayload(TestDelivery(time.Now()), false, ""), &m); err != nil || m.URL != "/inbox" || m.Tag != "gedour-test" || m.Silent {
 		t.Fatalf("test delivery: %+v %v", m, err)
 	}
 	// Over the limit: the body is cut first, then the title, on rune boundaries; quotes double when escaped.
@@ -184,7 +184,7 @@ func TestPushPayload(t *testing.T) {
 		{"long title", strings.Repeat("ü", 3000), strings.Repeat("x", 100), false},
 	} {
 		d := Delivery{Event: Event{Type: "release.published", Payload: map[string]any{"tag": tt.title, "name": tt.detail}}, Watch: Watch{Name: "w"}}
-		b := PushPayload(d, false)
+		b := PushPayload(d, false, "")
 		if len(b) > webpush.MaxPayload || !utf8.Valid(b) {
 			t.Fatalf("%s: %d bytes, valid %v", tt.name, len(b), utf8.Valid(b))
 		}

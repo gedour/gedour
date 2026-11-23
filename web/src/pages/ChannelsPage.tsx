@@ -368,7 +368,7 @@ function ChannelForm({
     if (type === "nextcloud_talk") return { url, conversation, silent, ...links };
     if (type === "email") return { to: splitRecipients(to), ...links };
     if (type === "script") return { script_id: scriptId };
-    if (type === "web_push") return { devices: picked ?? "all", silent };
+    if (type === "web_push") return { devices: picked ?? "all", silent, read_on_open: readOnOpen };
     return { url };
   };
   const save = useMutation({
@@ -738,40 +738,41 @@ function ChannelForm({
           </Field>
         )}
         {linkable && (
-          <>
-            <div className="flex flex-col gap-1.5">
-              <label className="inline-flex w-fit items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={gedourLink}
-                  onChange={(e) => setGedourLink(e.target.checked)}
-                  aria-describedby={linkHint}
-                  className="size-4 accent-beacon"
-                />
-                Link to gedour
-              </label>
-              <p id={linkHint} className="text-xs text-muted">
-                Ends each message with a link to the event in gedour, or to the inbox for several
-                events.
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="inline-flex w-fit items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={readOnOpen}
-                  onChange={(e) => setReadOnOpen(e.target.checked)}
-                  aria-describedby={openHint}
-                  className="size-4 accent-beacon"
-                />
-                Mark read when I open upstream
-              </label>
-              <p id={openHint} className="text-xs text-muted">
-                Upstream links go through gedour, which needs GEDOUR_PUBLIC_URL. Anyone who opens
-                the link marks the item read.
-              </p>
-            </div>
-          </>
+          <div className="flex flex-col gap-1.5">
+            <label className="inline-flex w-fit items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={gedourLink}
+                onChange={(e) => setGedourLink(e.target.checked)}
+                aria-describedby={linkHint}
+                className="size-4 accent-beacon"
+              />
+              Link to gedour
+            </label>
+            <p id={linkHint} className="text-xs text-muted">
+              Ends each message with a link to the event in gedour, or to the inbox for several
+              events.
+            </p>
+          </div>
+        )}
+        {(linkable || type === "web_push") && (
+          <div className="flex flex-col gap-1.5">
+            <label className="inline-flex w-fit items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={readOnOpen}
+                onChange={(e) => setReadOnOpen(e.target.checked)}
+                aria-describedby={openHint}
+                className="size-4 accent-beacon"
+              />
+              Mark read when I open upstream
+            </label>
+            <p id={openHint} className="text-xs text-muted">
+              {type === "web_push"
+                ? "A notification of one event opens its upstream page through gedour, which marks it read. Anyone who opens it marks the item read."
+                : "Upstream links go through gedour, which needs GEDOUR_PUBLIC_URL. Anyone who opens the link marks the item read."}
+            </p>
+          </div>
         )}
         <DialogActions>
           <Button type="button" variant="ghost" onClick={onClose}>

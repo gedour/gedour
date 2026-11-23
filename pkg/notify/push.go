@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -88,8 +89,9 @@ const AllDevices = "all"
 // WebPushConfig is the config of a web_push channel. Devices is AllDevices or a list of the owner's device
 // ids; stored, a list lives in channel_push_devices and Devices is left out.
 type WebPushConfig struct {
-	Devices any  `json:"devices,omitempty"`
-	Silent  bool `json:"silent"`
+	Devices    any   `json:"devices,omitempty"`
+	Silent     bool  `json:"silent"`
+	ReadOnOpen *bool `json:"read_on_open,omitempty"`
 }
 
 // PushUrgency is low for a silent channel, high for an event of a high priority rule, normal otherwise.
@@ -113,15 +115,24 @@ type PushMessage struct {
 }
 
 // PushPayload is the message of d for the service worker, cut to fit one push record: body first, then
-// title, on rune boundaries. url is the gedour path the notification opens.
-func PushPayload(d Delivery, silent bool) []byte {
+// title, on rune boundaries. url is the gedour path the notification opens: open (PushOpen) when set.
+func PushPayload(d Delivery, silent bool, open string) []byte {
 	msg := Format(d)
 	m := PushMessage{Title: msg.Title, Body: msg.Detail, URL: "/inbox", Tag: "gedour-test", Silent: silent}
 	if d.Event.ID != 0 {
-		m.URL = "/inbox?event=" + strconv.FormatInt(d.Event.ID, 10)
+		m.URL = cmp.Or(open, "/inbox?event="+strconv.FormatInt(d.Event.ID, 10))
 		m.Tag = "gedour-event-" + strconv.FormatInt(d.Event.ID, 10)
 	}
 	return fitPush(m)
+}
+
+// PushOpen is the /r link a read_on_open notification of ds opens (021), relative as the service worker opens
+// its own origin only; empty unless ds is one event whose URL the swap accepts. PushPayload drops it for a test.
+func (s *Sender) PushOpen(on *bool, owner string, ds ...Delivery) string {
+	if len(ds) != 1 || !readOnOpen(on) || len(s.OpenKey) == 0 || owner == "" || !LinkableURL(str(ds[0].Event.Payload["url"])) {
+		return ""
+	}
+	return "/r#" + openLink(s.OpenKey, ds[0].Event.ID, owner)
 }
 
 // fitPush encodes m cut to one push record: body first, then title, on rune boundaries.

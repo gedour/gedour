@@ -484,8 +484,8 @@ func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *
 	if d.ID != 0 {
 		ids = []int64{d.ID}
 	}
-	return pushFanOut(ctx, pool, box, sender, ch, ids, func(silent bool) ([]byte, string) {
-		return notify.PushPayload(d, silent), notify.PushUrgency(silent, d.Rule)
+	return pushFanOut(ctx, pool, box, sender, ch, ids, func(c notify.WebPushConfig) ([]byte, string) {
+		return notify.PushPayload(d, c.Silent, sender.PushOpen(c.ReadOnOpen, ch.OwnerID, d)), notify.PushUrgency(c.Silent, d.Rule)
 	})
 }
 
@@ -493,7 +493,7 @@ func pushSend(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *
 // every one of them: a digest records its acceptance against each, and a retry joined by a new delivery
 // reaches every device again (012-AC12).
 func pushFanOut(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender *notify.Sender, ch notify.Channel, ids []int64,
-	message func(silent bool) ([]byte, string)) (int, error) {
+	message func(c notify.WebPushConfig) ([]byte, string)) (int, error) {
 	var c notify.WebPushConfig
 	if err := json.Unmarshal(ch.Config, &c); err != nil {
 		return 0, fmt.Errorf("web push config: %w", err)
@@ -519,7 +519,7 @@ func pushFanOut(ctx context.Context, pool *pgxpool.Pool, box *secret.Box, sender
 		return 0, errNoDevice
 	}
 	pending := slices.DeleteFunc(slices.Clone(targets), func(t pushTarget) bool { return t.alreadySent })
-	payload, urgency := message(c.Silent)
+	payload, urgency := message(c)
 	results := make([]error, len(pending))
 	sem := make(chan struct{}, pushParallel)
 	var wg sync.WaitGroup

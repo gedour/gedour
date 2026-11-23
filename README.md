@@ -509,7 +509,8 @@ or once the key is gone. Inbox marks are not audited, as on REST; the log lines 
   `GEDOUR_PUBLIC_URL`; without it messages are as with the option off. Anyone who opens the link marks the
   item read: a group chat member, any address of the `to` list, a mail sandbox that runs JavaScript. Links
   keep working after the option is turned off or the channel deleted, and stop when `GEDOUR_ENCRYPTION_KEY`
-  changes or the owner can no longer read the event.
+  changes or the owner can no longer read the event. Web Push takes it too: see
+  [Web Push channels](#web-push-channels).
 - Inbox live updates: `GET /api/v1/inbox/stream` (SSE). The router `NOTIFY`s `gedour_inbox`; each web
   replica holds one `LISTEN` connection. Streams send `event: inbox` with `{"unread": n}`, a comment every
   25 s, and `event: signed_out` when the session ends (heartbeats check the session without refreshing
@@ -611,7 +612,8 @@ A Web Push channel shows a native browser notification on the owner's registered
   registers nothing. On iPhone and iPad, Safari offers Web Push only to a site
   added to the Home Screen, which gedour does not support yet.
 - Service worker: `/sw.js` shows the notification. A click focuses an open gedour tab and routes it in place
-  to the event's inbox item without a reload, or opens a new tab.
+  to the event's inbox item without a reload, or opens a new tab. A `/r` link (mark read on open) always
+  opens a new tab.
 - Devices: `POST /api/v1/push/devices {endpoint, keys: {p256dh, auth}, name, user_agent}` with the browser's
   `PushSubscription`, subscribed with the key from `GET /api/v1/push/key`. The endpoint passes the webhook
   rules: https (http only for `GEDOUR_ALLOW_HTTP_HOSTS`); a literal private IP is a 400 at registration unless
@@ -622,7 +624,8 @@ A Web Push channel shows a native browser notification on the owner's registered
   with `GEDOUR_ENCRYPTION_KEY` and never returned or audited. `GET /api/v1/push/devices` returns
   `endpoint_sha256` (hex SHA-256 of the endpoint) so a browser recognizes its own device.
 - Config: `devices` is `"all"` (every device of the owner, later ones included) or a list of the owner's
-  device ids; `silent` sets urgency `low` and the notification's `silent` option. No secret.
+  device ids; `silent` sets urgency `low` and the notification's `silent` option; `read_on_open` (absent
+  means off), below. No secret.
 - Delivery: one delivery pushes to every targeted device (5 at a time, 10 s each). Urgency is `high` for an
   event of a high priority rule, `low` when silent, `normal` otherwise. A retry skips the devices that
   accepted. A device the push service answers 404 or 410 is removed (audited as `push_device.gone`); a
@@ -630,7 +633,11 @@ A Web Push channel shows a native browser notification on the owner's registered
   tries it again. Once the others accepted, the delivery is `sent` with the refusals as its error. With no
   device left to send to, the delivery is `dead` with `no device`.
 - Payload: JSON `{title, body, url, tag, silent}`, the Telegram text cut to fit 4 KB; `url` is
-  `/inbox?event=<id>`. "Send test" pushes to the channel's devices (cut after 25 s) and answers `accepted`, the
+  `/inbox?event=<id>`. With `read_on_open: true` ("Mark read when I open upstream"), a notification of one
+  event with an http(s) upstream URL opens `/r#<event id>.<owner id>.<tag>` instead, a path on gedour's
+  origin: no `GEDOUR_PUBLIC_URL` needed. It marks the event read, then opens the upstream page, as in
+  [mark read on open](#routing-and-channels). A grouped message or digest of one event does the same; of two
+  or more it opens the inbox. "Send test" pushes to the channel's devices (cut after 25 s) and answers `accepted`, the
   devices that took it; `ok` when at least one took it and none can retry.
 - VAPID: a key pair generated at first start and sealed in the database. If it no longer opens (a changed
   encryption key), Web Push is unavailable: `GET /api/v1/push/key` answers 503 and the type cannot be picked.

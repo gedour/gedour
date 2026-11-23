@@ -115,7 +115,7 @@ func TestDigestFormat(t *testing.T) {
 // 012-AC12: the Web Push digest is the count, the watch names in order and the inbox, within one record.
 func TestPushDigestPayload(t *testing.T) {
 	var m PushMessage
-	if err := json.Unmarshal(PushDigestPayload(digestOf(5, func(i int) string { return fmt.Sprint(i) }), "c1", true), &m); err != nil {
+	if err := json.Unmarshal(PushDigestPayload(digestOf(5, func(i int) string { return fmt.Sprint(i) }), "c1", true, ""), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m != (PushMessage{Title: "5 unread events", Body: "org/repo0, org/repo1, org/repo2", URL: "/inbox", Tag: "gedour-digest-c1", Silent: true}) {
@@ -125,7 +125,7 @@ func TestPushDigestPayload(t *testing.T) {
 	for i := range 500 {
 		many.Deliveries = append(many.Deliveries, Delivery{Watch: Watch{ID: fmt.Sprint(i), Name: strings.Repeat("w", 50)}, Event: Event{Type: "tag.created"}})
 	}
-	if b := PushDigestPayload(many, "c1", false); len(b) > webpush.MaxPayload || !json.Valid(b) {
+	if b := PushDigestPayload(many, "c1", false, ""); len(b) > webpush.MaxPayload || !json.Valid(b) {
 		t.Errorf("%d bytes", len(b))
 	}
 }
@@ -213,7 +213,7 @@ func TestGroupPollDigest(t *testing.T) {
 		t.Errorf("mail subject %q", m.Title)
 	}
 	var m PushMessage
-	if err := json.Unmarshal(PushDigestPayload(dg, "ch", false), &m); err != nil {
+	if err := json.Unmarshal(PushDigestPayload(dg, "ch", false, ""), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m.Title != "2 new events" || m.URL != "/inbox" || m.Tag != "gedour-poll-7" {

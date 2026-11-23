@@ -260,8 +260,8 @@ func TestGedourLinkConfig(t *testing.T) {
 	}
 }
 
-// 021-AC5: read_on_open is a boolean on Telegram, Talk and email: null reads as absent, true reads back true;
-// a non-boolean, or the key on another type, is a 400.
+// 021-AC5, 021-AC19: read_on_open is a boolean on Telegram, Talk, email and Web Push: null reads as absent, true
+// reads back true; a non-boolean, or the key on webhook or script, is a 400.
 func TestReadOnOpenConfig(t *testing.T) {
 	a, _, _ := newPushApp(t)
 	alice := a.signIn(t, "alice")
@@ -270,6 +270,7 @@ func TestReadOnOpenConfig(t *testing.T) {
 		"telegram":       {"name": "T", "type": "telegram", "config": map[string]any{"chat_id": "-1"}, "secret": botToken},
 		"nextcloud_talk": {"name": "N", "type": "nextcloud_talk", "config": map[string]any{"url": "https://cloud.example", "conversation": "abcd"}, "secret": strings.Repeat("s", 40)},
 		"email":          {"name": "E", "type": "email", "config": map[string]any{"to": []string{"a@x.test"}}},
+		"web_push":       {"name": "P", "type": "web_push", "config": map[string]any{"devices": "all"}},
 	}
 	for typ, body := range ok {
 		cfg := maps.Clone(body["config"].(map[string]any))
@@ -299,7 +300,6 @@ func TestReadOnOpenConfig(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"name": "w", "type": "webhook", "config": map[string]any{"url": "https://hooks.example/x", "read_on_open": true}},
 		{"name": "s", "type": "script", "config": map[string]any{"script_id": "00000000-0000-0000-0000-000000000000", "read_on_open": false}},
-		{"name": "p", "type": "web_push", "config": map[string]any{"devices": "all", "read_on_open": true}},
 	} {
 		p := a.problemOf(t, alice, http.MethodPost, "/api/v1/channels", body, http.StatusBadRequest)
 		if fmt.Sprint(p.locations()) != "[body.config]" {

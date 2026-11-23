@@ -62,7 +62,7 @@ type Channel struct {
 	ID                 string         `json:"id" format:"uuid"`
 	Name               string         `json:"name"`
 	Type               string         `json:"type" enum:"telegram,nextcloud_talk,email,webhook,script,web_push"`
-	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read."`
+	Config             map[string]any `json:"config" doc:"telegram: chat_id, silent, gedour_link, read_on_open; nextcloud_talk: url, conversation, silent, gedour_link, read_on_open; email: to, gedour_link, read_on_open; webhook: url; script: script_id; web_push: devices (\"all\" or a list of device ids), silent, read_on_open. gedour_link (boolean, absent means true): with GEDOUR_PUBLIC_URL set, a message ends with a link to the event in gedour, a grouped message or digest with one link to the inbox. read_on_open (boolean, absent means false): with GEDOUR_PUBLIC_URL set, every upstream link goes through gedour, which marks the event read in the owner's inbox before opening it; anyone who opens the link marks it read. On web_push, GEDOUR_PUBLIC_URL is not needed: a notification of one event opens its upstream page through gedour, one of several events the inbox."`
 	Last4              string         `json:"last4" doc:"Last 4 characters of the secret (bot token, shared secret, signing key); empty for short ones or none"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
@@ -737,8 +737,8 @@ func (s *Service) testChannel(ctx context.Context, in *idPath) (*testResult, err
 		tctx, cancel := context.WithTimeout(ctx, pushTestTimeout)
 		defer cancel()
 		var n int
-		n, sendErr = pushFanOut(tctx, s.pool, s.box, s.sender, ch, nil, func(silent bool) ([]byte, string) {
-			return notify.PushPayload(notify.TestDelivery(now), silent), notify.PushUrgency(silent, nil)
+		n, sendErr = pushFanOut(tctx, s.pool, s.box, s.sender, ch, nil, func(c notify.WebPushConfig) ([]byte, string) {
+			return notify.PushPayload(notify.TestDelivery(now), c.Silent, ""), notify.PushUrgency(c.Silent, nil)
 		})
 		out.Body.Accepted = &n
 	} else {

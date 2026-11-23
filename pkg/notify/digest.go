@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -241,9 +242,10 @@ func (s *Sender) digestUpstream(on *bool, owner string) func(Delivery, string) s
 }
 
 // PushDigestPayload is the Web Push digest of a channel: the count as title, the first watch names as body,
-// opening the inbox; the tag per channel lets one channel's digest replace its last without hiding another's.
+// opening the inbox, or open (PushOpen) when set; the tag per channel lets one channel's digest replace its
+// last without hiding another's.
 // A poll's tag is its lead delivery's: it never replaces an earlier poll's notification still unseen.
-func PushDigestPayload(dg Digest, channelID string, silent bool) []byte {
+func PushDigestPayload(dg Digest, channelID string, silent bool, open string) []byte {
 	var names []string
 	for _, g := range groups(dg.Deliveries, nil) {
 		names = append(names, g.watch)
@@ -252,5 +254,5 @@ func PushDigestPayload(dg Digest, channelID string, silent bool) []byte {
 	if dg.Poll {
 		tag = "gedour-poll-" + strconv.FormatInt(dg.ID, 10)
 	}
-	return fitPush(PushMessage{Title: dg.count(), Body: strings.Join(names, ", "), URL: "/inbox", Tag: tag, Silent: silent})
+	return fitPush(PushMessage{Title: dg.count(), Body: strings.Join(names, ", "), URL: cmp.Or(open, "/inbox"), Tag: tag, Silent: silent})
 }

@@ -150,6 +150,27 @@ describe("service worker", () => {
     expect(withRules.scope.clients.openWindow).not.toHaveBeenCalled();
   });
 
+  // 021-AC20: a read-on-open target opens its own window, fragment kept, even with an SPA tab open, which
+  // gets nothing; an inbox target still routes in that tab.
+  it("opens a read-on-open link in a new window", async () => {
+    const link = "/r#42.6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b.8hMGpzkjn5WyKjTeh8UnyQ";
+    for (const url of [link, `${ORIGIN}${link}`]) {
+      const app = tab();
+      const { scope, dispatch } = loadWorker([app]);
+      await dispatch("notificationclick", { notification: { close: vi.fn(), data: { url } } });
+      expect(scope.clients.openWindow).toHaveBeenCalledWith(`${ORIGIN}${link}`);
+      expect(app.postMessage).not.toHaveBeenCalled();
+      expect(app.focus).not.toHaveBeenCalled();
+    }
+    const app = tab();
+    const { scope, dispatch } = loadWorker([app]);
+    await dispatch("notificationclick", {
+      notification: { close: vi.fn(), data: { url: "/inbox" } },
+    });
+    expect(app.postMessage).toHaveBeenCalledWith({ url: `${ORIGIN}/inbox` });
+    expect(scope.clients.openWindow).not.toHaveBeenCalled();
+  });
+
   it("still routes the tab when focusing it is refused", async () => {
     const t = tab(vi.fn().mockRejectedValue(new Error("not allowed")));
     const { scope, dispatch } = loadWorker([t]);

@@ -1,6 +1,6 @@
 # 021 — Mark read on upstream open
 
-**Status**: shipped (phases 1-2); phase 3 in progress
+**Status**: shipped
 **Requested by**: babs
 **Date**: 2026-11-22
 
@@ -149,21 +149,21 @@ Phase 3, Web Push:
 - [x] **AC15** A Web Push click with only `/r` and `/r.js` tabs open opens a new window; a `/rules` tab
   still gets the message (`web/src/sw.test.ts`).
 
-- [ ] **AC16** With `read_on_open: true` on a `web_push` channel, the notification of a single real event
+- [x] **AC16** With `read_on_open: true` on a `web_push` channel, the notification of a single real event
   (live test included) with an accepted upstream URL has `url` `/r#<event id>.<owner id>.<tag>`, `<owner
   id>` the channel owner's, with or without `GEDOUR_PUBLIC_URL`; its tag, title, body and urgency are as
   before.
-- [ ] **AC17** With `read_on_open` absent or `false`, for a channel test, for an event without an upstream
+- [x] **AC17** With `read_on_open` absent or `false`, for a channel test, for an event without an upstream
   URL or with one the swap refuses, and for a sender without a key, Web Push payloads are byte-identical to
   before this spec.
-- [ ] **AC18** A grouped or digest notification of one event follows AC16 and AC17; of two or more events
+- [x] **AC18** A grouped or digest notification of one event follows AC16 and AC17; of two or more events
   its `url` stays `/inbox`.
-- [ ] **AC19** `read_on_open` is accepted on `web_push` (AC5's other rules hold: non-boolean is a 400,
+- [x] **AC19** `read_on_open` is accepted on `web_push` (AC5's other rules hold: non-boolean is a 400,
   `null` is off, `true` reads back true); webhook and script still refuse it.
-- [ ] **AC20** Service worker: a click on a notification whose url path is `/r` opens a new window on that
+- [x] **AC20** Service worker: a click on a notification whose url path is `/r` opens a new window on that
   url even with an SPA tab open, and posts nothing to that tab; a click on an `/inbox` url still routes in
   the open SPA tab (`web/src/sw.test.ts`).
-- [ ] **AC21** The Web Push channel form shows "Mark read when I open upstream" unchecked for a new
+- [x] **AC21** The Web Push channel form shows "Mark read when I open upstream" unchecked for a new
   channel, saves the checked state as `read_on_open: true`, reloads it checked, and its hint does not
   mention `GEDOUR_PUBLIC_URL`.
 
